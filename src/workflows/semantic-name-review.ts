@@ -14,6 +14,7 @@ import { createCodeFunctionRenameReviewHandler } from '../tools/code-function-re
 import { createReconstructWorkflowHandler } from './reconstruct.js'
 import { AnalysisProvenanceSchema } from '../analysis-provenance.js'
 import { AnalysisSelectionDiffSchema } from '../selection-diff.js'
+import { BinaryRoleProfileDataSchema } from '../tools/binary-role-profile.js'
 
 const TOOL_NAME = 'workflow.semantic_name_review'
 
@@ -168,6 +169,14 @@ export const semanticNameReviewWorkflowInputSchema = z
       .max(64)
       .optional()
       .describe('Optional export folder name used for the refresh run'),
+    include_preflight: z
+      .boolean()
+      .default(true)
+      .describe('Run binary role and language-specific preflight profiling before refresh export'),
+    auto_recover_function_index: z
+      .boolean()
+      .default(true)
+      .describe('When native function-index coverage is missing, automatically recover it before refresh export'),
     include_plan: z
       .boolean()
       .default(false)
@@ -310,6 +319,13 @@ export const semanticNameReviewWorkflowOutputSchema = z.object({
         manifest_path: z.string().nullable(),
         build_validation_status: z.string().nullable(),
         harness_validation_status: z.string().nullable(),
+        preflight: z
+          .object({
+            binary_profile: BinaryRoleProfileDataSchema.nullable(),
+            rust_profile: z.any().nullable(),
+            function_index_recovery: z.any().nullable(),
+          })
+          .nullable(),
         provenance: AnalysisProvenanceSchema.nullable(),
         selection_diffs: AnalysisSelectionDiffSchema.nullable(),
         notes: z.array(z.string()),
@@ -477,6 +493,11 @@ export function createSemanticNameReviewWorkflowHandler(
         manifest_path: string | null
         build_validation_status: string | null
         harness_validation_status: string | null
+        preflight: {
+          binary_profile: z.infer<typeof BinaryRoleProfileDataSchema> | null
+          rust_profile: unknown | null
+          function_index_recovery: unknown | null
+        } | null
         provenance: z.infer<typeof AnalysisProvenanceSchema> | null
         selection_diffs: z.infer<typeof AnalysisSelectionDiffSchema> | null
         notes: string[]
@@ -489,6 +510,7 @@ export function createSemanticNameReviewWorkflowHandler(
         manifest_path: null,
         build_validation_status: null,
         harness_validation_status: null,
+        preflight: null,
         provenance: null,
         selection_diffs: null,
         notes: [],
@@ -514,6 +536,8 @@ export function createSemanticNameReviewWorkflowHandler(
           semantic_session_tag: input.semantic_session_tag || input.session_tag,
           compare_semantic_scope: input.compare_semantic_scope,
           compare_semantic_session_tag: input.compare_semantic_session_tag,
+          include_preflight: input.include_preflight,
+          auto_recover_function_index: input.auto_recover_function_index,
           include_plan: input.include_plan,
           include_obfuscation_fallback: input.include_obfuscation_fallback,
           fallback_on_error: input.fallback_on_error,
@@ -535,6 +559,7 @@ export function createSemanticNameReviewWorkflowHandler(
             manifest_path: null,
             build_validation_status: null,
             harness_validation_status: null,
+            preflight: null,
             provenance: null,
             selection_diffs: null,
             notes: ['Refresh export failed after semantic name apply.'],
@@ -550,6 +575,7 @@ export function createSemanticNameReviewWorkflowHandler(
             manifest_path: exportData.export?.manifest_path || null,
             build_validation_status: exportData.export?.build_validation_status || null,
             harness_validation_status: exportData.export?.harness_validation_status || null,
+            preflight: exportData.preflight || null,
             provenance: exportData.provenance || null,
             selection_diffs: exportData.selection_diffs || null,
             notes: Array.isArray(exportData.notes) ? exportData.notes : [],

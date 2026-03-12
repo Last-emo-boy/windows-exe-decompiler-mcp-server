@@ -144,4 +144,115 @@ describe('tool.help tool', () => {
     expect(bytesField.help_hint).toContain('Fallback only')
     expect(filenameField.help_hint).toContain('bytes_b64')
   })
+
+  test('should explain Rust recovery paths for ghidra.analyze and pdata-based tools', async () => {
+    const definitions: ToolDefinition[] = [
+      {
+        name: 'ghidra.analyze',
+        description: 'Analyze with Ghidra',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          options: z
+            .object({
+              language_id: z.string().optional(),
+              cspec: z.string().optional(),
+              script_paths: z.array(z.string()).optional(),
+            })
+            .optional(),
+        }),
+      },
+      {
+        name: 'pe.pdata.extract',
+        description: 'Extract runtime functions from .pdata',
+        inputSchema: z.object({
+          sample_id: z.string(),
+        }),
+      },
+      {
+        name: 'code.functions.smart_recover',
+        description: 'Recover functions from .pdata and exports',
+        inputSchema: z.object({
+          sample_id: z.string(),
+        }),
+      },
+      {
+        name: 'pe.symbols.recover',
+        description: 'Recover symbolic names from PE metadata',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          max_string_hints: z.number().optional(),
+        }),
+      },
+      {
+        name: 'code.functions.define',
+        description: 'Import recovered function boundaries',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          source: z.enum(['manual', 'pdata', 'symbols_recover', 'smart_recover', 'external']).default('manual'),
+          replace_all: z.boolean().default(false),
+          definitions: z.array(z.object({ address: z.string().optional(), rva: z.number().optional() })),
+        }),
+      },
+      {
+        name: 'rust_binary.analyze',
+        description: 'Analyze Rust-oriented PE binaries',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          max_strings: z.number().optional(),
+          max_symbol_preview: z.number().optional(),
+        }),
+      },
+      {
+        name: 'workflow.function_index_recover',
+        description: 'Recover and materialize a non-Ghidra function index',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          define_from: z.enum(['auto', 'smart_recover', 'symbols_recover']).default('auto'),
+          max_string_hints: z.number().optional(),
+          replace_all: z.boolean().default(true),
+        }),
+      },
+    ]
+
+    const handler = createToolHelpHandler(() => definitions)
+    const ghidraResult = await handler({ tool_name: 'ghidra.analyze' })
+    const ghidraData = ghidraResult.data as any
+    const languageIdField = ghidraData.tools[0].input.fields.find((item: any) => item.path === 'options.language_id')
+    expect(languageIdField.help_hint).toContain('Rust/Go/C++')
+    expect(ghidraData.tools[0].usage_notes.some((item: string) => item.includes('pe.pdata.extract'))).toBe(true)
+
+    const pdataResult = await handler({ tool_name: 'pe.pdata.extract' })
+    const pdataData = pdataResult.data as any
+    expect(pdataData.tools[0].usage_notes.some((item: string) => item.includes('zero functions'))).toBe(true)
+
+    const smartRecoverResult = await handler({ tool_name: 'code.functions.smart_recover' })
+    const smartRecoverData = smartRecoverResult.data as any
+    expect(smartRecoverData.tools[0].usage_notes.some((item: string) => item.includes('Rust/Go/C++'))).toBe(true)
+
+    const symbolsResult = await handler({ tool_name: 'pe.symbols.recover' })
+    const symbolsData = symbolsResult.data as any
+    expect(symbolsData.tools[0].usage_notes.some((item: string) => item.includes('code.functions.define'))).toBe(
+      true
+    )
+
+    const defineResult = await handler({ tool_name: 'code.functions.define' })
+    const defineData = defineResult.data as any
+    expect(defineData.tools[0].usage_notes.some((item: string) => item.includes('function-index readiness'))).toBe(
+      true
+    )
+    const definitionsField = defineData.tools[0].input.fields.find((item: any) => item.path === 'definitions')
+    expect(definitionsField.help_hint).toContain('code.functions.smart_recover')
+
+    const rustAnalyzeResult = await handler({ tool_name: 'rust_binary.analyze' })
+    const rustAnalyzeData = rustAnalyzeResult.data as any
+    expect(rustAnalyzeData.tools[0].usage_notes.some((item: string) => item.includes('runtime.detect'))).toBe(true)
+    const maxStringsField = rustAnalyzeData.tools[0].input.fields.find((item: any) => item.path === 'max_strings')
+    expect(maxStringsField.help_hint).toContain('crate paths')
+
+    const workflowResult = await handler({ tool_name: 'workflow.function_index_recover' })
+    const workflowData = workflowResult.data as any
+    expect(workflowData.tools[0].usage_notes.some((item: string) => item.includes('code.functions.smart_recover'))).toBe(true)
+    const defineFromField = workflowData.tools[0].input.fields.find((item: any) => item.path === 'define_from')
+    expect(defineFromField.help_hint).toContain('auto prefers pe.symbols.recover')
+  })
 })

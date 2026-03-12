@@ -28,7 +28,8 @@ export type CodeFunctionsRankInput = z.infer<typeof codeFunctionsRankInputSchema
  */
 export const codeFunctionsRankToolDefinition: ToolDefinition = {
   name: 'code.functions.rank',
-  description: 'Rank functions by interest score based on size, callers, sensitive API calls, and entry points. Returns top K functions.',
+  description:
+    'Rank indexed functions by interest score based on size, callers, sensitive API calls, and entry points. Works with Ghidra, recovered, or manually defined function indexes.',
   inputSchema: codeFunctionsRankInputSchema
 };
 

@@ -133,6 +133,115 @@ describe('workflow.reconstruct tool', () => {
     })
   }
 
+  function createBinaryProfilePayload(sampleId: string) {
+    return {
+      sample_id: sampleId,
+      original_filename: 'akasha.exe',
+      binary_role: 'executable',
+      role_confidence: 0.88,
+      runtime_hint: {
+        is_dotnet: false,
+        dotnet_version: null,
+        target_framework: null,
+        primary_runtime: 'rust',
+      },
+      export_surface: {
+        total_exports: 0,
+        total_forwarders: 0,
+        notable_exports: [],
+        com_related_exports: [],
+        service_related_exports: [],
+        plugin_related_exports: [],
+        forwarded_exports: [],
+      },
+      import_surface: {
+        dll_count: 3,
+        notable_dlls: ['kernel32.dll', 'ntdll.dll'],
+        com_related_imports: [],
+        service_related_imports: [],
+        network_related_imports: [],
+        process_related_imports: ['OpenProcess', 'WriteProcessMemory'],
+      },
+      packed: false,
+      packing_confidence: 0.08,
+      indicators: {
+        com_server: { likely: false, confidence: 0.05, evidence: [] },
+        service_binary: { likely: false, confidence: 0.05, evidence: [] },
+        plugin_binary: { likely: false, confidence: 0.1, evidence: [] },
+        driver_binary: { likely: false, confidence: 0.01, evidence: [] },
+      },
+      export_dispatch_profile: {
+        command_like_exports: [],
+        callback_like_exports: [],
+        registration_exports: [],
+        ordinal_only_exports: 0,
+        likely_dispatch_model: 'none',
+        confidence: 0.15,
+      },
+      com_profile: {
+        clsid_strings: [],
+        progid_strings: [],
+        interface_hints: [],
+        registration_strings: [],
+        class_factory_exports: [],
+        confidence: 0.02,
+      },
+      host_interaction_profile: {
+        likely_hosted: false,
+        host_hints: [],
+        callback_exports: [],
+        callback_strings: [],
+        service_hooks: [],
+        confidence: 0.1,
+      },
+      analysis_priorities: ['review_process_manipulation_and_dynamic_resolution_paths'],
+      strings_considered: 120,
+    }
+  }
+
+  function createRustProfilePayload(sampleId: string) {
+    return {
+      sample_id: sampleId,
+      suspected_rust: true,
+      confidence: 0.96,
+      primary_runtime: 'rust',
+      runtime_hints: ['panic_unwind', 'rust_std'],
+      cargo_paths: ['cargo\\registry\\src\\github.com-1ecc6299db9ec823\\tokio-1.42.0'],
+      rust_markers: ['rust_begin_unwind'],
+      async_runtime_markers: ['tokio'],
+      panic_markers: ['panic'],
+      crate_hints: ['tokio', 'goblin', 'iced-x86'],
+      library_profile: {
+        ecosystems: ['rust'],
+        top_crates: ['tokio', 'goblin'],
+        notable_libraries: ['tokio', 'iced-x86'],
+        evidence: ['cargo registry path'],
+      },
+      recovered_function_count: 5061,
+      recovered_function_strategy: ['pdata_runtime_functions', 'entrypoint'],
+      recovered_symbol_count: 5061,
+      recovered_symbol_preview: [
+        {
+          address: '0x140001000',
+          recovered_name: 'dispatch_module_capabilities',
+          name_strategy: 'crate_hint',
+          confidence: 0.74,
+        },
+      ],
+      components: {
+        runtime_detect: { ok: true, warning_count: 0, error_count: 0 },
+        strings_extract: { ok: true, warning_count: 0, error_count: 0 },
+        smart_recover: { ok: true, warning_count: 0, error_count: 0 },
+        symbols_recover: { ok: true, warning_count: 0, error_count: 0 },
+        binary_role_profile: { ok: true, warning_count: 0, error_count: 0 },
+      },
+      importable_with_code_functions_define: true,
+      evidence: ['tokio', 'goblin'],
+      analysis_priorities: ['recover_function_index_from_pdata'],
+      next_steps: ['Use workflow.function_index_recover'],
+    }
+  }
+
   test('should apply input defaults', () => {
     const parsed = ReconstructWorkflowInputSchema.parse({
       sample_id: 'sha256:' + 'a'.repeat(64),
@@ -410,6 +519,199 @@ describe('workflow.reconstruct tool', () => {
       })
     )
     expect(dotnetExportHandler).toHaveBeenCalledTimes(0)
+  })
+
+  test('should run native preflight and auto-recover function index before export', async () => {
+    const sampleId = 'sha256:' + 'a'.repeat(64)
+    await setupSample(sampleId, 'a')
+
+    const runtimeDetectHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          is_dotnet: false,
+          suspected: [{ runtime: 'rust', confidence: 0.96, evidence: ['panic_unwind'] }],
+        },
+      })
+    const binaryRoleProfileHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: createBinaryProfilePayload(sampleId),
+      })
+    const rustBinaryAnalyzeHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: createRustProfilePayload(sampleId),
+      })
+    const functionIndexRecoverHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          sample_id: sampleId,
+          define_from: 'symbols_recover',
+          recovered_function_count: 5061,
+          recovered_symbol_count: 4800,
+          imported_count: 5061,
+          function_index_status: 'ready',
+          decompile_status: 'missing',
+          cfg_status: 'missing',
+          recovery_strategy: ['pdata_runtime_functions', 'symbol_recovery'],
+          imported_function_preview: [],
+          recovered_symbol_preview: [],
+          next_steps: ['Use code.functions.rank'],
+        },
+      })
+    const nativeExportHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          export_root: 'reports/reconstruct/akasha',
+          manifest_path: 'reports/reconstruct/akasha/manifest.json',
+          gaps_path: 'reports/reconstruct/akasha/gaps.md',
+          notes_path: 'reports/reconstruct/akasha/reverse_notes.md',
+          build_validation: {
+            status: 'passed',
+            log_path: 'reports/reconstruct/akasha/BUILD_VALIDATION.log',
+            executable_path: 'reports/reconstruct/akasha/reconstruct_harness.exe',
+          },
+          harness_validation: {
+            status: 'passed',
+            log_path: 'reports/reconstruct/akasha/HARNESS_VALIDATION.log',
+          },
+          module_count: 4,
+          unresolved_count: 7,
+          binary_profile: {
+            binary_role: 'executable',
+            original_filename: 'akasha.exe',
+            export_count: 0,
+            forwarder_count: 0,
+            notable_exports: [],
+            packed: false,
+            packing_confidence: 0.08,
+            analysis_priorities: ['review_process_manipulation_and_dynamic_resolution_paths'],
+          },
+        },
+      })
+
+    const handler = createReconstructWorkflowHandler(workspaceManager, database, cacheManager, {
+      runtimeDetectHandler,
+      binaryRoleProfileHandler,
+      rustBinaryAnalyzeHandler,
+      functionIndexRecoverHandler,
+      nativeExportHandler,
+      dotnetExportHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>(),
+    })
+
+    const result = await handler({
+      sample_id: sampleId,
+      path: 'auto',
+      include_preflight: true,
+      auto_recover_function_index: true,
+      reuse_cached: true,
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.selected_path).toBe('native')
+    expect(data.stage_status.preflight_binary_profile).toBe('ok')
+    expect(data.stage_status.preflight_rust_profile).toBe('ok')
+    expect(data.stage_status.function_index_recovery).toBe('ok')
+    expect(data.preflight.binary_profile.binary_role).toBe('executable')
+    expect(data.preflight.rust_profile.suspected_rust).toBe(true)
+    expect(data.preflight.function_index_recovery.imported_count).toBe(5061)
+    expect(data.notes.join(' ')).toContain('Rust preflight recovered 5061 function candidates')
+    expect(data.notes.join(' ')).toContain('Function index recovery imported 5061 recovered functions')
+    expect(functionIndexRecoverHandler).toHaveBeenCalledTimes(1)
+    expect(nativeExportHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reuse_cached: false,
+      })
+    )
+  })
+
+  test('should skip auto-recovery when a persisted function-definition index already exists', async () => {
+    const sampleId = 'sha256:' + 'b'.repeat(64)
+    await setupSample(sampleId, 'b')
+    database.insertAnalysis({
+      id: 'analysis-function-definition',
+      sample_id: sampleId,
+      stage: 'function_definition',
+      backend: 'manual',
+      status: 'done',
+      started_at: '2026-03-10T00:00:00.000Z',
+      finished_at: '2026-03-10T00:01:00.000Z',
+      output_json: '{}',
+      metrics_json: '{}',
+    })
+
+    const runtimeDetectHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          is_dotnet: false,
+          suspected: [{ runtime: 'rust', confidence: 0.9, evidence: ['panic_unwind'] }],
+        },
+      })
+    const nativeExportHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          export_root: 'reports/reconstruct/demo',
+          manifest_path: 'reports/reconstruct/demo/manifest.json',
+          gaps_path: 'reports/reconstruct/demo/gaps.md',
+          notes_path: 'reports/reconstruct/demo/reverse_notes.md',
+          build_validation: { status: 'skipped' },
+          harness_validation: { status: 'skipped' },
+          module_count: 2,
+          unresolved_count: 1,
+          binary_profile: {
+            binary_role: 'dll',
+            original_filename: 'demo.dll',
+            export_count: 1,
+            forwarder_count: 0,
+            notable_exports: ['Run'],
+            packed: false,
+            packing_confidence: 0.05,
+            analysis_priorities: ['trace_export_surface_first'],
+          },
+        },
+      })
+    const functionIndexRecoverHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {},
+      })
+
+    const handler = createReconstructWorkflowHandler(workspaceManager, database, cacheManager, {
+      runtimeDetectHandler,
+      nativeExportHandler,
+      functionIndexRecoverHandler,
+    })
+
+    const result = await handler({
+      sample_id: sampleId,
+      include_preflight: false,
+      auto_recover_function_index: true,
+      reuse_cached: true,
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.stage_status.function_index_recovery).toBe('skipped')
+    expect(functionIndexRecoverHandler).not.toHaveBeenCalled()
+    expect(nativeExportHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        reuse_cached: true,
+      })
+    )
   })
 
   test('should surface provenance and selection diffs in workflow output', async () => {

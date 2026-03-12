@@ -29,7 +29,8 @@ export type CodeFunctionsListInput = z.infer<typeof codeFunctionsListInputSchema
  */
 export const codeFunctionsListToolDefinition: ToolDefinition = {
   name: 'code.functions.list',
-  description: 'List all functions extracted from a binary sample. Requires prior Ghidra analysis.',
+  description:
+    'List all indexed functions for a binary sample. Supports Ghidra-extracted, PE metadata-recovered, or manually defined function indexes.',
   inputSchema: codeFunctionsListInputSchema
 };
 

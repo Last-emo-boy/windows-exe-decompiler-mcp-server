@@ -3,6 +3,10 @@ param(
     [string]$ProjectRoot = (Get-Location).Path,
     [string]$NodePath,
     [string]$GhidraPath = "",
+    [string]$WorkspaceRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces",
+    [string]$DatabasePath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db",
+    [string]$CacheRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache",
+    [string]$AuditLogPath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log",
     [string]$WorkspaceConfigPath,
     [string]$CopilotCliConfigPath,
     [switch]$SkipWorkspaceConfig,
@@ -165,6 +169,54 @@ function Resolve-GhidraPath {
     return ""
 }
 
+function Resolve-WorkspaceRoot {
+    if ($WorkspaceRoot) {
+        return $WorkspaceRoot
+    }
+
+    if ($env:WORKSPACE_ROOT) {
+        return $env:WORKSPACE_ROOT
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces"
+}
+
+function Resolve-DatabasePath {
+    if ($DatabasePath) {
+        return $DatabasePath
+    }
+
+    if ($env:DB_PATH) {
+        return $env:DB_PATH
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db"
+}
+
+function Resolve-CacheRoot {
+    if ($CacheRoot) {
+        return $CacheRoot
+    }
+
+    if ($env:CACHE_ROOT) {
+        return $env:CACHE_ROOT
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache"
+}
+
+function Resolve-AuditLogPath {
+    if ($AuditLogPath) {
+        return $AuditLogPath
+    }
+
+    if ($env:AUDIT_LOG_PATH) {
+        return $env:AUDIT_LOG_PATH
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log"
+}
+
 Write-Host "=== Windows EXE Decompiler MCP Server - GitHub Copilot Install ===" -ForegroundColor Cyan
 
 Write-Step "Step 1: Validate build output and runtime"
@@ -178,6 +230,14 @@ $nodeExecutable = Get-NodeExecutable
 $nodeExecutableConfig = Convert-ToConfigPath -PathValue $nodeExecutable
 $distEntryConfig = Convert-ToConfigPath -PathValue $distEntry
 $projectRootConfig = Convert-ToConfigPath -PathValue $projectRootFull
+$workspaceRootResolved = Resolve-WorkspaceRoot
+$workspaceRootConfig = Convert-ToConfigPath -PathValue $workspaceRootResolved
+$databasePathResolved = Resolve-DatabasePath
+$databasePathConfig = Convert-ToConfigPath -PathValue $databasePathResolved
+$cacheRootResolved = Resolve-CacheRoot
+$cacheRootConfig = Convert-ToConfigPath -PathValue $cacheRootResolved
+$auditLogPathResolved = Resolve-AuditLogPath
+$auditLogPathConfig = Convert-ToConfigPath -PathValue $auditLogPathResolved
 $ghidraPathResolved = Resolve-GhidraPath
 $ghidraPathExists = $ghidraPathResolved -and (Test-Path -Path $ghidraPathResolved)
 $ghidraPathConfig = if ($ghidraPathResolved) { Convert-ToConfigPath -PathValue $ghidraPathResolved } else { "" }
@@ -185,6 +245,10 @@ $ghidraPathConfig = if ($ghidraPathResolved) { Convert-ToConfigPath -PathValue $
 Write-Host "Project root: $projectRootConfig" -ForegroundColor Gray
 Write-Host "Node path: $nodeExecutableConfig" -ForegroundColor Gray
 Write-Host "Server entry: $distEntryConfig" -ForegroundColor Gray
+Write-Host "Workspace root: $workspaceRootConfig" -ForegroundColor Gray
+Write-Host "Database path: $databasePathConfig" -ForegroundColor Gray
+Write-Host "Cache root: $cacheRootConfig" -ForegroundColor Gray
+Write-Host "Audit log path: $auditLogPathConfig" -ForegroundColor Gray
 if ($ghidraPathConfig -and $ghidraPathExists) {
     Write-Host "Ghidra path: $ghidraPathConfig" -ForegroundColor Gray
 } elseif ($ghidraPathConfig) {
@@ -215,8 +279,19 @@ $workspaceServerConfig = [ordered]@{
 
 if ($ghidraPathConfig) {
     $workspaceServerConfig.env = [ordered]@{
+        WORKSPACE_ROOT     = $workspaceRootConfig
+        DB_PATH            = $databasePathConfig
+        CACHE_ROOT         = $cacheRootConfig
+        AUDIT_LOG_PATH     = $auditLogPathConfig
         GHIDRA_PATH        = $ghidraPathConfig
         GHIDRA_INSTALL_DIR = $ghidraPathConfig
+    }
+} else {
+    $workspaceServerConfig.env = [ordered]@{
+        WORKSPACE_ROOT = $workspaceRootConfig
+        DB_PATH        = $databasePathConfig
+        CACHE_ROOT     = $cacheRootConfig
+        AUDIT_LOG_PATH = $auditLogPathConfig
     }
 }
 
@@ -231,8 +306,19 @@ $copilotCliServerConfig = [ordered]@{
 
 if ($ghidraPathConfig) {
     $copilotCliServerConfig.env = [ordered]@{
+        WORKSPACE_ROOT     = $workspaceRootConfig
+        DB_PATH            = $databasePathConfig
+        CACHE_ROOT         = $cacheRootConfig
+        AUDIT_LOG_PATH     = $auditLogPathConfig
         GHIDRA_PATH        = $ghidraPathConfig
         GHIDRA_INSTALL_DIR = $ghidraPathConfig
+    }
+} else {
+    $copilotCliServerConfig.env = [ordered]@{
+        WORKSPACE_ROOT = $workspaceRootConfig
+        DB_PATH        = $databasePathConfig
+        CACHE_ROOT     = $cacheRootConfig
+        AUDIT_LOG_PATH = $auditLogPathConfig
     }
 }
 

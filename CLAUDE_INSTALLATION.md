@@ -1,0 +1,113 @@
+# Claude Installation
+
+This repository can be installed into Claude Code as an MCP server in three
+scopes:
+
+- `local`: machine-local config for the current project, stored in
+  `~/.claude.json`
+- `user`: machine-wide config for your user, stored in `~/.claude.json`
+- `project`: project-scoped config written to `.mcp.json` in the repo root
+
+On this Windows setup, writing the config file directly is more reliable than
+shelling out to `claude mcp add`, so the install script uses the config-file
+path directly and then verifies the result with `claude mcp get`.
+
+## Prerequisites
+
+- Claude Code CLI installed and available as `claude`
+- Node.js available as `node`
+- Project already built with `npm run build`
+
+## Recommended Install
+
+From the repository root:
+
+```powershell
+.\install-to-claude.ps1
+```
+
+The default scope is `user`, so this installs the server once for your account
+and makes it available in all Claude Code projects on this machine.
+
+The script also writes a stable `WORKSPACE_ROOT` by default:
+
+- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+
+It also pins:
+
+- `DB_PATH`
+- `CACHE_ROOT`
+- `AUDIT_LOG_PATH`
+
+## Pass Ghidra Explicitly
+
+```powershell
+.\install-to-claude.ps1 -GhidraPath "C:\path\to\ghidra"
+```
+
+The script writes both `GHIDRA_PATH` and `GHIDRA_INSTALL_DIR`.
+
+If you want a different persistent workspace root:
+
+```powershell
+.\install-to-claude.ps1 -WorkspaceRoot "D:\reverse-data\workspaces"
+```
+
+## Change Scope
+
+Examples:
+
+```powershell
+.\install-to-claude.ps1 -Scope local
+.\install-to-claude.ps1 -Scope user
+.\install-to-claude.ps1 -Scope project
+```
+
+If you choose `project`, the script writes `.mcp.json` into the repository
+root. If you choose `local` or `user`, the script updates `~/.claude.json`.
+Use `local` only when you want this repo to override the global `user`
+registration.
+
+## Manual Config Format
+
+Claude Code recognizes the standard MCP config shape:
+
+```json
+{
+  "mcpServers": {
+    "windows-exe-decompiler": {
+      "command": "node",
+      "args": ["E:/Playground/Reverse/dist/index.js"],
+      "cwd": "E:/Playground/Reverse",
+      "env": {
+        "WORKSPACE_ROOT": "C:/Users/<you>/.windows-exe-decompiler-mcp-server/workspaces",
+        "GHIDRA_PATH": "C:/path/to/ghidra",
+        "GHIDRA_INSTALL_DIR": "C:/path/to/ghidra"
+      }
+    }
+  }
+}
+```
+
+That same server object works in:
+
+- repo-local `.mcp.json` for `project` scope
+- top-level `mcpServers` in `~/.claude.json` for `user` scope
+- `projects["E:/path/to/repo"].mcpServers` in `~/.claude.json` for `local`
+  scope
+
+## Verify
+
+```powershell
+claude mcp list
+claude mcp get windows-exe-decompiler
+```
+
+If you used `project` scope, `claude mcp get` should report `Scope: Project
+config (shared via .mcp.json)`. If you used `local` or `user`, it should report
+the corresponding Claude config scope from `~/.claude.json`.
+
+## References
+
+- Claude Code MCP overview: https://docs.anthropic.com/en/docs/claude-code/mcp
+- Claude Code MCP CLI reference: https://docs.anthropic.com/en/docs/claude-code/mcp#manage-mcp-servers

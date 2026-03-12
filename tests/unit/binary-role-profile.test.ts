@@ -92,7 +92,7 @@ describe('binary.role.profile tool', () => {
             ole32: ['CoCreateInstance'],
             advapi32: ['StartServiceCtrlDispatcherW', 'SetServiceStatus'],
             ws2_32: ['connect'],
-            kernel32: ['GetProcAddress'],
+            kernel32: ['GetProcAddress', 'DisableThreadLibraryCalls'],
           },
         },
       }),
@@ -135,11 +135,127 @@ describe('binary.role.profile tool', () => {
     expect(data.export_surface.plugin_related_exports).toContain('InitializePlugin')
     expect(data.import_surface.com_related_imports).toContain('ole32')
     expect(data.import_surface.service_related_imports).toContain('advapi32')
-    expect(data.indicators.com_server.likely).toBe(true)
-    expect(data.indicators.service_binary.likely).toBe(true)
-    expect(data.indicators.plugin_binary.likely).toBe(true)
-    expect(data.analysis_priorities).toContain('trace_com_activation_and_class_factory_flow')
-    expect(data.analysis_priorities).toContain('trace_service_entrypoint_and_scm_lifecycle')
-    expect(data.analysis_priorities).toContain('trace_host_plugin_exports_and_callback_model')
+      expect(data.indicators.com_server.likely).toBe(true)
+      expect(data.indicators.service_binary.likely).toBe(true)
+      expect(data.indicators.plugin_binary.likely).toBe(true)
+      expect(data.export_dispatch_profile.registration_exports).toContain('DllRegisterServer')
+      expect(data.export_dispatch_profile.likely_dispatch_model).toBe('com_registration_and_class_factory')
+      expect(data.com_profile.class_factory_exports).toContain('DllGetClassObject')
+      expect(data.host_interaction_profile.likely_hosted).toBe(true)
+      expect(data.host_interaction_profile.service_hooks).toContain('StartServiceCtrlDispatcherW')
+      expect(data.analysis_priorities).toContain('trace_com_activation_and_class_factory_flow')
+      expect(data.analysis_priorities).toContain('trace_service_entrypoint_and_scm_lifecycle')
+      expect(data.analysis_priorities).toContain('trace_host_plugin_exports_and_callback_model')
+      expect(data.analysis_priorities).toContain('review_dllmain_lifecycle_and_attach_detach_side_effects')
+    })
+
+  test('should return unified remediation when workspace/original is missing', async () => {
+    const sampleId = 'sha256:' + 'c'.repeat(64)
+    database.insertSample({
+      id: sampleId,
+      sha256: 'c'.repeat(64),
+      md5: 'c'.repeat(32),
+      size: 4096,
+      file_type: 'PE32 executable',
+      created_at: new Date().toISOString(),
+      source: 'test',
+    })
+    await workspaceManager.createWorkspace(sampleId)
+
+    const handler = createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
+    const result = await handler({ sample_id: sampleId })
+
+    expect(result.ok).toBe(false)
+    expect(result.errors?.[0]).toContain('Sample original file is unavailable')
+    expect(result.errors?.[0]).toContain('sample.ingest')
+  })
+
+  test('should use alternate sibling workspace original when current workspace/original is missing', async () => {
+    const baseRoot = path.join(process.cwd(), 'test-binary-role-profile-fallback')
+    const currentRoot = path.join(baseRoot, 'reverse', 'workspaces')
+    const alternateRoot = path.join(baseRoot, 'workspaces')
+    const currentDbPath = path.join(baseRoot, 'fallback.db')
+    const currentCachePath = path.join(baseRoot, 'cache')
+
+    if (fs.existsSync(baseRoot)) {
+      fs.rmSync(baseRoot, { recursive: true, force: true })
+    }
+
+    const localWorkspaceManager = new WorkspaceManager(currentRoot)
+    const localDatabase = new DatabaseManager(currentDbPath)
+    const localCacheManager = new CacheManager(currentCachePath, localDatabase)
+
+    try {
+      const sampleId = 'sha256:' + 'd'.repeat(64)
+      localDatabase.insertSample({
+        id: sampleId,
+        sha256: 'd'.repeat(64),
+        md5: 'd'.repeat(32),
+        size: 4096,
+        file_type: 'PE32 DLL',
+        created_at: new Date().toISOString(),
+        source: 'test',
+      })
+
+      await localWorkspaceManager.createWorkspace(sampleId)
+
+      const alternateOriginalDir = path.join(alternateRoot, 'dd', 'dd', 'd'.repeat(64), 'original')
+      fs.mkdirSync(alternateOriginalDir, { recursive: true })
+      fs.writeFileSync(path.join(alternateOriginalDir, 'fallback.dll'), 'dummy', 'utf-8')
+
+      const handler = createBinaryRoleProfileHandler(localWorkspaceManager, localDatabase, localCacheManager, {
+        exportsHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            exports: [],
+            forwarders: [],
+            total_exports: 0,
+            total_forwarders: 0,
+          },
+        }),
+        importsHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            imports: {},
+          },
+        }),
+        stringsHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            strings: [],
+          },
+        }),
+        runtimeHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            is_dotnet: false,
+            dotnet_version: null,
+            target_framework: null,
+            suspected: [{ runtime: 'native', confidence: 0.8, evidence: ['fallback'] }],
+          },
+        }),
+        packerHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            packed: false,
+            confidence: 0.1,
+          },
+        }),
+      })
+
+      const result = await handler({ sample_id: sampleId })
+
+      expect(result.ok).toBe(true)
+      expect((result.data as any).original_filename).toBe('fallback.dll')
+    } finally {
+      try {
+        localDatabase.close()
+      } catch {
+        // ignore
+      }
+      if (fs.existsSync(baseRoot)) {
+        fs.rmSync(baseRoot, { recursive: true, force: true })
+      }
+    }
   })
 })

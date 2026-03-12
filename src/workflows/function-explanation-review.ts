@@ -12,6 +12,9 @@ import type { JobQueue } from '../job-queue.js'
 import type { MCPServer } from '../server.js'
 import { createCodeFunctionExplainReviewHandler } from '../tools/code-function-explain-review.js'
 import { createReconstructWorkflowHandler } from './reconstruct.js'
+import { AnalysisProvenanceSchema } from '../analysis-provenance.js'
+import { AnalysisSelectionDiffSchema } from '../selection-diff.js'
+import { BinaryRoleProfileDataSchema } from '../tools/binary-role-profile.js'
 
 const TOOL_NAME = 'workflow.function_explanation_review'
 
@@ -66,6 +69,22 @@ export const functionExplanationReviewWorkflowInputSchema = z
       .string()
       .optional()
       .describe('Optional semantic review session selector used when semantic_scope=session or to narrow all/latest results'),
+    compare_evidence_scope: z
+      .enum(['all', 'latest', 'session'])
+      .optional()
+      .describe('Optional baseline runtime evidence scope used when refreshing export for comparison-aware workflow output'),
+    compare_evidence_session_tag: z
+      .string()
+      .optional()
+      .describe('Optional baseline runtime evidence session selector used when compare_evidence_scope=session'),
+    compare_semantic_scope: z
+      .enum(['all', 'latest', 'session'])
+      .optional()
+      .describe('Optional baseline semantic artifact scope used when refreshing export for comparison-aware workflow output'),
+    compare_semantic_session_tag: z
+      .string()
+      .optional()
+      .describe('Optional baseline semantic artifact session selector used when compare_semantic_scope=session'),
     persist_artifact: z
       .boolean()
       .default(true)
@@ -142,6 +161,14 @@ export const functionExplanationReviewWorkflowInputSchema = z
       .max(64)
       .optional()
       .describe('Optional export folder name used for the refresh run'),
+    include_preflight: z
+      .boolean()
+      .default(true)
+      .describe('Run binary role and language-specific preflight profiling before refresh export'),
+    auto_recover_function_index: z
+      .boolean()
+      .default(true)
+      .describe('When native function-index coverage is missing, automatically recover it before refresh export'),
     include_plan: z
       .boolean()
       .default(false)
@@ -199,6 +226,22 @@ export const functionExplanationReviewWorkflowInputSchema = z
     message: 'semantic_session_tag is required when semantic_scope=session',
     path: ['semantic_session_tag'],
   })
+  .refine(
+    (value) =>
+      value.compare_evidence_scope !== 'session' || Boolean(value.compare_evidence_session_tag?.trim()),
+    {
+      message: 'compare_evidence_session_tag is required when compare_evidence_scope=session',
+      path: ['compare_evidence_session_tag'],
+    }
+  )
+  .refine(
+    (value) =>
+      value.compare_semantic_scope !== 'session' || Boolean(value.compare_semantic_session_tag?.trim()),
+    {
+      message: 'compare_semantic_session_tag is required when compare_semantic_scope=session',
+      path: ['compare_semantic_session_tag'],
+    }
+  )
 
 export const functionExplanationReviewWorkflowOutputSchema = z.object({
   ok: z.boolean(),
@@ -252,6 +295,15 @@ export const functionExplanationReviewWorkflowOutputSchema = z.object({
         manifest_path: z.string().nullable(),
         build_validation_status: z.string().nullable(),
         harness_validation_status: z.string().nullable(),
+        preflight: z
+          .object({
+            binary_profile: BinaryRoleProfileDataSchema.nullable(),
+            rust_profile: z.any().nullable(),
+            function_index_recovery: z.any().nullable(),
+          })
+          .nullable(),
+        provenance: AnalysisProvenanceSchema.nullable(),
+        selection_diffs: AnalysisSelectionDiffSchema.nullable(),
         notes: z.array(z.string()),
       }),
       next_steps: z.array(z.string()),
@@ -412,6 +464,13 @@ export function createFunctionExplanationReviewWorkflowHandler(
         manifest_path: string | null
         build_validation_status: string | null
         harness_validation_status: string | null
+        preflight: {
+          binary_profile: z.infer<typeof BinaryRoleProfileDataSchema> | null
+          rust_profile: unknown | null
+          function_index_recovery: unknown | null
+        } | null
+        provenance: z.infer<typeof AnalysisProvenanceSchema> | null
+        selection_diffs: z.infer<typeof AnalysisSelectionDiffSchema> | null
         notes: string[]
       } = {
         attempted: false,
@@ -422,6 +481,9 @@ export function createFunctionExplanationReviewWorkflowHandler(
         manifest_path: null,
         build_validation_status: null,
         harness_validation_status: null,
+        preflight: null,
+        provenance: null,
+        selection_diffs: null,
         notes: [],
       }
 
@@ -438,9 +500,15 @@ export function createFunctionExplanationReviewWorkflowHandler(
           run_timeout_ms: input.run_timeout_ms,
           evidence_scope: input.evidence_scope,
           evidence_session_tag: input.evidence_session_tag,
+          compare_evidence_scope: input.compare_evidence_scope,
+          compare_evidence_session_tag: input.compare_evidence_session_tag,
           semantic_scope:
             input.semantic_scope === 'all' && input.session_tag ? 'session' : input.semantic_scope,
           semantic_session_tag: input.semantic_session_tag || input.session_tag,
+          compare_semantic_scope: input.compare_semantic_scope,
+          compare_semantic_session_tag: input.compare_semantic_session_tag,
+          include_preflight: input.include_preflight,
+          auto_recover_function_index: input.auto_recover_function_index,
           include_plan: input.include_plan,
           include_obfuscation_fallback: input.include_obfuscation_fallback,
           fallback_on_error: input.fallback_on_error,
@@ -462,6 +530,9 @@ export function createFunctionExplanationReviewWorkflowHandler(
             manifest_path: null,
             build_validation_status: null,
             harness_validation_status: null,
+            preflight: null,
+            provenance: null,
+            selection_diffs: null,
             notes: ['Refresh export failed after function explanation apply.'],
           }
         } else {
@@ -475,6 +546,9 @@ export function createFunctionExplanationReviewWorkflowHandler(
             manifest_path: exportData.export?.manifest_path || null,
             build_validation_status: exportData.export?.build_validation_status || null,
             harness_validation_status: exportData.export?.harness_validation_status || null,
+            preflight: exportData.preflight || null,
+            provenance: exportData.provenance || null,
+            selection_diffs: exportData.selection_diffs || null,
             notes: Array.isArray(exportData.notes) ? exportData.notes : [],
           }
         }

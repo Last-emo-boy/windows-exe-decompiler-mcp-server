@@ -81,6 +81,8 @@ describe('workflow.function_explanation_review tool', () => {
     expect(parsed.evidence_scope).toBe('all')
     expect(parsed.rerun_export).toBe(true)
     expect(parsed.export_path).toBe('auto')
+    expect(parsed.include_preflight).toBe(true)
+    expect(parsed.auto_recover_function_index).toBe(true)
   })
 
   test('should require evidence_session_tag when evidence_scope=session', () => {
@@ -90,6 +92,24 @@ describe('workflow.function_explanation_review tool', () => {
         evidence_scope: 'session',
       })
     ).toThrow('evidence_session_tag')
+  })
+
+  test('should require compare_evidence_session_tag when compare_evidence_scope=session', () => {
+    expect(() =>
+      functionExplanationReviewWorkflowInputSchema.parse({
+        sample_id: 'sha256:' + 'a'.repeat(64),
+        compare_evidence_scope: 'session',
+      })
+    ).toThrow('compare_evidence_session_tag')
+  })
+
+  test('should require compare_semantic_session_tag when compare_semantic_scope=session', () => {
+    expect(() =>
+      functionExplanationReviewWorkflowInputSchema.parse({
+        sample_id: 'sha256:' + 'a'.repeat(64),
+        compare_semantic_scope: 'session',
+      })
+    ).toThrow('compare_semantic_session_tag')
   })
 
   test('should enqueue function explanation review workflow as async job when queue is provided', async () => {
@@ -167,6 +187,158 @@ describe('workflow.function_explanation_review tool', () => {
         ok: true,
         data: {
           selected_path: 'native',
+          preflight: {
+            binary_profile: {
+              sample_id: sampleId,
+              original_filename: 'explained.exe',
+              binary_role: 'executable',
+              role_confidence: 0.8,
+              runtime_hint: {
+                is_dotnet: false,
+                dotnet_version: null,
+                target_framework: null,
+                primary_runtime: 'rust',
+              },
+              export_surface: {
+                total_exports: 0,
+                total_forwarders: 0,
+                notable_exports: [],
+                com_related_exports: [],
+                service_related_exports: [],
+                plugin_related_exports: [],
+                forwarded_exports: [],
+              },
+              import_surface: {
+                dll_count: 2,
+                notable_dlls: ['kernel32.dll'],
+                com_related_imports: [],
+                service_related_imports: [],
+                network_related_imports: [],
+                process_related_imports: ['WriteProcessMemory'],
+              },
+              packed: false,
+              packing_confidence: 0.04,
+              indicators: {
+                com_server: { likely: false, confidence: 0.05, evidence: [] },
+                service_binary: { likely: false, confidence: 0.05, evidence: [] },
+                plugin_binary: { likely: false, confidence: 0.05, evidence: [] },
+                driver_binary: { likely: false, confidence: 0.01, evidence: [] },
+              },
+              export_dispatch_profile: {
+                command_like_exports: [],
+                callback_like_exports: [],
+                registration_exports: [],
+                ordinal_only_exports: 0,
+                likely_dispatch_model: 'none',
+                confidence: 0.1,
+              },
+              com_profile: {
+                clsid_strings: [],
+                progid_strings: [],
+                interface_hints: [],
+                registration_strings: [],
+                class_factory_exports: [],
+                confidence: 0.02,
+              },
+              host_interaction_profile: {
+                likely_hosted: false,
+                host_hints: [],
+                callback_exports: [],
+                callback_strings: [],
+                service_hooks: [],
+                confidence: 0.08,
+              },
+              analysis_priorities: ['review_process_manipulation_and_dynamic_resolution_paths'],
+              strings_considered: 80,
+            },
+            rust_profile: {
+              suspected_rust: true,
+              confidence: 0.92,
+              primary_runtime: 'rust',
+              runtime_hints: ['panic_unwind'],
+              crate_hints: ['tokio'],
+              cargo_paths: ['cargo\\registry\\src\\...\\tokio-1.0'],
+              recovered_function_count: 80,
+              recovered_symbol_count: 60,
+              importable_with_code_functions_define: true,
+              analysis_priorities: ['recover_function_index_from_pdata'],
+            },
+            function_index_recovery: {
+              applied: true,
+              define_from: 'symbols_recover',
+              recovered_function_count: 80,
+              recovered_symbol_count: 60,
+              imported_count: 80,
+              function_index_status: 'ready',
+              decompile_status: 'missing',
+              cfg_status: 'missing',
+              recovery_strategy: ['pdata_runtime_functions'],
+              next_steps: ['Use code.functions.rank'],
+            },
+          },
+          provenance: {
+            runtime: {
+              scope: 'session',
+              session_selector: 'runtime-alpha',
+              artifact_count: 1,
+              artifact_ids: ['runtime-1'],
+              session_tags: ['runtime-alpha'],
+              earliest_artifact_at: '2026-03-11T00:00:00.000Z',
+              latest_artifact_at: '2026-03-11T00:00:00.000Z',
+              scope_note: 'runtime current',
+            },
+            semantic_names: {
+              scope: 'session',
+              session_selector: 'explain-session',
+              artifact_count: 0,
+              artifact_ids: [],
+              session_tags: [],
+              earliest_artifact_at: null,
+              latest_artifact_at: null,
+              scope_note: 'semantic names current',
+            },
+            semantic_explanations: {
+              scope: 'session',
+              session_selector: 'explain-session',
+              artifact_count: 1,
+              artifact_ids: ['semantic-expl-1'],
+              session_tags: ['explain-session'],
+              earliest_artifact_at: '2026-03-11T00:00:00.000Z',
+              latest_artifact_at: '2026-03-11T00:00:00.000Z',
+              scope_note: 'semantic explanations current',
+            },
+          },
+          selection_diffs: {
+            runtime: {
+              label: 'runtime',
+              current: {
+                scope: 'session',
+                session_selector: 'runtime-alpha',
+                artifact_count: 1,
+                artifact_ids: ['runtime-1'],
+                session_tags: ['runtime-alpha'],
+                earliest_artifact_at: '2026-03-11T00:00:00.000Z',
+                latest_artifact_at: '2026-03-11T00:00:00.000Z',
+                scope_note: 'runtime current',
+              },
+              baseline: {
+                scope: 'all',
+                session_selector: null,
+                artifact_count: 2,
+                artifact_ids: ['runtime-1', 'runtime-2'],
+                session_tags: ['runtime-alpha', 'runtime-beta'],
+                earliest_artifact_at: '2026-03-10T00:00:00.000Z',
+                latest_artifact_at: '2026-03-11T00:00:00.000Z',
+                scope_note: 'runtime baseline',
+              },
+              added_artifact_ids: [],
+              removed_artifact_ids: ['runtime-2'],
+              added_session_tags: [],
+              removed_session_tags: ['runtime-beta'],
+              artifact_count_delta: -1,
+              summary: 'runtime diff',
+            },
+          },
           export: {
             tool: 'code.reconstruct.export',
             export_root: 'reports/reconstruct/explained',
@@ -194,6 +366,8 @@ describe('workflow.function_explanation_review tool', () => {
       analysis_goal: 'Explain the highest-value functions in plain language.',
       evidence_scope: 'session',
       evidence_session_tag: 'runtime-alpha',
+      compare_evidence_scope: 'all',
+      compare_semantic_scope: 'all',
       export_name: 'explained',
       export_path: 'native',
       validate_build: true,
@@ -210,6 +384,9 @@ describe('workflow.function_explanation_review tool', () => {
     expect(data.export.selected_path).toBe('native')
     expect(data.export.export_tool).toBe('code.reconstruct.export')
     expect(data.export.manifest_path).toContain('manifest.json')
+    expect(data.export.preflight.function_index_recovery.imported_count).toBe(80)
+    expect(data.export.provenance.runtime.session_selector).toBe('runtime-alpha')
+    expect(data.export.selection_diffs.runtime.summary).toBe('runtime diff')
     expect(data.next_steps.join(' ')).toContain('Native build validation: passed')
 
     expect(explainReviewHandler).toHaveBeenCalledWith(
@@ -228,6 +405,10 @@ describe('workflow.function_explanation_review tool', () => {
         run_harness: true,
         evidence_scope: 'session',
         evidence_session_tag: 'runtime-alpha',
+        compare_evidence_scope: 'all',
+        compare_semantic_scope: 'all',
+        include_preflight: true,
+        auto_recover_function_index: true,
       })
     )
   })

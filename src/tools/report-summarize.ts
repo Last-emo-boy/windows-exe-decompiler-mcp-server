@@ -12,6 +12,10 @@ import {
   BinaryRoleProfileDataSchema,
   createBinaryRoleProfileHandler,
 } from './binary-role-profile.js'
+import {
+  RustBinaryAnalyzeDataSchema,
+  createRustBinaryAnalyzeHandler,
+} from './rust-binary-analyze.js'
 import { createTriageWorkflowHandler } from '../workflows/triage.js'
 import { loadDynamicTraceEvidence, type DynamicTraceSummary } from '../dynamic-trace.js'
 import {
@@ -190,6 +194,9 @@ export const ReportSummarizeOutputSchema = z.object({
       binary_profile: BinaryRoleProfileDataSchema.optional().describe(
         'Optional binary role profile summarizing EXE/DLL/COM/service/plugin/export characteristics.'
       ),
+      rust_profile: RustBinaryAnalyzeDataSchema.optional().describe(
+        'Optional Rust-oriented binary analysis summary, including crate hints, recovered symbols, and recovery priorities.'
+      ),
       provenance: AnalysisProvenanceSchema.optional().describe(
         'Explicit runtime/semantic artifact selection used to produce this report, including scope, session selector, and selected artifact IDs.'
       ),
@@ -298,6 +305,7 @@ type TriageSummaryData = {
   evidence_lineage?: z.infer<typeof EvidenceLineageSchema>
   confidence_semantics?: z.infer<typeof ReportAssessmentConfidenceSchema>
   binary_profile?: z.infer<typeof BinaryRoleProfileDataSchema>
+  rust_profile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
   function_explanations?: Array<z.infer<typeof FunctionExplanationSummarySchema>>
   evidence_weights?: {
     import: number
@@ -343,6 +351,12 @@ function buildBinaryProfileSummary(binaryProfile: z.infer<typeof BinaryRoleProfi
   if (binaryProfile.indicators.service_binary.likely) {
     parts.push('service indicators detected')
   }
+  if (binaryProfile.export_dispatch_profile.likely_dispatch_model !== 'none') {
+    parts.push(`dispatch_model=${binaryProfile.export_dispatch_profile.likely_dispatch_model}`)
+  }
+  if (binaryProfile.host_interaction_profile.likely_hosted) {
+    parts.push('host/plugin interaction surface detected')
+  }
   if (binaryProfile.packed) {
     parts.push('packing signals present')
   }
@@ -380,6 +394,99 @@ function augmentWithBinaryProfile(
             ...triageData.inference.hypotheses,
             `Binary role profile suggests ${binaryProfile.binary_role}.`,
           ]),
+        }
+      : triageData.inference,
+  }
+}
+
+function buildRustProfileSummary(rustProfile: z.infer<typeof RustBinaryAnalyzeDataSchema>): string {
+  const parts = [
+    `Rust-focused analysis ${rustProfile.suspected_rust ? 'suggests a Rust-oriented binary' : 'did not strongly confirm Rust'} (confidence=${rustProfile.confidence.toFixed(2)})`,
+  ]
+  if (rustProfile.primary_runtime) {
+    parts.push(`runtime=${rustProfile.primary_runtime}`)
+  }
+  if (rustProfile.crate_hints.length > 0) {
+    parts.push(`crate_hints=${rustProfile.crate_hints.slice(0, 4).join(', ')}`)
+  }
+  if (rustProfile.recovered_function_count > 0) {
+    parts.push(`recovered_functions=${rustProfile.recovered_function_count}`)
+  }
+  if (rustProfile.recovered_symbol_count > 0) {
+    parts.push(`recovered_symbols=${rustProfile.recovered_symbol_count}`)
+  }
+  return `${parts.join(', ')}.`
+}
+
+function augmentWithRustProfile(
+  triageData: TriageSummaryData,
+  rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
+): TriageSummaryData {
+  if (!rustProfile) {
+    return triageData
+  }
+
+  const summaryLine = buildRustProfileSummary(rustProfile)
+  const rustPriorityLines = rustProfile.analysis_priorities.map((item) => `rust_analysis_priority: ${item}`)
+  const compilerArtifacts = {
+    ...(triageData.iocs.compiler_artifacts || {}),
+    cargo_paths: dedupe([
+      ...(triageData.iocs.compiler_artifacts?.cargo_paths || []),
+      ...rustProfile.cargo_paths,
+    ]),
+    rust_markers: dedupe([
+      ...(triageData.iocs.compiler_artifacts?.rust_markers || []),
+      ...rustProfile.rust_markers,
+    ]),
+    library_profile:
+      rustProfile.library_profile || triageData.iocs.compiler_artifacts?.library_profile,
+  }
+  const recommendationSuffix =
+    rustProfile.analysis_priorities.length > 0
+      ? ` Rust recovery priorities: ${rustProfile.analysis_priorities.join(', ')}.`
+      : ''
+
+  return {
+    ...triageData,
+    summary: `${triageData.summary} ${summaryLine}`.trim(),
+    iocs: {
+      ...triageData.iocs,
+      compiler_artifacts: compilerArtifacts,
+    },
+    evidence: dedupe([summaryLine, ...triageData.evidence, ...rustProfile.evidence, ...rustPriorityLines]),
+    rust_profile: rustProfile,
+    recommendation: `${triageData.recommendation}${recommendationSuffix}`.trim(),
+    inference: triageData.inference
+      ? {
+          ...triageData.inference,
+          hypotheses: dedupe([
+            ...triageData.inference.hypotheses,
+            rustProfile.suspected_rust
+              ? 'Rust/toolchain evidence is strong enough to prioritize non-Ghidra function recovery paths.'
+              : 'Rust/toolchain evidence remains weak; keep recovery paths heuristic.',
+          ]),
+          tooling_assessment: triageData.inference.tooling_assessment
+            ? {
+                ...triageData.inference.tooling_assessment,
+                framework_hints: dedupe([
+                  ...triageData.inference.tooling_assessment.framework_hints,
+                  ...rustProfile.crate_hints,
+                ]),
+                toolchain_markers: dedupe([
+                  ...triageData.inference.tooling_assessment.toolchain_markers,
+                  ...rustProfile.runtime_hints,
+                ]),
+                library_profile:
+                  triageData.inference.tooling_assessment.library_profile ||
+                  rustProfile.library_profile,
+              }
+            : {
+                help_text_detected: false,
+                cli_surface_detected: false,
+                framework_hints: rustProfile.crate_hints,
+                toolchain_markers: rustProfile.runtime_hints,
+                library_profile: rustProfile.library_profile,
+              },
         }
       : triageData.inference,
   }
@@ -594,7 +701,8 @@ function createMinimalDotnetFallback(
   functionExplanations: Array<z.infer<typeof FunctionExplanationSummarySchema>> = [],
   provenance?: z.infer<typeof AnalysisProvenanceSchema>,
   evidenceScope: 'all' | 'latest' | 'session' = 'all',
-  binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>
+  binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>,
+  rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
 ): WorkerResult {
   const triageErrors = triageResult.errors || []
   const warnings = [
@@ -622,9 +730,11 @@ function createMinimalDotnetFallback(
         'Dotnet mode unavailable; triage fallback failed.',
         ...triageErrors.map((item) => `triage_error: ${item}`),
         ...(binaryProfile ? [buildBinaryProfileSummary(binaryProfile)] : []),
+        ...(rustProfile ? [buildRustProfileSummary(rustProfile)] : []),
       ],
       confidence_semantics: buildAssessmentConfidencePayload(0.2, evidenceScope),
       binary_profile: binaryProfile,
+      rust_profile: rustProfile,
       provenance,
       function_explanations: functionExplanations.length > 0 ? functionExplanations : undefined,
       inference: {
@@ -635,7 +745,7 @@ function createMinimalDotnetFallback(
         false_positive_risks: ['No triage evidence is available in this degraded fallback result.'],
       },
       recommendation:
-        `Re-run after ensuring workspace/original sample file exists, then use workflow.reconstruct or dotnet.reconstruct.export for .NET-specific structure.${binaryProfile?.analysis_priorities?.length ? ` Binary role priorities: ${binaryProfile.analysis_priorities.join(', ')}.` : ''}`,
+        `Re-run after ensuring workspace/original sample file exists, then use workflow.reconstruct or dotnet.reconstruct.export for .NET-specific structure.${binaryProfile?.analysis_priorities?.length ? ` Binary role priorities: ${binaryProfile.analysis_priorities.join(', ')}.` : ''}${rustProfile?.analysis_priorities?.length ? ` Rust recovery priorities: ${rustProfile.analysis_priorities.join(', ')}.` : ''}`,
     },
     warnings,
     errors: triageErrors.length > 0 ? triageErrors : undefined,
@@ -650,7 +760,8 @@ function createDynamicEvidenceFallback(
   functionExplanations: Array<z.infer<typeof FunctionExplanationSummarySchema>> = [],
   provenance?: z.infer<typeof AnalysisProvenanceSchema>,
   evidenceScope: 'all' | 'latest' | 'session' = 'all',
-  binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>
+  binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>,
+  rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
 ): WorkerResult {
   const evidenceLineage = buildEvidenceLineage(dynamicEvidence)
   const threatLevel =
@@ -660,7 +771,7 @@ function createDynamicEvidenceFallback(
     ok: true,
     data: {
       summary:
-        `Triage pipeline failed, but imported runtime evidence is available. ${buildEvidenceLayerHeadline(evidenceLineage)} ${dynamicEvidence.summary}${binaryProfile ? ` ${buildBinaryProfileSummary(binaryProfile)}` : ''}`,
+        `Triage pipeline failed, but imported runtime evidence is available. ${buildEvidenceLayerHeadline(evidenceLineage)} ${dynamicEvidence.summary}${binaryProfile ? ` ${buildBinaryProfileSummary(binaryProfile)}` : ''}${rustProfile ? ` ${buildRustProfileSummary(rustProfile)}` : ''}`,
       confidence: dynamicEvidence.executed ? 0.66 : 0.5,
       threat_level: threatLevel,
       iocs: {
@@ -675,6 +786,7 @@ function createDynamicEvidenceFallback(
         buildEvidenceLayerHeadline(evidenceLineage),
         ...dynamicEvidence.evidence,
         ...(binaryProfile ? [buildBinaryProfileSummary(binaryProfile)] : []),
+        ...(rustProfile ? [buildRustProfileSummary(rustProfile)] : []),
       ]),
       evidence_lineage: evidenceLineage,
       confidence_semantics: buildAssessmentConfidencePayload(
@@ -683,6 +795,7 @@ function createDynamicEvidenceFallback(
         evidenceLineage
       ),
       binary_profile: binaryProfile,
+      rust_profile: rustProfile,
       provenance,
       function_explanations: functionExplanations.length > 0 ? functionExplanations : undefined,
       evidence_weights: {
@@ -702,7 +815,7 @@ function createDynamicEvidenceFallback(
         ],
       },
       recommendation:
-        `Correlate imported runtime evidence with code.functions.search, code.functions.reconstruct, and code.reconstruct.export to assign concrete function ownership.${binaryProfile?.analysis_priorities?.length ? ` Binary role priorities: ${binaryProfile.analysis_priorities.join(', ')}.` : ''}`,
+        `Correlate imported runtime evidence with code.functions.search, code.functions.reconstruct, and code.reconstruct.export to assign concrete function ownership.${binaryProfile?.analysis_priorities?.length ? ` Binary role priorities: ${binaryProfile.analysis_priorities.join(', ')}.` : ''}${rustProfile?.analysis_priorities?.length ? ` Rust recovery priorities: ${rustProfile.analysis_priorities.join(', ')}.` : ''}`,
     },
     warnings: [
       'Triage pipeline failed; returned imported runtime-evidence fallback.',
@@ -720,6 +833,7 @@ export function createReportSummarizeHandler(
   deps?: {
     triageHandler?: (args: ToolArgs) => Promise<WorkerResult>
     binaryRoleProfileHandler?: (args: ToolArgs) => Promise<WorkerResult>
+    rustBinaryAnalyzeHandler?: (args: ToolArgs) => Promise<WorkerResult>
   }
 ) {
   const triageHandler =
@@ -727,6 +841,9 @@ export function createReportSummarizeHandler(
   const binaryRoleProfileHandler =
     deps?.binaryRoleProfileHandler ||
     createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
+  const rustBinaryAnalyzeHandler =
+    deps?.rustBinaryAnalyzeHandler ||
+    createRustBinaryAnalyzeHandler(workspaceManager, database, cacheManager)
 
   return async (args: ToolArgs): Promise<WorkerResult> => {
     const startTime = Date.now()
@@ -757,6 +874,18 @@ export function createReportSummarizeHandler(
         )
       } else if (binaryRoleProfileResult.warnings?.length) {
         warnings.push(...binaryRoleProfileResult.warnings.map((item) => `binary.role.profile: ${item}`))
+      }
+      const rustBinaryAnalyzeResult = await rustBinaryAnalyzeHandler({ sample_id: input.sample_id })
+      const rustProfile =
+        rustBinaryAnalyzeResult.ok && rustBinaryAnalyzeResult.data
+          ? (rustBinaryAnalyzeResult.data as z.infer<typeof RustBinaryAnalyzeDataSchema>)
+          : undefined
+      if (!rustBinaryAnalyzeResult.ok) {
+        warnings.push(
+          `rust_binary.analyze unavailable: ${(rustBinaryAnalyzeResult.errors || ['unknown error']).join('; ')}`
+        )
+      } else if (rustBinaryAnalyzeResult.warnings?.length) {
+        warnings.push(...rustBinaryAnalyzeResult.warnings.map((item) => `rust_binary.analyze: ${item}`))
       }
       const functionExplanationBundle = await loadFunctionExplanationSummaries(
         workspaceManager,
@@ -838,7 +967,8 @@ export function createReportSummarizeHandler(
               functionExplanations,
               provenance,
               input.evidence_scope,
-              binaryProfile
+              binaryProfile,
+              rustProfile
             )
           }
           return {
@@ -854,8 +984,9 @@ export function createReportSummarizeHandler(
           ? augmentWithDynamicEvidence(triageDataBase, dynamicEvidence)
           : triageDataBase
         const binaryEnrichedTriageData = augmentWithBinaryProfile(triageData, binaryProfile)
+        const rustEnrichedTriageData = augmentWithRustProfile(binaryEnrichedTriageData, rustProfile)
         const enrichedTriageData = augmentWithFunctionExplanations(
-          binaryEnrichedTriageData,
+          rustEnrichedTriageData,
           functionExplanations
         )
         return {
@@ -873,6 +1004,7 @@ export function createReportSummarizeHandler(
               enrichedTriageData.evidence_lineage || buildEvidenceLineage(dynamicEvidence)
             ),
             binary_profile: enrichedTriageData.binary_profile,
+            rust_profile: enrichedTriageData.rust_profile,
             provenance,
             selection_diffs:
               Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
@@ -902,7 +1034,8 @@ export function createReportSummarizeHandler(
             functionExplanations,
             provenance,
             input.evidence_scope,
-            binaryProfile
+            binaryProfile,
+            rustProfile
           )
         }
 
@@ -928,6 +1061,7 @@ export function createReportSummarizeHandler(
               triageData.evidence_lineage || buildEvidenceLineage(dynamicEvidence)
             ),
             binary_profile: binaryProfile,
+            rust_profile: rustProfile,
             provenance,
             selection_diffs:
               Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,

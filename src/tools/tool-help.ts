@@ -189,6 +189,78 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
     }
   }
 
+  if (toolName === 'ghidra.analyze') {
+    if (path === 'options.processor') {
+      return 'Use this when you want analyzeHeadless to force a specific processor/language family. Prefer options.language_id when you already know the exact Ghidra language ID.'
+    }
+    if (path === 'options.language_id') {
+      return 'Useful for Rust/Go/C++ binaries when auto-detection under-identifies functions. Example: x86:LE:64:default.'
+    }
+    if (path === 'options.cspec') {
+      return 'Optional compiler specification override. Use only when the default calling-convention model is clearly wrong.'
+    }
+    if (path === 'options.script_paths') {
+      return 'Appends additional post-script directories to the default Ghidra script path. Useful for custom Rust-aware extraction scripts.'
+    }
+  }
+
+  if (toolName === 'pe.pdata.extract') {
+    if (path === 'sample_id') {
+      return 'Use this first when a PE32+ / Rust sample has zero Ghidra functions. It reads the exception directory / .pdata directly without requiring Ghidra function discovery.'
+    }
+  }
+
+  if (toolName === 'code.functions.smart_recover') {
+    if (path === 'sample_id') {
+      return 'Use this when Ghidra function extraction fails or returns zero functions. It recovers candidate boundaries from .pdata, exports, and the entry point.'
+    }
+  }
+
+  if (toolName === 'pe.symbols.recover') {
+    if (path === 'sample_id') {
+      return 'Use this after pe.pdata.extract or code.functions.smart_recover when you need more descriptive recovered symbol names for Rust/Go/C++ binaries.'
+    }
+    if (path === 'max_string_hints') {
+      return 'Increase this when you want more Rust crate path or runtime string hints to influence recovered names.'
+    }
+  }
+
+  if (toolName === 'code.functions.define') {
+    if (path === 'definitions') {
+      return 'Accepts manual definitions or outputs adapted from code.functions.smart_recover / pe.symbols.recover. Each entry needs address, va, or rva.'
+    }
+    if (path === 'replace_all') {
+      return 'When true, the current function index for this sample is deleted before the imported definitions are inserted.'
+    }
+    if (path === 'source') {
+      return 'Use pdata, symbols_recover, smart_recover, manual, or external so later reports clearly show where this function index came from.'
+    }
+  }
+
+  if (toolName === 'rust_binary.analyze') {
+    if (path === 'sample_id') {
+      return 'Use this as a high-level Rust triage entrypoint when a PE sample looks Rust-like or Ghidra returns zero functions.'
+    }
+    if (path === 'max_strings') {
+      return 'Increase this when Rust crate paths, panic strings, or async/runtime markers are sparse and you need stronger crate/runtime evidence.'
+    }
+    if (path === 'max_symbol_preview') {
+      return 'Controls how many recovered symbol names are surfaced from pe.symbols.recover in one response.'
+    }
+  }
+
+  if (toolName === 'workflow.function_index_recover') {
+    if (path === 'define_from') {
+      return 'auto prefers pe.symbols.recover names when available; smart_recover keeps synthetic/import/export-derived names only.'
+    }
+    if (path === 'max_string_hints') {
+      return 'Forwarded to pe.symbols.recover so recovered names can use more Rust/Go/C++ crate and runtime hints.'
+    }
+    if (path === 'replace_all') {
+      return 'Recommended when you want the recovered index to replace an empty or stale function index from a failed Ghidra run.'
+    }
+  }
+
   if (path === 'evidence_scope') {
     return 'Controls runtime evidence selection only. Use session for one runtime import/replay lineage, latest for the newest artifact window, all to aggregate historical runtime evidence.'
   }
@@ -273,6 +345,60 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     )
     notes.push(
       'The returned analysis_priorities are intended to guide later MCP calls such as code.functions.search, ghidra.analyze, workflow.reconstruct, or dynamic.memory.import.'
+    )
+  }
+
+  if (definition.name === 'pe.pdata.extract') {
+    notes.push(
+      'Use this tool when Ghidra post-scripts fail or a Rust x64 sample reports zero functions. It parses PE unwind metadata directly and does not require successful Ghidra function indexing.'
+    )
+  }
+
+  if (definition.name === 'code.functions.smart_recover') {
+    notes.push(
+      'Use this tool after pe.pdata.extract or failed ghidra.analyze runs to recover candidate function boundaries for Rust/Go/C++ binaries with degraded Ghidra support.'
+    )
+  }
+
+  if (definition.name === 'pe.symbols.recover') {
+    notes.push(
+      'Use this after code.functions.smart_recover when you want more descriptive recovered names derived from exports, entry point, runtime hints, and Rust crate strings.'
+    )
+    notes.push(
+      'The returned symbols can be fed into code.functions.define to establish a reusable function index with recovered names.'
+    )
+  }
+
+  if (definition.name === 'code.functions.define') {
+    notes.push(
+      'Use this to import function boundaries from pe.pdata.extract, code.functions.smart_recover, pe.symbols.recover, or external reverse-engineering tooling.'
+    )
+    notes.push(
+      'This establishes function-index readiness only. It does not imply Ghidra decompile or CFG readiness.'
+    )
+  }
+
+  if (definition.name === 'rust_binary.analyze') {
+    notes.push(
+      'This tool aggregates runtime.detect, strings.extract, code.functions.smart_recover, pe.symbols.recover, and binary.role.profile into one Rust-focused assessment.'
+    )
+    notes.push(
+      'Use it before manual recovery on Rust/Go/C++ samples when you need crate hints, recovered symbol previews, and concrete next steps for code.functions.define.'
+    )
+  }
+
+  if (definition.name === 'workflow.function_index_recover') {
+    notes.push(
+      'This workflow chains code.functions.smart_recover, pe.symbols.recover, and code.functions.define so difficult Rust/Go/C++ samples can materialize a reusable function index without a successful Ghidra decompile pass.'
+    )
+    notes.push(
+      'Use this after ghidra.analyze returns zero functions or degraded function_index readiness. The output includes imported function previews and an optional ranked preview.'
+    )
+  }
+
+  if (definition.name === 'ghidra.analyze') {
+    notes.push(
+      'For Rust or other hard-to-index binaries, combine ghidra.analyze with pe.pdata.extract or code.functions.smart_recover. When auto-detection is weak, set options.language_id, options.cspec, or options.script_paths explicitly.'
     )
   }
 

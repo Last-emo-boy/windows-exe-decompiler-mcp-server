@@ -6,6 +6,16 @@ This repository includes a helper script for local GitHub Copilot clients:
 .\install-to-copilot.ps1
 ```
 
+By default, the script writes a stable `WORKSPACE_ROOT` under your user profile:
+
+- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+
+It also pins:
+
+- `DB_PATH`
+- `CACHE_ROOT`
+- `AUDIT_LOG_PATH`
+
 Build the project first:
 
 ```powershell
@@ -16,6 +26,12 @@ If Ghidra is not already configured in the environment, pass it explicitly:
 
 ```powershell
 .\install-to-copilot.ps1 -GhidraPath "C:\tools\ghidra"
+```
+
+If you want a different persistent workspace root:
+
+```powershell
+.\install-to-copilot.ps1 -WorkspaceRoot "D:\reverse-data\workspaces"
 ```
 
 ## What the script updates

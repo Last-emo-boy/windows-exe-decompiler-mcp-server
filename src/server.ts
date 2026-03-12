@@ -67,7 +67,7 @@ export class MCPServer {
     this.server = new Server(
       {
         name: 'windows-exe-decompiler-mcp-server',
-        version: '0.1.1',
+        version: '0.1.2',
       },
       {
         capabilities: {

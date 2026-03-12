@@ -6,7 +6,6 @@
 
 import { z } from 'zod'
 import { spawn } from 'child_process'
-import path from 'path'
 import { v4 as uuidv4 } from 'uuid'
 import type { ToolDefinition, ToolArgs, WorkerResult, ArtifactRef } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
@@ -15,6 +14,7 @@ import type { CacheManager } from '../cache-manager.js'
 import { generateCacheKey } from '../cache-manager.js'
 import { resolvePackagePath } from '../runtime-paths.js'
 import { lookupCachedResult, formatCacheWarning } from './cache-observability.js'
+import { inspectSampleWorkspace, formatMissingOriginalError, resolvePrimarySamplePath } from '../sample-workspace.js'
 
 // ============================================================================
 // Constants
@@ -240,20 +240,15 @@ export function createPEImportsExtractHandler(
         }
       }
 
-      // 3. Get sample path from workspace
-      const workspace = await workspaceManager.getWorkspace(input.sample_id)
-      
-      // Find the sample file in the original directory
-      const fs = await import('fs/promises')
-      const files = await fs.readdir(workspace.original)
-      if (files.length === 0) {
+      // 3. Get sample path from workspace, allowing legacy sibling workspace fallback
+      const { samplePath } = await resolvePrimarySamplePath(workspaceManager, input.sample_id)
+      if (!samplePath) {
+        const integrity = await inspectSampleWorkspace(workspaceManager, input.sample_id)
         return {
           ok: false,
-          errors: ['Sample file not found in workspace'],
+          errors: [formatMissingOriginalError(input.sample_id, integrity)],
         }
       }
-      
-      const samplePath = path.join(workspace.original, files[0])
 
       // 4. Prepare worker request
       const workerRequest: WorkerRequest = {

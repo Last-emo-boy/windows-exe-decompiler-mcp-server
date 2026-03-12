@@ -9,6 +9,15 @@ Versioning where practical.
 
 - Ongoing reverse-engineering coverage, MCP workflow orchestration, and packaging polish
 
+## [0.1.2] - 2026-03-12
+
+- Upgraded `workflow.reconstruct` with universal preflight orchestration, including binary role profiling, Rust-specific profiling, and optional automatic function-index recovery before export
+- Aligned `workflow.semantic_name_review` and `workflow.function_explanation_review` with reconstruct refresh preflight, provenance, and selection diff semantics
+- Added `.pdata`-driven PE recovery tooling: `pe.pdata.extract`, `code.functions.smart_recover`, `pe.symbols.recover`, and `code.functions.define`
+- Added `workflow.function_index_recover` and `rust_binary.analyze` to make Rust and hard-to-index native samples recoverable even when Ghidra function extraction fails
+- Hardened sample/original and Ghidra project fallback handling so analysis can continue when older workspaces are incomplete
+- Stabilized runtime state defaults by moving workspace, database, cache, and audit paths to persistent user-level configuration roots
+
 ## [0.1.1] - 2026-03-11
 
 - Added `binary.role.profile` for universal EXE/DLL/.NET/driver role profiling, export surface triage, and COM/service/plugin indicators

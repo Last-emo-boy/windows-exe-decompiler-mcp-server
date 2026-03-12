@@ -5,6 +5,34 @@
 
 import { z } from 'zod'
 import fs from 'fs'
+import os from 'os'
+import path from 'path'
+
+export const APP_CONFIG_DIRNAME = '.windows-exe-decompiler-mcp-server'
+
+export function getDefaultAppRoot(): string {
+  return path.join(os.homedir(), APP_CONFIG_DIRNAME)
+}
+
+export function getDefaultWorkspaceRoot(): string {
+  return path.join(getDefaultAppRoot(), 'workspaces')
+}
+
+export function getDefaultConfigPath(): string {
+  return path.join(getDefaultAppRoot(), 'config.json')
+}
+
+export function getDefaultDatabasePath(): string {
+  return path.join(getDefaultAppRoot(), 'data', 'database.db')
+}
+
+export function getDefaultCacheRoot(): string {
+  return path.join(getDefaultAppRoot(), 'cache')
+}
+
+export function getDefaultAuditLogPath(): string {
+  return path.join(getDefaultAppRoot(), 'audit.log')
+}
 
 // Configuration schema using Zod
 export const ConfigSchema = z.object({
@@ -14,7 +42,7 @@ export const ConfigSchema = z.object({
   }).default({}),
   database: z.object({
     type: z.enum(['sqlite', 'postgresql']).default('sqlite'),
-    path: z.string().optional(),
+    path: z.string().default(getDefaultDatabasePath()),
     host: z.string().optional(),
     port: z.number().int().optional(),
     database: z.string().optional(),
@@ -22,7 +50,7 @@ export const ConfigSchema = z.object({
     password: z.string().optional(),
   }).default({}),
   workspace: z.object({
-    root: z.string().default('./workspaces'),
+    root: z.string().default(getDefaultWorkspaceRoot()),
     maxSampleSize: z.number().int().min(1).default(500 * 1024 * 1024), // 500MB
   }).default({}),
   workers: z.object({
@@ -49,11 +77,13 @@ export const ConfigSchema = z.object({
   }).default({}),
   cache: z.object({
     enabled: z.boolean().default(true),
+    root: z.string().default(getDefaultCacheRoot()),
     ttl: z.number().int().min(0).default(30 * 24 * 60 * 60), // 30 days
   }).default({}),
   logging: z.object({
     level: z.enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal']).default('info'),
     pretty: z.boolean().default(false),
+    auditPath: z.string().default(getDefaultAuditLogPath()),
   }).default({}),
 })
 
@@ -113,6 +143,10 @@ export function loadConfigFromEnv(): Record<string, any> {
     if (!config.workspace) config.workspace = {}
     config.workspace.root = process.env.WORKSPACE_ROOT
   }
+  if (process.env.CACHE_ROOT) {
+    if (!config.cache) config.cache = {}
+    config.cache.root = process.env.CACHE_ROOT
+  }
   if (process.env.MAX_SAMPLE_SIZE) {
     if (!config.workspace) config.workspace = {}
     config.workspace.maxSampleSize = parseInt(process.env.MAX_SAMPLE_SIZE, 10)
@@ -135,6 +169,10 @@ export function loadConfigFromEnv(): Record<string, any> {
   if (process.env.LOG_LEVEL) {
     if (!config.logging) config.logging = {}
     config.logging.level = process.env.LOG_LEVEL
+  }
+  if (process.env.AUDIT_LOG_PATH) {
+    if (!config.logging) config.logging = {}
+    config.logging.auditPath = process.env.AUDIT_LOG_PATH
   }
 
   return config
@@ -178,7 +216,8 @@ export function mergeConfigs(...configs: any[]): any {
  * Load and validate configuration from all sources
  */
 export function loadConfig(configPath?: string): Config {
-  const fileConfig = configPath ? loadConfigFromFile(configPath) : {}
+  const resolvedConfigPath = configPath || process.env.CONFIG_PATH || getDefaultConfigPath()
+  const fileConfig = loadConfigFromFile(resolvedConfigPath)
   const envConfig = loadConfigFromEnv()
   const mergedConfig = mergeConfigs(fileConfig, envConfig)
 

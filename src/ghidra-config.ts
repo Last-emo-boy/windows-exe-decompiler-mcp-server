@@ -56,6 +56,31 @@ export interface ProcessInvocation {
   windowsVerbatimArguments?: boolean
 }
 
+function getWindowsCommandInterpreter(): string {
+  const envCandidates = [process.env.ComSpec, process.env.COMSPEC].filter(
+    (value): value is string => Boolean(value && value.trim())
+  )
+
+  for (const candidate of envCandidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  const systemRootCandidates = [process.env.SystemRoot, process.env.SYSTEMROOT].filter(
+    (value): value is string => Boolean(value && value.trim())
+  )
+
+  for (const systemRoot of systemRootCandidates) {
+    const candidate = path.join(systemRoot, 'System32', 'cmd.exe')
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return 'cmd.exe'
+}
+
 function getPythonCommand(platform: NodeJS.Platform = process.platform): string {
   return platform === 'win32' ? 'python' : 'python3'
 }
@@ -163,7 +188,7 @@ export function buildWindowsBatchInvocation(command: string, args: string[]): Pr
   // without this, paths containing '&' are split and fail to execute.
   const wrappedCommandLine = `"${commandLine}"`
   return {
-    command: 'cmd.exe',
+    command: getWindowsCommandInterpreter(),
     args: ['/d', '/s', '/c', wrappedCommandLine],
     windowsVerbatimArguments: true,
   }

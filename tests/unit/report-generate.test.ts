@@ -291,6 +291,30 @@ describe('report.generate tool', () => {
             plugin_binary: { likely: true, confidence: 0.67, evidence: ['export:RunPlugin'] },
             driver_binary: { likely: false, confidence: 0.05, evidence: [] },
           },
+          export_dispatch_profile: {
+            command_like_exports: ['RunPlugin'],
+            callback_like_exports: [],
+            registration_exports: ['DllRegisterServer'],
+            ordinal_only_exports: 0,
+            likely_dispatch_model: 'com_registration_and_class_factory',
+            confidence: 0.74,
+          },
+          com_profile: {
+            clsid_strings: [],
+            progid_strings: ['Acme.Plugin'],
+            interface_hints: ['IClassFactory'],
+            registration_strings: ['InprocServer32'],
+            class_factory_exports: ['DllRegisterServer'],
+            confidence: 0.8,
+          },
+          host_interaction_profile: {
+            likely_hosted: true,
+            host_hints: ['Plugin host extension'],
+            callback_exports: [],
+            callback_strings: [],
+            service_hooks: [],
+            confidence: 0.61,
+          },
           analysis_priorities: ['trace_export_surface_first'],
           strings_considered: 14,
         },
@@ -307,7 +331,76 @@ describe('report.generate tool', () => {
     expect(reportContent).toContain('## Binary Role Profile')
     expect(reportContent).toContain('**Binary Role:** dll')
     expect(reportContent).toContain('DllRegisterServer')
+    expect(reportContent).toContain('**Likely Dispatch Model:** com_registration_and_class_factory')
     expect(reportContent).toContain('trace_export_surface_first')
+  })
+
+  test('should include rust binary profile section in generated markdown report', async () => {
+    const sampleId = 'sha256:' + 'd'.repeat(64)
+    const createdAt = new Date().toISOString()
+
+    database.insertSample({
+      id: sampleId,
+      sha256: 'd'.repeat(64),
+      md5: 'd'.repeat(32),
+      size: 8192,
+      file_type: 'PE32+ executable',
+      created_at: createdAt,
+      source: 'unit-test',
+    })
+
+    await workspaceManager.createWorkspace(sampleId)
+
+    const handler = createReportGenerateHandler(workspaceManager, database, undefined, {
+      rustBinaryAnalyzeHandler: async () => ({
+        ok: true,
+        data: {
+          sample_id: sampleId,
+          suspected_rust: true,
+          confidence: 0.85,
+          primary_runtime: 'rust',
+          runtime_hints: ['rust', 'msvc'],
+          cargo_paths: ['cargo\\registry\\src\\goblin-0.8.0\\src\\pe'],
+          rust_markers: ['rust_panic'],
+          async_runtime_markers: ['tokio'],
+          panic_markers: ['panic'],
+          crate_hints: ['goblin', 'tokio'],
+          library_profile: {
+            ecosystems: ['rust'],
+            top_crates: ['goblin', 'tokio'],
+            notable_libraries: ['goblin', 'tokio'],
+            evidence: ['cargo registry path'],
+          },
+          recovered_function_count: 31,
+          recovered_function_strategy: ['pdata_runtime_function'],
+          recovered_symbol_count: 7,
+          recovered_symbol_preview: [],
+          components: {
+            runtime_detect: { ok: true, warning_count: 0, error_count: 0 },
+            strings_extract: { ok: true, warning_count: 0, error_count: 0 },
+            smart_recover: { ok: true, warning_count: 0, error_count: 0 },
+            symbols_recover: { ok: true, warning_count: 0, error_count: 0 },
+            binary_role_profile: { ok: true, warning_count: 0, error_count: 0 },
+          },
+          importable_with_code_functions_define: true,
+          evidence: ['Recovered functions from exception metadata.'],
+          analysis_priorities: ['feed_recovered_boundaries_into_code.functions.define'],
+          next_steps: ['Use code.functions.define to materialize the recovered index.'],
+        },
+      }),
+    })
+    const result = await handler({
+      sample_id: sampleId,
+      format: 'markdown',
+    })
+
+    expect(result.isError).toBeUndefined()
+    const payload = JSON.parse(result.content.find((item) => item.type === 'text')!.text!)
+    const reportContent = fs.readFileSync(payload.data.path, 'utf-8')
+    expect(reportContent).toContain('## Rust Binary Profile')
+    expect(reportContent).toContain('**Suspected Rust:** Yes')
+    expect(reportContent).toContain('goblin, tokio')
+    expect(reportContent).toContain('feed_recovered_boundaries_into_code.functions.define')
   })
 
   test('should include semantic function explanations in generated reports', async () => {

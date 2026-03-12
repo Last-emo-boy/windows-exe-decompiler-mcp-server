@@ -3,6 +3,10 @@ param(
     [string]$ProjectRoot = (Get-Location).Path,
     [string]$NodePath,
     [string]$GhidraPath = "",
+    [string]$WorkspaceRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces",
+    [string]$DatabasePath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db",
+    [string]$CacheRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache",
+    [string]$AuditLogPath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log",
     [string]$ConfigPath = "$env:USERPROFILE\.codex\config.toml",
     [switch]$NoBackup
 )
@@ -54,6 +58,54 @@ function Resolve-GhidraPath {
     return ""
 }
 
+function Resolve-WorkspaceRoot {
+    if ($WorkspaceRoot) {
+        return $WorkspaceRoot
+    }
+
+    if ($env:WORKSPACE_ROOT) {
+        return $env:WORKSPACE_ROOT
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces"
+}
+
+function Resolve-DatabasePath {
+    if ($DatabasePath) {
+        return $DatabasePath
+    }
+
+    if ($env:DB_PATH) {
+        return $env:DB_PATH
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db"
+}
+
+function Resolve-CacheRoot {
+    if ($CacheRoot) {
+        return $CacheRoot
+    }
+
+    if ($env:CACHE_ROOT) {
+        return $env:CACHE_ROOT
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache"
+}
+
+function Resolve-AuditLogPath {
+    if ($AuditLogPath) {
+        return $AuditLogPath
+    }
+
+    if ($env:AUDIT_LOG_PATH) {
+        return $env:AUDIT_LOG_PATH
+    }
+
+    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log"
+}
+
 function Backup-FileIfNeeded {
     param([Parameter(Mandatory = $true)][string]$PathValue)
 
@@ -81,6 +133,10 @@ function Build-ServerBlock {
         [Parameter(Mandatory = $true)][string]$NodeExecutableConfig,
         [Parameter(Mandatory = $true)][string]$EntryPathConfig,
         [Parameter(Mandatory = $true)][string]$ProjectRootConfig,
+        [Parameter(Mandatory = $true)][string]$WorkspaceRootConfig,
+        [Parameter(Mandatory = $true)][string]$DatabasePathConfig,
+        [Parameter(Mandatory = $true)][string]$CacheRootConfig,
+        [Parameter(Mandatory = $true)][string]$AuditLogPathConfig,
         [string]$GhidraPathConfig
     )
 
@@ -94,9 +150,19 @@ function Build-ServerBlock {
         "enabled = true"
     )
 
+    $envEntries = @(
+        "WORKSPACE_ROOT = `"$WorkspaceRootConfig`"",
+        "DB_PATH = `"$DatabasePathConfig`"",
+        "CACHE_ROOT = `"$CacheRootConfig`"",
+        "AUDIT_LOG_PATH = `"$AuditLogPathConfig`""
+    )
+
     if ($GhidraPathConfig) {
-        $lines += "env = { GHIDRA_PATH = `"$GhidraPathConfig`", GHIDRA_INSTALL_DIR = `"$GhidraPathConfig`" }"
+        $envEntries += "GHIDRA_PATH = `"$GhidraPathConfig`""
+        $envEntries += "GHIDRA_INSTALL_DIR = `"$GhidraPathConfig`""
     }
+
+    $lines += "env = { $($envEntries -join ', ') }"
 
     return ($lines -join [Environment]::NewLine)
 }
@@ -136,15 +202,27 @@ if (-not (Test-Path -Path $entryPath)) {
 
 $nodeExecutable = Get-NodeExecutable
 $ghidraPathResolved = Resolve-GhidraPath
+$workspaceRootResolved = Resolve-WorkspaceRoot
+$databasePathResolved = Resolve-DatabasePath
+$cacheRootResolved = Resolve-CacheRoot
+$auditLogPathResolved = Resolve-AuditLogPath
 
 $nodeExecutableConfig = Convert-ToConfigPath -PathValue $nodeExecutable
 $entryPathConfig = Convert-ToConfigPath -PathValue $entryPath
 $projectRootConfig = Convert-ToConfigPath -PathValue $projectRootFull
 $ghidraPathConfig = if ($ghidraPathResolved) { Convert-ToConfigPath -PathValue $ghidraPathResolved } else { "" }
+$workspaceRootConfig = Convert-ToConfigPath -PathValue $workspaceRootResolved
+$databasePathConfig = Convert-ToConfigPath -PathValue $databasePathResolved
+$cacheRootConfig = Convert-ToConfigPath -PathValue $cacheRootResolved
+$auditLogPathConfig = Convert-ToConfigPath -PathValue $auditLogPathResolved
 
 Write-Host "Project root: $projectRootConfig" -ForegroundColor Gray
 Write-Host "Node path: $nodeExecutableConfig" -ForegroundColor Gray
 Write-Host "Server entry: $entryPathConfig" -ForegroundColor Gray
+Write-Host "Workspace root: $workspaceRootConfig" -ForegroundColor Gray
+Write-Host "Database path: $databasePathConfig" -ForegroundColor Gray
+Write-Host "Cache root: $cacheRootConfig" -ForegroundColor Gray
+Write-Host "Audit log path: $auditLogPathConfig" -ForegroundColor Gray
 if ($ghidraPathConfig) {
     Write-Host "Ghidra path: $ghidraPathConfig" -ForegroundColor Gray
 } else {
@@ -160,7 +238,7 @@ Write-Host "Codex registration completed." -ForegroundColor Green
 
 Write-Step "Step 3: Update Codex config"
 $backupPath = Backup-FileIfNeeded -PathValue $ConfigPath
-$serverBlock = Build-ServerBlock -NodeExecutableConfig $nodeExecutableConfig -EntryPathConfig $entryPathConfig -ProjectRootConfig $projectRootConfig -GhidraPathConfig $ghidraPathConfig
+$serverBlock = Build-ServerBlock -NodeExecutableConfig $nodeExecutableConfig -EntryPathConfig $entryPathConfig -ProjectRootConfig $projectRootConfig -WorkspaceRootConfig $workspaceRootConfig -DatabasePathConfig $databasePathConfig -CacheRootConfig $cacheRootConfig -AuditLogPathConfig $auditLogPathConfig -GhidraPathConfig $ghidraPathConfig
 Upsert-ConfigBlock -PathValue $ConfigPath -BlockText $serverBlock
 Write-Host "Config written: $ConfigPath" -ForegroundColor Green
 if ($backupPath) {

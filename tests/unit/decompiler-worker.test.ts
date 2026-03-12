@@ -19,6 +19,82 @@ import { DatabaseManager } from '../../src/database';
 import { WorkspaceManager } from '../../src/workspace-manager';
 import { ghidraConfig } from '../../src/ghidra-config';
 
+function createMinimalAmd64PdataPE(): Buffer {
+  const dosHeader = Buffer.alloc(0x80, 0);
+  dosHeader.write('MZ', 0, 'ascii');
+  dosHeader.writeUInt32LE(0x80, 0x3c);
+
+  const peSignature = Buffer.from('PE\0\0', 'ascii');
+  const coffHeader = Buffer.alloc(20, 0);
+  coffHeader.writeUInt16LE(0x8664, 0);
+  coffHeader.writeUInt16LE(3, 2);
+  coffHeader.writeUInt16LE(0x00f0, 16);
+  coffHeader.writeUInt16LE(0x0022, 18);
+
+  const optionalHeader = Buffer.alloc(0x00f0, 0);
+  optionalHeader.writeUInt16LE(0x20b, 0);
+  optionalHeader.writeUInt32LE(0x200, 4);
+  optionalHeader.writeUInt32LE(0x1000, 16);
+  optionalHeader.writeUInt32LE(0x1000, 20);
+  optionalHeader.writeBigUInt64LE(0x140000000n, 24);
+  optionalHeader.writeUInt32LE(0x1000, 32);
+  optionalHeader.writeUInt32LE(0x200, 36);
+  optionalHeader.writeUInt32LE(0x4000, 56);
+  optionalHeader.writeUInt32LE(0x200, 60);
+  optionalHeader.writeUInt16LE(3, 68);
+  optionalHeader.writeUInt32LE(16, 108);
+  optionalHeader.writeUInt32LE(0x2000, 136);
+  optionalHeader.writeUInt32LE(12, 140);
+
+  const textSection = Buffer.alloc(40, 0);
+  textSection.write('.text', 0, 'ascii');
+  textSection.writeUInt32LE(0x100, 8);
+  textSection.writeUInt32LE(0x1000, 12);
+  textSection.writeUInt32LE(0x200, 16);
+  textSection.writeUInt32LE(0x200, 20);
+  textSection.writeUInt32LE(0x60000020, 36);
+
+  const pdataSection = Buffer.alloc(40, 0);
+  pdataSection.write('.pdata', 0, 'ascii');
+  pdataSection.writeUInt32LE(0x0c, 8);
+  pdataSection.writeUInt32LE(0x2000, 12);
+  pdataSection.writeUInt32LE(0x200, 16);
+  pdataSection.writeUInt32LE(0x400, 20);
+  pdataSection.writeUInt32LE(0x40000040, 36);
+
+  const xdataSection = Buffer.alloc(40, 0);
+  xdataSection.write('.xdata', 0, 'ascii');
+  xdataSection.writeUInt32LE(0x10, 8);
+  xdataSection.writeUInt32LE(0x3000, 12);
+  xdataSection.writeUInt32LE(0x200, 16);
+  xdataSection.writeUInt32LE(0x600, 20);
+  xdataSection.writeUInt32LE(0x40000040, 36);
+
+  const headers = Buffer.concat([
+    dosHeader,
+    peSignature,
+    coffHeader,
+    optionalHeader,
+    textSection,
+    pdataSection,
+    xdataSection,
+  ]);
+
+  const textData = Buffer.alloc(0x200, 0);
+  textData[0] = 0xc3;
+
+  const pdataData = Buffer.alloc(0x200, 0);
+  pdataData.writeUInt32LE(0x1000, 0);
+  pdataData.writeUInt32LE(0x1100, 4);
+  pdataData.writeUInt32LE(0x3000, 8);
+
+  const xdataData = Buffer.alloc(0x200, 0);
+  xdataData.writeUInt8(0x01, 0);
+  xdataData.writeUInt8(0x10, 1);
+
+  return Buffer.concat([headers, textData, pdataData, xdataData]);
+}
+
 // Get __dirname equivalent in ES modules
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -523,6 +599,104 @@ describe('DecompilerWorker', () => {
       const outputJson = JSON.parse(analyses[0].output_json || '{}')
       expect(outputJson.project_path).toBeDefined()
       expect(outputJson.function_extraction.status).toBe('failed')
+    })
+
+    test('should recover function candidates from .pdata when Ghidra post-scripts fail', async () => {
+      const originalConfig = {
+        installDir: ghidraConfig.installDir,
+        analyzeHeadlessPath: ghidraConfig.analyzeHeadlessPath,
+        scriptsDir: ghidraConfig.scriptsDir,
+        version: ghidraConfig.version,
+        isValid: ghidraConfig.isValid,
+      }
+
+      ghidraConfig.installDir = 'C:\\ghidra'
+      ghidraConfig.analyzeHeadlessPath = 'C:\\ghidra\\support\\analyzeHeadless.bat'
+      ghidraConfig.scriptsDir = path.join(process.cwd(), 'ghidra_scripts')
+      ghidraConfig.isValid = true
+
+      try {
+        const sha256 = 'a'.repeat(64)
+        const sampleId = `sha256:${sha256}`
+        database.insertSample({
+          id: sampleId,
+          sha256,
+          md5: 'b'.repeat(32),
+          size: 2048,
+          file_type: 'PE32+',
+          created_at: new Date().toISOString(),
+          source: 'test',
+        })
+
+        const workspace = await workspaceManager.createWorkspace(sampleId)
+        fs.writeFileSync(path.join(workspace.original, 'sample.exe'), createMinimalAmd64PdataPE())
+
+        const workerInternals = decompilerWorker as any
+        const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis
+        const originalTryExtractFunctionsWithFallback = workerInternals.tryExtractFunctionsWithFallback
+
+        workerInternals.executeMainAnalysis = jest.fn(async () => ({
+          stdout: '',
+          stderr: '',
+          diagnostics: {
+            raw_cmd: 'analyzeHeadless ...',
+            command: 'analyzeHeadless.bat',
+            args: [],
+            cwd: workspace.ghidra,
+            exit_code: 0,
+            signal: null,
+            timed_out: false,
+            cancelled: false,
+            stdout: '',
+            stderr: '',
+            stdout_encoding: 'utf-8',
+            stderr_encoding: 'utf-8',
+          },
+        }))
+        workerInternals.tryExtractFunctionsWithFallback = jest.fn(async () => ({
+          warnings: [
+            'Function extraction failed with ExtractFunctions.py: Function extraction (ExtractFunctions.py) failed with exit code 1',
+          ],
+          attempts: [
+            { script: 'ExtractFunctions.java', error: 'ExtractFunctions.java failed for Rust binary' },
+            { script: 'ExtractFunctions.py', error: 'Function extraction (ExtractFunctions.py) failed with exit code 1' },
+          ],
+        }))
+
+        try {
+          const result = await decompilerWorker.analyze(sampleId, { timeout: 5000 })
+
+          expect(result.status).toBe('partial_success')
+          expect(result.functionCount).toBe(1)
+          expect(result.readiness?.function_index.status).toBe('degraded')
+          expect(result.readiness?.decompile.status).toBe('missing')
+          expect(result.warnings?.some((item) => item.includes('Recovered 1 function candidates from PE exception metadata'))).toBe(true)
+
+          const functions = database.findFunctions(sampleId)
+          expect(functions).toHaveLength(1)
+          expect(functions[0].address).toBe('0x0000000140001000')
+          expect(functions[0].name).toBe('entry_point')
+
+          const analyses = database.findAnalysesBySample(sampleId)
+          expect(analyses[0].status).toBe('partial_success')
+          const outputJson = JSON.parse(analyses[0].output_json || '{}')
+          expect(outputJson.function_extraction.status).toBe('recovered_via_smart_recover')
+          expect(outputJson.function_recovery.count).toBe(1)
+          expect(outputJson.readiness.function_index.status).toBe('degraded')
+
+          const artifacts = database.findArtifacts(sampleId)
+          expect(artifacts.some((artifact) => artifact.type === 'function_recovery')).toBe(true)
+        } finally {
+          workerInternals.executeMainAnalysis = originalExecuteMainAnalysis
+          workerInternals.tryExtractFunctionsWithFallback = originalTryExtractFunctionsWithFallback
+        }
+      } finally {
+        ghidraConfig.installDir = originalConfig.installDir
+        ghidraConfig.analyzeHeadlessPath = originalConfig.analyzeHeadlessPath
+        ghidraConfig.scriptsDir = originalConfig.scriptsDir
+        ghidraConfig.version = originalConfig.version
+        ghidraConfig.isValid = originalConfig.isValid
+      }
     })
   });
 

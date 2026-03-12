@@ -28,6 +28,7 @@ audit.log
 
 # Runtime state
 cache/
+.cache/
 data/
 tmp/
 temp/
@@ -44,6 +45,7 @@ live-cache-runtime-export/
 .idea/
 .kiro/
 codex-mcp-config.toml
+.mcp.json
 *~
 *.swp
 *.swo

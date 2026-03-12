@@ -22,6 +22,10 @@ import {
   BinaryRoleProfileDataSchema,
   createBinaryRoleProfileHandler,
 } from './binary-role-profile.js';
+import {
+  RustBinaryAnalyzeDataSchema,
+  createRustBinaryAnalyzeHandler,
+} from './rust-binary-analyze.js';
 import { buildReportConfidenceSemantics } from '../confidence-semantics.js';
 import {
   buildRuntimeArtifactProvenance,
@@ -114,6 +118,7 @@ function generateMarkdownReport(
   functions: any[],
   dynamicEvidence: DynamicTraceSummary | null,
   binaryProfile: z.infer<typeof BinaryRoleProfileDataSchema> | null,
+  rustProfile: z.infer<typeof RustBinaryAnalyzeDataSchema> | null,
   functionExplanations: Array<{
     address: string | null;
     function: string | null;
@@ -247,8 +252,43 @@ function generateMarkdownReport(
     if (binaryProfile.import_surface.notable_dlls.length > 0) {
       lines.push(`- **Notable DLLs:** ${binaryProfile.import_surface.notable_dlls.join(', ')}`);
     }
+    if (binaryProfile.export_dispatch_profile.likely_dispatch_model !== 'none') {
+      lines.push(`- **Likely Dispatch Model:** ${binaryProfile.export_dispatch_profile.likely_dispatch_model}`);
+    }
+    if (binaryProfile.export_dispatch_profile.registration_exports.length > 0) {
+      lines.push(`- **Registration Exports:** ${binaryProfile.export_dispatch_profile.registration_exports.join(', ')}`);
+    }
+    if (binaryProfile.com_profile.class_factory_exports.length > 0) {
+      lines.push(`- **Class Factory Exports:** ${binaryProfile.com_profile.class_factory_exports.join(', ')}`);
+    }
+    if (binaryProfile.host_interaction_profile.host_hints.length > 0) {
+      lines.push(`- **Host Hints:** ${binaryProfile.host_interaction_profile.host_hints.join(', ')}`);
+    }
     if (binaryProfile.analysis_priorities.length > 0) {
       lines.push(`- **Analysis Priorities:** ${binaryProfile.analysis_priorities.join(', ')}`);
+    }
+    lines.push('');
+  }
+
+  if (rustProfile) {
+    lines.push('## Rust Binary Profile');
+    lines.push('');
+    lines.push(`- **Suspected Rust:** ${rustProfile.suspected_rust ? 'Yes' : 'No'}`);
+    lines.push(`- **Rust Confidence:** ${rustProfile.confidence.toFixed(2)}`);
+    lines.push(`- **Primary Runtime:** ${rustProfile.primary_runtime || 'N/A'}`);
+    lines.push(`- **Recovered Functions:** ${rustProfile.recovered_function_count}`);
+    lines.push(`- **Recovered Symbols:** ${rustProfile.recovered_symbol_count}`);
+    if (rustProfile.crate_hints.length > 0) {
+      lines.push(`- **Crate Hints:** ${rustProfile.crate_hints.join(', ')}`);
+    }
+    if (rustProfile.cargo_paths.length > 0) {
+      lines.push(`- **Cargo Paths:** ${rustProfile.cargo_paths.slice(0, 4).join(', ')}`);
+    }
+    if (rustProfile.runtime_hints.length > 0) {
+      lines.push(`- **Runtime Hints:** ${rustProfile.runtime_hints.join(', ')}`);
+    }
+    if (rustProfile.analysis_priorities.length > 0) {
+      lines.push(`- **Analysis Priorities:** ${rustProfile.analysis_priorities.join(', ')}`);
     }
     lines.push('');
   }
@@ -369,11 +409,20 @@ export function createReportGenerateHandler(
       errors?: string[]
       warnings?: string[]
     }>
+    rustBinaryAnalyzeHandler?: (args: Record<string, unknown>) => Promise<{
+      ok: boolean
+      data?: unknown
+      errors?: string[]
+      warnings?: string[]
+    }>
   }
 ): ToolHandler {
   const binaryRoleProfileHandler =
     deps?.binaryRoleProfileHandler ||
     (cacheManager ? createBinaryRoleProfileHandler(workspaceManager, database, cacheManager) : undefined)
+  const rustBinaryAnalyzeHandler =
+    deps?.rustBinaryAnalyzeHandler ||
+    (cacheManager ? createRustBinaryAnalyzeHandler(workspaceManager, database, cacheManager) : undefined)
 
   return async (args: unknown): Promise<ToolResult> => {
     try {
@@ -443,12 +492,21 @@ export function createReportGenerateHandler(
           source: item.model_name || item.client_name || null,
         }));
       let binaryProfile: z.infer<typeof BinaryRoleProfileDataSchema> | null = null;
+      let rustProfile: z.infer<typeof RustBinaryAnalyzeDataSchema> | null = null;
       if (binaryRoleProfileHandler) {
         const binaryRoleProfileResult = await binaryRoleProfileHandler({
           sample_id: input.sample_id,
         });
         if (binaryRoleProfileResult.ok && binaryRoleProfileResult.data) {
           binaryProfile = binaryRoleProfileResult.data as z.infer<typeof BinaryRoleProfileDataSchema>;
+        }
+      }
+      if (rustBinaryAnalyzeHandler) {
+        const rustBinaryAnalyzeResult = await rustBinaryAnalyzeHandler({
+          sample_id: input.sample_id,
+        });
+        if (rustBinaryAnalyzeResult.ok && rustBinaryAnalyzeResult.data) {
+          rustProfile = rustBinaryAnalyzeResult.data as z.infer<typeof RustBinaryAnalyzeDataSchema>;
         }
       }
       const provenance = {
@@ -524,6 +582,7 @@ export function createReportGenerateHandler(
             functions,
             dynamicEvidence,
             binaryProfile,
+            rustProfile,
             functionExplanations,
             input.evidence_scope,
             input.evidence_session_tag,
@@ -550,6 +609,7 @@ export function createReportGenerateHandler(
             functions,
             dynamic_evidence: dynamicEvidence,
             binary_profile: binaryProfile,
+            rust_profile: rustProfile,
             function_explanations: functionExplanations,
             evidence_scope: input.evidence_scope,
             evidence_session_tag: input.evidence_session_tag || null,
@@ -585,6 +645,7 @@ export function createReportGenerateHandler(
   functions,
   dynamicEvidence,
   binaryProfile,
+  rustProfile,
   functionExplanations,
   input.evidence_scope,
   input.evidence_session_tag,

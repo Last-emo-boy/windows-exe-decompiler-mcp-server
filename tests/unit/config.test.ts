@@ -6,23 +6,39 @@
 import { describe, test, expect, beforeEach, afterEach } from '@jest/globals'
 import fs from 'fs'
 import path from 'path'
-import { loadConfigFromFile, loadConfigFromEnv, mergeConfigs, loadConfig, ConfigSchema } from '../../src/config.js'
+import {
+  loadConfigFromFile,
+  loadConfigFromEnv,
+  mergeConfigs,
+  loadConfig,
+  ConfigSchema,
+  getDefaultConfigPath,
+  getDefaultDatabasePath,
+  getDefaultCacheRoot,
+  getDefaultWorkspaceRoot,
+  getDefaultAuditLogPath,
+} from '../../src/config.js'
 
 describe('Configuration Loading', () => {
   const testConfigDir = path.join(process.cwd(), 'test-configs')
   const testConfigPath = path.join(testConfigDir, 'test-config.json')
+  const isolatedDefaultConfigPath = path.join(testConfigDir, 'isolated-default-config.json')
 
   beforeEach(() => {
     // Create test config directory
     if (!fs.existsSync(testConfigDir)) {
       fs.mkdirSync(testConfigDir, { recursive: true })
     }
+    process.env.CONFIG_PATH = isolatedDefaultConfigPath
   })
 
   afterEach(() => {
     // Clean up test files
     if (fs.existsSync(testConfigPath)) {
       fs.unlinkSync(testConfigPath)
+    }
+    if (fs.existsSync(isolatedDefaultConfigPath)) {
+      fs.unlinkSync(isolatedDefaultConfigPath)
     }
     if (fs.existsSync(testConfigDir)) {
       fs.rmdirSync(testConfigDir)
@@ -34,8 +50,11 @@ describe('Configuration Loading', () => {
     delete process.env.DB_TYPE
     delete process.env.DB_PATH
     delete process.env.WORKSPACE_ROOT
+    delete process.env.CACHE_ROOT
+    delete process.env.CONFIG_PATH
     delete process.env.GHIDRA_PATH
     delete process.env.LOG_LEVEL
+    delete process.env.AUDIT_LOG_PATH
   })
 
   describe('loadConfigFromFile', () => {
@@ -97,12 +116,16 @@ describe('Configuration Loading', () => {
 
     test('should load workspace configuration from environment variables', () => {
       process.env.WORKSPACE_ROOT = '/custom/workspace'
+      process.env.CACHE_ROOT = '/custom/cache'
       process.env.MAX_SAMPLE_SIZE = '1048576'
+      process.env.AUDIT_LOG_PATH = '/custom/audit.log'
 
       const result = loadConfigFromEnv()
 
       expect(result.workspace?.root).toBe('/custom/workspace')
       expect(result.workspace?.maxSampleSize).toBe(1048576)
+      expect(result.cache?.root).toBe('/custom/cache')
+      expect(result.logging?.auditPath).toBe('/custom/audit.log')
     })
 
     test('should enable Ghidra worker when GHIDRA_PATH is set', () => {
@@ -131,10 +154,12 @@ describe('Configuration Loading', () => {
       delete process.env.DB_HOST
       delete process.env.DB_PORT
       delete process.env.WORKSPACE_ROOT
+      delete process.env.CACHE_ROOT
       delete process.env.MAX_SAMPLE_SIZE
       delete process.env.GHIDRA_PATH
       delete process.env.PYTHON_PATH
       delete process.env.LOG_LEVEL
+      delete process.env.AUDIT_LOG_PATH
 
       const result = loadConfigFromEnv()
 
@@ -192,9 +217,40 @@ describe('Configuration Loading', () => {
       expect(config.server.port).toBe(3000)
       expect(config.server.host).toBe('localhost')
       expect(config.database.type).toBe('sqlite')
-      expect(config.workspace.root).toBe('./workspaces')
+      expect(config.database.path).toBe(getDefaultDatabasePath())
+      expect(config.workspace.root).toBe(getDefaultWorkspaceRoot())
       expect(config.workers.static.enabled).toBe(true)
       expect(config.cache.enabled).toBe(true)
+      expect(config.cache.root).toBe(getDefaultCacheRoot())
+      expect(config.logging.auditPath).toBe(getDefaultAuditLogPath())
+    })
+
+    test('should load default user config path when no explicit config path is provided', () => {
+      const defaultConfigPath = getDefaultConfigPath()
+      const defaultConfigDir = path.dirname(defaultConfigPath)
+      const backupPath = fs.existsSync(defaultConfigPath) ? `${defaultConfigPath}.bak-test` : null
+
+      try {
+        delete process.env.CONFIG_PATH
+        if (backupPath) {
+          fs.copyFileSync(defaultConfigPath, backupPath)
+        }
+        fs.mkdirSync(defaultConfigDir, { recursive: true })
+        fs.writeFileSync(defaultConfigPath, JSON.stringify({
+          workspace: { root: '/persisted/workspace' },
+        }))
+
+        const config = loadConfig()
+        expect(config.workspace.root).toBe('/persisted/workspace')
+      } finally {
+        if (fs.existsSync(defaultConfigPath)) {
+          fs.unlinkSync(defaultConfigPath)
+        }
+        if (backupPath && fs.existsSync(backupPath)) {
+          fs.copyFileSync(backupPath, defaultConfigPath)
+          fs.unlinkSync(backupPath)
+        }
+      }
     })
 
     test('should merge file and environment configurations', () => {
@@ -263,7 +319,10 @@ describe('Configuration Loading', () => {
       expect(config.database.type).toBe('sqlite')
       expect(config.workspace.maxSampleSize).toBe(500 * 1024 * 1024)
       expect(config.workers.ghidra.maxConcurrent).toBe(4)
+      expect(config.database.path).toBe(getDefaultDatabasePath())
+      expect(config.cache.root).toBe(getDefaultCacheRoot())
       expect(config.cache.ttl).toBe(30 * 24 * 60 * 60)
+      expect(config.logging.auditPath).toBe(getDefaultAuditLogPath())
     })
   })
 
@@ -271,15 +330,15 @@ describe('Configuration Loading', () => {
     test('should accept valid complete configuration', () => {
       const validConfig = {
         server: { port: 3000, host: 'localhost' },
-        database: { type: 'sqlite' as const, path: './db.sqlite' },
-        workspace: { root: './workspaces', maxSampleSize: 524288000 },
+        database: { type: 'sqlite' as const, path: getDefaultDatabasePath() },
+        workspace: { root: getDefaultWorkspaceRoot(), maxSampleSize: 524288000 },
         workers: {
           ghidra: { enabled: true, path: '/opt/ghidra', maxConcurrent: 4, timeout: 300 },
           static: { enabled: true, pythonPath: 'python3' },
           dotnet: { enabled: false },
         },
-        cache: { enabled: true, ttl: 2592000 },
-        logging: { level: 'info' as const, pretty: false },
+        cache: { enabled: true, root: getDefaultCacheRoot(), ttl: 2592000 },
+        logging: { level: 'info' as const, pretty: false, auditPath: getDefaultAuditLogPath() },
       }
 
       const result = ConfigSchema.safeParse(validConfig)

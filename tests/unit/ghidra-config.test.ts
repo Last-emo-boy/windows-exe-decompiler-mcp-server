@@ -87,7 +87,7 @@ describe('Ghidra Configuration', () => {
 
       const result = buildProcessInvocation(command, args, 'win32')
 
-      expect(result.command.toLowerCase()).toBe('cmd.exe')
+      expect(result.command.toLowerCase().endsWith('cmd.exe')).toBe(true)
       expect(result.args[0]).toBe('/d')
       expect(result.args[1]).toBe('/s')
       expect(result.args[2]).toBe('/c')
@@ -112,7 +112,7 @@ describe('Ghidra Configuration', () => {
       const result = buildProcessInvocation(command, args, 'win32')
       const cmdLine = result.args[3]
 
-      expect(result.command.toLowerCase()).toBe('cmd.exe')
+      expect(result.command.toLowerCase().endsWith('cmd.exe')).toBe(true)
       expect(cmdLine).toContain(`"${command}"`)
       expect(cmdLine).toContain('"C:\\tmp\\with space & symbol\\project(1)"')
       expect(cmdLine).toContain('"\u9879\u76ee(\u4e2d\u6587)&key"')
@@ -133,7 +133,7 @@ describe('Ghidra Configuration', () => {
       const result = buildProcessInvocation(command, args, 'win32')
       const cmdLine = result.args[3]
 
-      expect(result.command.toLowerCase()).toBe('cmd.exe')
+      expect(result.command.toLowerCase().endsWith('cmd.exe')).toBe(true)
       expect(cmdLine).toContain('"C:\\path with space\\proj"')
       expect(cmdLine).toContain('"C:\\path\\ES&E\\proj"')
       expect(cmdLine).toContain('"C:\\path\\name(test)\\proj"')
@@ -153,13 +153,31 @@ describe('Ghidra Configuration', () => {
       const result = buildProcessInvocation(command, args, 'win32')
       const wrapped = result.args[3]
 
-      expect(result.command.toLowerCase()).toBe('cmd.exe')
+      expect(result.command.toLowerCase().endsWith('cmd.exe')).toBe(true)
       expect(wrapped.startsWith('"')).toBe(true)
       expect(wrapped.endsWith('"')).toBe(true)
       expect(wrapped).toContain(`"${command}"`)
       expect(wrapped).toContain('"C:\\ws with space\\project(1)"')
       expect(wrapped).toContain('"key&(zh)"')
       expect(wrapped).toContain('"C:\\samples\\a&b (x86)\\样本.exe"')
+    })
+
+    it('should prefer ComSpec when provided on win32', () => {
+      const priorComSpec = process.env.ComSpec
+      const command = 'C:\\Program Files\\Ghidra\\support\\analyzeHeadless.bat'
+      const args = ['C:\\ws path\\project_a', 'proj_key', '-help']
+
+      try {
+        process.env.ComSpec = 'C:\\Windows\\System32\\cmd.exe'
+        const result = buildProcessInvocation(command, args, 'win32')
+        expect(result.command).toBe('C:\\Windows\\System32\\cmd.exe')
+      } finally {
+        if (priorComSpec === undefined) {
+          delete process.env.ComSpec
+        } else {
+          process.env.ComSpec = priorComSpec
+        }
+      }
     })
 
     it('should execute .cmd under paths with special characters on Windows', () => {

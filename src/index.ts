@@ -44,6 +44,14 @@ import {
   createPEExportsExtractHandler
 } from './tools/pe-exports-extract.js'
 import {
+  pePdataExtractToolDefinition,
+  createPEPdataExtractHandler,
+} from './tools/pe-pdata-extract.js'
+import {
+  peSymbolsRecoverToolDefinition,
+  createPESymbolsRecoverHandler,
+} from './tools/pe-symbols-recover.js'
+import {
   stringsExtractToolDefinition,
   createStringsExtractHandler
 } from './tools/strings-extract.js'
@@ -76,6 +84,10 @@ import {
   createBinaryRoleProfileHandler,
 } from './tools/binary-role-profile.js'
 import {
+  rustBinaryAnalyzeToolDefinition,
+  createRustBinaryAnalyzeHandler,
+} from './tools/rust-binary-analyze.js'
+import {
   triageWorkflowToolDefinition,
   createTriageWorkflowHandler
 } from './workflows/triage.js'
@@ -87,6 +99,10 @@ import {
   deepStaticWorkflowToolDefinition,
   createDeepStaticWorkflowHandler
 } from './workflows/deep-static.js'
+import {
+  functionIndexRecoverWorkflowToolDefinition,
+  createFunctionIndexRecoverWorkflowHandler,
+} from './workflows/function-index-recover.js'
 import {
   semanticNameReviewWorkflowToolDefinition,
   createSemanticNameReviewWorkflowHandler,
@@ -163,6 +179,14 @@ import {
   codeFunctionsRankToolDefinition,
   createCodeFunctionsRankHandler
 } from './tools/code-functions-rank.js'
+import {
+  codeFunctionsSmartRecoverToolDefinition,
+  createCodeFunctionsSmartRecoverHandler,
+} from './tools/code-functions-smart-recover.js'
+import {
+  codeFunctionsDefineToolDefinition,
+  createCodeFunctionsDefineHandler,
+} from './tools/code-functions-define.js'
 import {
   codeFunctionsSearchToolDefinition,
   createCodeFunctionsSearchHandler
@@ -242,9 +266,9 @@ async function main() {
 
     // Initialize components
     const workspaceManager = new WorkspaceManager(config.workspace.root)
-    const database = new DatabaseManager(config.database.path || './data/database.db')
-    const policyGuard = new PolicyGuard('./audit.log')
-    const cacheManager = new CacheManager('./cache', database)
+    const database = new DatabaseManager(config.database.path)
+    const policyGuard = new PolicyGuard(config.logging.auditPath)
+    const cacheManager = new CacheManager(config.cache.root, database)
     const jobQueue = new JobQueue()
     const analysisTaskRunner = new AnalysisTaskRunner(jobQueue, database, workspaceManager, cacheManager)
     analysisTaskRunner.start()
@@ -271,7 +295,7 @@ async function main() {
     // Task 8.2: sample.profile.get tool
     server.registerTool(
       sampleProfileGetToolDefinition,
-      createSampleProfileGetHandler(database)
+      createSampleProfileGetHandler(database, workspaceManager)
     )
 
     // Task 18.15: artifact.read tool - Read manifest/gaps and other artifacts via MCP
@@ -307,6 +331,15 @@ async function main() {
     server.registerTool(
       peExportsExtractToolDefinition,
       createPEExportsExtractHandler(workspaceManager, database, cacheManager)
+    )
+
+    server.registerTool(
+      pePdataExtractToolDefinition,
+      createPEPdataExtractHandler(workspaceManager, database, cacheManager)
+    )
+    server.registerTool(
+      peSymbolsRecoverToolDefinition,
+      createPESymbolsRecoverHandler(workspaceManager, database, cacheManager)
     )
 
     // Task 8.6: strings.extract tool
@@ -351,6 +384,10 @@ async function main() {
       binaryRoleProfileToolDefinition,
       createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
     )
+    server.registerTool(
+      rustBinaryAnalyzeToolDefinition,
+      createRustBinaryAnalyzeHandler(workspaceManager, database, cacheManager)
+    )
 
     // Task 9.1: workflow.triage - Quick triage workflow
     server.registerTool(
@@ -368,6 +405,10 @@ async function main() {
     server.registerTool(
       deepStaticWorkflowToolDefinition,
       createDeepStaticWorkflowHandler(workspaceManager, database, cacheManager, jobQueue)
+    )
+    server.registerTool(
+      functionIndexRecoverWorkflowToolDefinition,
+      createFunctionIndexRecoverWorkflowHandler(workspaceManager, database, cacheManager)
     )
 
     server.registerTool(
@@ -489,6 +530,15 @@ async function main() {
     server.registerTool(
       codeFunctionsRankToolDefinition,
       createCodeFunctionsRankHandler(workspaceManager, database)
+    )
+
+    server.registerTool(
+      codeFunctionsSmartRecoverToolDefinition,
+      createCodeFunctionsSmartRecoverHandler(workspaceManager, database, cacheManager)
+    )
+    server.registerTool(
+      codeFunctionsDefineToolDefinition,
+      createCodeFunctionsDefineHandler(workspaceManager, database)
     )
 
     server.registerTool(

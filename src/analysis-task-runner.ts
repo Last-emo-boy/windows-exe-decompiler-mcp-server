@@ -162,6 +162,10 @@ export class AnalysisTaskRunner {
       const options = (job.args?.options || {}) as {
         max_cpu?: string
         project_key?: string
+        processor?: string
+        language_id?: string
+        cspec?: string
+        script_paths?: string[]
       }
 
       try {
@@ -170,6 +174,10 @@ export class AnalysisTaskRunner {
           timeout: job.timeout,
           maxCpu: options.max_cpu || '4',
           projectKey: options.project_key,
+          processor: options.processor,
+          languageId: options.language_id,
+          cspec: options.cspec,
+          scriptPaths: options.script_paths,
           abortSignal,
         })
         return this.decompilerWorker.createJobResult(analysisResult, 0)

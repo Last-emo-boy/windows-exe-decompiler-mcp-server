@@ -6,22 +6,29 @@ import { describe, test, expect, beforeEach, afterEach } from '@jest/globals'
 import fs from 'fs'
 import { DatabaseManager } from '../../src/database.js'
 import { createSampleProfileGetHandler } from '../../src/tools/sample-profile-get.js'
+import { WorkspaceManager } from '../../src/workspace-manager.js'
 import type { Sample, Analysis } from '../../src/database.js'
 
 describe('sample.profile.get tool', () => {
   let database: DatabaseManager
+  let workspaceManager: WorkspaceManager
   let handler: ReturnType<typeof createSampleProfileGetHandler>
   const testDbPath = './test-sample-profile-get.db'
+  const testWorkspaceRoot = './test-workspace-sample-profile-get'
 
   beforeEach(() => {
     // Clean up any existing test database
     if (fs.existsSync(testDbPath)) {
       fs.unlinkSync(testDbPath)
     }
+    if (fs.existsSync(testWorkspaceRoot)) {
+      fs.rmSync(testWorkspaceRoot, { recursive: true, force: true })
+    }
 
     // Create fresh database
     database = new DatabaseManager(testDbPath)
-    handler = createSampleProfileGetHandler(database)
+    workspaceManager = new WorkspaceManager(testWorkspaceRoot)
+    handler = createSampleProfileGetHandler(database, workspaceManager)
   })
 
   afterEach(() => {
@@ -29,6 +36,9 @@ describe('sample.profile.get tool', () => {
     database.close()
     if (fs.existsSync(testDbPath)) {
       fs.unlinkSync(testDbPath)
+    }
+    if (fs.existsSync(testWorkspaceRoot)) {
+      fs.rmSync(testWorkspaceRoot, { recursive: true, force: true })
     }
   })
 
@@ -341,5 +351,32 @@ describe('sample.profile.get tool', () => {
     expect(data.analyses).toHaveLength(1)
     expect(data.analyses[0].status).toBe('running')
     expect(data.analyses[0].finished_at).toBeUndefined()
+  })
+
+  test('should report workspace/original integrity when the original sample file is missing', async () => {
+    const hash = '7'.repeat(64)
+    const sample: Sample = {
+      id: `sha256:${hash}`,
+      sha256: hash,
+      md5: '7'.repeat(32),
+      size: 512,
+      file_type: 'PE',
+      created_at: '2024-01-06T00:00:00Z',
+      source: 'upload',
+    }
+    database.insertSample(sample)
+
+    const workspace = await workspaceManager.createWorkspace(sample.id)
+    expect(fs.existsSync(workspace.original)).toBe(true)
+    expect(fs.readdirSync(workspace.original)).toHaveLength(0)
+
+    const result = await handler({ sample_id: sample.id })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.workspace.status).toBe('original_file_missing')
+    expect(data.workspace.original_present).toBe(false)
+    expect(data.workspace.original_file_count).toBe(0)
+    expect(data.workspace.remediation.some((item: string) => item.includes('sample.ingest'))).toBe(true)
   })
 })

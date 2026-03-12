@@ -28,7 +28,11 @@ export const ghidraAnalyzeInputSchema = z.object({
   options: z.object({
     timeout: z.number().optional().describe('Analysis timeout in seconds (default: 300)'),
     max_cpu: z.string().optional().describe('Maximum CPU cores to use (default: "4")'),
-    project_key: z.string().optional().describe('Optional project key for reusing existing project')
+    project_key: z.string().optional().describe('Optional project key for reusing existing project'),
+    processor: z.string().optional().describe('Optional processor or language override passed to analyzeHeadless -processor'),
+    language_id: z.string().optional().describe('Optional Ghidra language ID override for Rust/Go/C++ binaries'),
+    cspec: z.string().optional().describe('Optional compiler specification passed to analyzeHeadless -cspec'),
+    script_paths: z.array(z.string()).optional().describe('Additional Ghidra script directories appended to the default script path'),
   }).optional().describe('Ghidra analysis options')
 });
 
@@ -167,7 +171,11 @@ export function createGhidraAnalyzeHandler(
       const ghidraOptions = {
         timeout: timeoutMs,
         maxCpu: input.options?.max_cpu || '4',
-        projectKey: input.options?.project_key
+        projectKey: input.options?.project_key,
+        processor: input.options?.processor,
+        languageId: input.options?.language_id,
+        cspec: input.options?.cspec,
+        scriptPaths: input.options?.script_paths,
       };
 
       // If job queue is available, enqueue the analysis

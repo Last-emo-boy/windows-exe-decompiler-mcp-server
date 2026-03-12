@@ -168,12 +168,14 @@ npm start
 仓库已经提供了本地安装脚本：
 
 - Codex: [`install-to-codex.ps1`](./install-to-codex.ps1)
+- Claude Code: [`install-to-claude.ps1`](./install-to-claude.ps1)
 - GitHub Copilot: [`install-to-copilot.ps1`](./install-to-copilot.ps1)
 
 配套文档：
 
 - [`CODEX_INSTALLATION.md`](./CODEX_INSTALLATION.md)
 - [`COPILOT_INSTALLATION.md`](./COPILOT_INSTALLATION.md)
+- [`CLAUDE_INSTALLATION.md`](./CLAUDE_INSTALLATION.md)
 
 ## 样本导入说明
 

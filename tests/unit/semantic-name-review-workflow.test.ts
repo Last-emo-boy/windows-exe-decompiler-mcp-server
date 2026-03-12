@@ -84,6 +84,8 @@ describe('workflow.semantic_name_review tool', () => {
     expect(parsed.export_topk).toBe(12)
     expect(parsed.validate_build).toBe(false)
     expect(parsed.run_harness).toBe(false)
+    expect(parsed.include_preflight).toBe(true)
+    expect(parsed.auto_recover_function_index).toBe(true)
   })
 
   test('should require evidence_session_tag when evidence_scope=session', () => {
@@ -111,6 +113,15 @@ describe('workflow.semantic_name_review tool', () => {
         compare_evidence_scope: 'session',
       })
     ).toThrow('compare_evidence_session_tag')
+  })
+
+  test('should require compare_semantic_session_tag when compare_semantic_scope=session', () => {
+    expect(() =>
+      semanticNameReviewWorkflowInputSchema.parse({
+        sample_id: 'sha256:' + 'a'.repeat(64),
+        compare_semantic_scope: 'session',
+      })
+    ).toThrow('compare_semantic_session_tag')
   })
 
   test('should enqueue semantic name review workflow as async job when queue is provided', async () => {
@@ -204,6 +215,95 @@ describe('workflow.semantic_name_review tool', () => {
         ok: true,
         data: {
           selected_path: 'native',
+          preflight: {
+            binary_profile: {
+              sample_id: sampleId,
+              original_filename: 'demo.exe',
+              binary_role: 'executable',
+              role_confidence: 0.82,
+              runtime_hint: {
+                is_dotnet: false,
+                dotnet_version: null,
+                target_framework: null,
+                primary_runtime: 'rust',
+              },
+              export_surface: {
+                total_exports: 0,
+                total_forwarders: 0,
+                notable_exports: [],
+                com_related_exports: [],
+                service_related_exports: [],
+                plugin_related_exports: [],
+                forwarded_exports: [],
+              },
+              import_surface: {
+                dll_count: 2,
+                notable_dlls: ['kernel32.dll'],
+                com_related_imports: [],
+                service_related_imports: [],
+                network_related_imports: [],
+                process_related_imports: ['OpenProcess'],
+              },
+              packed: false,
+              packing_confidence: 0.05,
+              indicators: {
+                com_server: { likely: false, confidence: 0.05, evidence: [] },
+                service_binary: { likely: false, confidence: 0.05, evidence: [] },
+                plugin_binary: { likely: false, confidence: 0.05, evidence: [] },
+                driver_binary: { likely: false, confidence: 0.01, evidence: [] },
+              },
+              export_dispatch_profile: {
+                command_like_exports: [],
+                callback_like_exports: [],
+                registration_exports: [],
+                ordinal_only_exports: 0,
+                likely_dispatch_model: 'none',
+                confidence: 0.1,
+              },
+              com_profile: {
+                clsid_strings: [],
+                progid_strings: [],
+                interface_hints: [],
+                registration_strings: [],
+                class_factory_exports: [],
+                confidence: 0.02,
+              },
+              host_interaction_profile: {
+                likely_hosted: false,
+                host_hints: [],
+                callback_exports: [],
+                callback_strings: [],
+                service_hooks: [],
+                confidence: 0.08,
+              },
+              analysis_priorities: ['review_process_manipulation_and_dynamic_resolution_paths'],
+              strings_considered: 80,
+            },
+            rust_profile: {
+              suspected_rust: true,
+              confidence: 0.95,
+              primary_runtime: 'rust',
+              runtime_hints: ['panic_unwind'],
+              crate_hints: ['tokio'],
+              cargo_paths: ['cargo\\registry\\src\\...\\tokio-1.0'],
+              recovered_function_count: 100,
+              recovered_symbol_count: 90,
+              importable_with_code_functions_define: true,
+              analysis_priorities: ['recover_function_index_from_pdata'],
+            },
+            function_index_recovery: {
+              applied: true,
+              define_from: 'symbols_recover',
+              recovered_function_count: 100,
+              recovered_symbol_count: 90,
+              imported_count: 100,
+              function_index_status: 'ready',
+              decompile_status: 'missing',
+              cfg_status: 'missing',
+              recovery_strategy: ['pdata_runtime_functions'],
+              next_steps: ['Use code.functions.rank'],
+            },
+          },
           provenance: {
             runtime: {
               scope: 'session',
@@ -315,6 +415,7 @@ describe('workflow.semantic_name_review tool', () => {
     expect(data.export.export_tool).toBe('code.reconstruct.export')
     expect(data.export.manifest_path).toContain('manifest.json')
     expect(data.export.build_validation_status).toBe('passed')
+    expect(data.export.preflight.function_index_recovery.imported_count).toBe(100)
     expect(data.export.provenance.runtime.session_selector).toBe('runtime-alpha')
     expect(data.export.selection_diffs.runtime.summary).toBe('runtime diff')
     expect(data.next_steps.join(' ')).toContain('Native build validation: passed')
@@ -341,6 +442,8 @@ describe('workflow.semantic_name_review tool', () => {
         semantic_scope: 'session',
         semantic_session_tag: 'semantic-alpha',
         compare_semantic_scope: 'all',
+        include_preflight: true,
+        auto_recover_function_index: true,
       })
     )
   })

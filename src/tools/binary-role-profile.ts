@@ -1,4 +1,4 @@
-import fs from 'fs/promises'
+import path from 'path'
 import { z } from 'zod'
 import type { ToolArgs, ToolDefinition, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
@@ -11,9 +11,14 @@ import { createPEImportsExtractHandler } from './pe-imports-extract.js'
 import { createStringsExtractHandler } from './strings-extract.js'
 import { createRuntimeDetectHandler } from './runtime-detect.js'
 import { createPackerDetectHandler } from './packer-detect.js'
+import {
+  inspectSampleWorkspace,
+  formatMissingOriginalError,
+  resolvePrimarySamplePath,
+} from '../sample-workspace.js'
 
 const TOOL_NAME = 'binary.role.profile'
-const TOOL_VERSION = '0.1.0'
+const TOOL_VERSION = '0.2.0'
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 export const BinaryRoleProfileInputSchema = z.object({
@@ -63,6 +68,33 @@ export const RoleIndicatorSchema = z.object({
   evidence: z.array(z.string()),
 })
 
+export const ExportDispatchProfileSchema = z.object({
+  command_like_exports: z.array(z.string()),
+  callback_like_exports: z.array(z.string()),
+  registration_exports: z.array(z.string()),
+  ordinal_only_exports: z.number().int().nonnegative(),
+  likely_dispatch_model: z.string(),
+  confidence: z.number().min(0).max(1),
+})
+
+export const ComProfileSchema = z.object({
+  clsid_strings: z.array(z.string()),
+  progid_strings: z.array(z.string()),
+  interface_hints: z.array(z.string()),
+  registration_strings: z.array(z.string()),
+  class_factory_exports: z.array(z.string()),
+  confidence: z.number().min(0).max(1),
+})
+
+export const HostInteractionProfileSchema = z.object({
+  likely_hosted: z.boolean(),
+  host_hints: z.array(z.string()),
+  callback_exports: z.array(z.string()),
+  callback_strings: z.array(z.string()),
+  service_hooks: z.array(z.string()),
+  confidence: z.number().min(0).max(1),
+})
+
 export const BinaryRoleProfileDataSchema = z.object({
   sample_id: z.string(),
   original_filename: z.string().nullable(),
@@ -84,6 +116,9 @@ export const BinaryRoleProfileDataSchema = z.object({
     plugin_binary: RoleIndicatorSchema,
     driver_binary: RoleIndicatorSchema,
   }),
+  export_dispatch_profile: ExportDispatchProfileSchema,
+  com_profile: ComProfileSchema,
+  host_interaction_profile: HostInteractionProfileSchema,
   analysis_priorities: z.array(z.string()),
   strings_considered: z.number().int().nonnegative(),
 })
@@ -195,12 +230,11 @@ async function getOriginalFilename(
   workspaceManager: WorkspaceManager,
   sampleId: string
 ): Promise<string | null> {
-  const workspace = await workspaceManager.getWorkspace(sampleId)
-  const entries = await fs.readdir(workspace.original)
-  if (entries.length === 0) {
+  const { samplePath: primarySamplePath } = await resolvePrimarySamplePath(workspaceManager, sampleId)
+  if (!primarySamplePath) {
     return null
   }
-  return entries[0] || null
+  return path.basename(primarySamplePath)
 }
 
 function inferBinaryRole(
@@ -271,6 +305,14 @@ function buildRoleIndicator(
   }
 }
 
+function flattenImportFunctions(importsData: PEImportsData | undefined): string[] {
+  return uniqueStrings(
+    Object.values(importsData?.imports || {})
+      .flatMap((items) => items || [])
+      .map((item) => item.trim())
+  )
+}
+
 export function createBinaryRoleProfileHandler(
   workspaceManager: WorkspaceManager,
   database: DatabaseManager,
@@ -311,6 +353,17 @@ export function createBinaryRoleProfileHandler(
       }
 
       const originalFilename = await getOriginalFilename(workspaceManager, input.sample_id)
+      if (!originalFilename) {
+        const integrity = await inspectSampleWorkspace(workspaceManager, input.sample_id)
+        return {
+          ok: false,
+          errors: [formatMissingOriginalError(input.sample_id, integrity)],
+          metrics: {
+            elapsed_ms: Date.now() - startTime,
+            tool: TOOL_NAME,
+          },
+        }
+      }
       const cacheKey = generateCacheKey({
         sampleSha256: sample.sha256,
         toolName: TOOL_NAME,
@@ -378,11 +431,13 @@ export function createBinaryRoleProfileHandler(
       const exportEntries = exportsData?.exports || []
       const forwarders = exportsData?.forwarders || []
       const importDlls = Object.keys(importsData?.imports || {})
+      const importFunctions = flattenImportFunctions(importsData)
       const stringValues = (stringsData?.strings || []).map((item) => item.string)
       const loweredStrings = stringValues.map((item) => item.toLowerCase())
       const exportNames = exportEntries.map((item) => item.name).filter(Boolean) as string[]
       const loweredExports = exportNames.map((item) => item.toLowerCase())
       const loweredImportDlls = importDlls.map((item) => item.toLowerCase())
+      const loweredImportFunctions = importFunctions.map((item) => item.toLowerCase())
 
       const { binaryRole, roleConfidence, roleEvidence } = inferBinaryRole(
         originalFilename,
@@ -406,6 +461,15 @@ export function createBinaryRoleProfileHandler(
       )
       const pluginExports = uniqueStrings(
         exportNames.filter((item) => /plugin|addin|extension|initialize/i.test(item))
+      )
+      const commandLikeExports = uniqueStrings(
+        exportNames.filter((item) => /dispatch|command|execute|handle|invoke|run|process|query/i.test(item))
+      )
+      const callbackLikeExports = uniqueStrings(
+        exportNames.filter((item) => /callback|hook|notify|event|factory|attach|detach/i.test(item))
+      )
+      const registrationExports = uniqueStrings(
+        exportNames.filter((item) => /dll(registerserver|unregisterserver|install)|register/i.test(item))
       )
       const forwardedExports = uniqueStrings(
         forwarders.map((item) => `${item.name || `ordinal_${item.ordinal}`} -> ${item.forwarder}`)
@@ -437,6 +501,12 @@ export function createBinaryRoleProfileHandler(
       if (clsidStrings.length > 0) comScore += 0.22
       if (progIdStrings.length > 0) comScore += 0.18
       if (binaryRole === 'dll' || binaryRole === '.net_library') comScore += 0.08
+      const interfaceHints = uniqueStrings(
+        stringValues.filter((item) => /iunknown|idispatch|iclassfactory|ipropertypage|iprovid(e|er)|interface/i.test(item))
+      ).slice(0, 8)
+      const registrationStrings = uniqueStrings(
+        stringValues.filter((item) => /inprocserver32|localserver32|typelib|appid|clsid|progid|treatas/i.test(item))
+      ).slice(0, 8)
 
       const serviceStrings = uniqueStrings(
         stringValues.filter((item) => /services\\|registerservicectrlhandler|startservicectrldispatcher|setservicestatus|servicemain/i.test(item))
@@ -467,6 +537,51 @@ export function createBinaryRoleProfileHandler(
       }
       if (loweredExports.some((item) => item.includes('initialize'))) pluginScore += 0.1
 
+      const hostHints = uniqueStrings(
+        [
+          ...stringValues.filter((item) => /plugin host|host application|shell extension|addin|extension point|loaded by/i.test(item)),
+          ...importDlls.filter((item) => /shell32|explorerframe|office|vbscript|jscript/i.test(item)),
+        ]
+      ).slice(0, 8)
+      const callbackStrings = uniqueStrings(
+        stringValues.filter((item) => /callback|event sink|notification|hook chain|observer/i.test(item))
+      ).slice(0, 8)
+      const serviceHooks = uniqueStrings(
+        [
+          ...serviceExports,
+          ...importFunctions.filter((item) => /startservicectrldispatcher|registerservicectrlhandler|setservicestatus/i.test(item)),
+        ]
+      ).slice(0, 8)
+      let hostInteractionScore = 0
+      if (pluginScore >= 0.4) hostInteractionScore += 0.25
+      if (callbackLikeExports.length > 0) hostInteractionScore += 0.18
+      if (callbackStrings.length > 0) hostInteractionScore += 0.16
+      if (hostHints.length > 0) hostInteractionScore += 0.18
+      if (serviceHooks.length > 0) hostInteractionScore += 0.12
+
+      let exportDispatchScore = 0
+      if (commandLikeExports.length > 0) exportDispatchScore += 0.34
+      if (callbackLikeExports.length > 0) exportDispatchScore += 0.18
+      if (forwardedExports.length > 0) exportDispatchScore += 0.08
+      if (registrationExports.length > 0) exportDispatchScore += 0.14
+      if ((exportsData?.total_exports ?? exportEntries.length) >= 8) exportDispatchScore += 0.12
+
+      const ordinalOnlyExports = Math.max(
+        0,
+        (exportsData?.total_exports ?? exportEntries.length) - exportNames.length
+      )
+
+      let likelyDispatchModel = 'none'
+      if (registrationExports.length > 0 && comScore >= 0.55) {
+        likelyDispatchModel = 'com_registration_and_class_factory'
+      } else if (pluginScore >= 0.55 && hostInteractionScore >= 0.45) {
+        likelyDispatchModel = 'plugin_initialization_and_host_callbacks'
+      } else if (commandLikeExports.length > 0) {
+        likelyDispatchModel = 'exported_command_dispatch'
+      } else if (forwardedExports.length > 0) {
+        likelyDispatchModel = 'forwarded_export_surface'
+      }
+
       const driverEvidence = uniqueStrings([
         ...roleEvidence.filter((item) => item.includes('driver')),
         ...loweredImportDlls.filter((item) => item.includes('ntoskrnl') || item.includes('fltmgr')).map((item) => `import:${item}`),
@@ -478,8 +593,14 @@ export function createBinaryRoleProfileHandler(
       const priorities: string[] = []
       if (binaryRole === 'driver') priorities.push('review_driver_entrypoints_and_ioctl_surface')
       if (comScore >= 0.55) priorities.push('trace_com_activation_and_class_factory_flow')
+      if (registrationExports.length > 0) priorities.push('review_registration_exports_and_inprocserver_paths')
       if (serviceScore >= 0.55) priorities.push('trace_service_entrypoint_and_scm_lifecycle')
       if (pluginScore >= 0.55) priorities.push('trace_host_plugin_exports_and_callback_model')
+      if (exportDispatchScore >= 0.5) priorities.push('review_exported_command_dispatch_surface')
+      if (hostInteractionScore >= 0.5) priorities.push('identify_host_callbacks_and_extension_contract')
+      if (loweredImportFunctions.some((item) => item.includes('disablethreadlibrarycalls'))) {
+        priorities.push('review_dllmain_lifecycle_and_attach_detach_side_effects')
+      }
       if ((exportsData?.total_exports ?? exportEntries.length) > 0) priorities.push('trace_export_surface_first')
       if ((exportsData?.total_forwarders ?? forwarders.length) > 0) priorities.push('inspect_forwarded_exports')
       if (runtimeData?.is_dotnet) priorities.push('prefer_managed_metadata_and_il_recovery')
@@ -524,6 +645,30 @@ export function createBinaryRoleProfileHandler(
           service_binary: buildRoleIndicator(serviceScore, serviceEvidence),
           plugin_binary: buildRoleIndicator(pluginScore, pluginEvidence),
           driver_binary: buildRoleIndicator(driverScore, driverEvidence),
+        },
+        export_dispatch_profile: {
+          command_like_exports: commandLikeExports.slice(0, input.max_exports),
+          callback_like_exports: callbackLikeExports.slice(0, input.max_exports),
+          registration_exports: registrationExports.slice(0, input.max_exports),
+          ordinal_only_exports: ordinalOnlyExports,
+          likely_dispatch_model: likelyDispatchModel,
+          confidence: clamp(exportDispatchScore),
+        },
+        com_profile: {
+          clsid_strings: clsidStrings,
+          progid_strings: progIdStrings,
+          interface_hints: interfaceHints,
+          registration_strings: registrationStrings,
+          class_factory_exports: comExports.slice(0, input.max_exports),
+          confidence: clamp(comScore),
+        },
+        host_interaction_profile: {
+          likely_hosted: hostInteractionScore >= 0.55,
+          host_hints: hostHints,
+          callback_exports: callbackLikeExports.slice(0, input.max_exports),
+          callback_strings: callbackStrings,
+          service_hooks: serviceHooks,
+          confidence: clamp(hostInteractionScore),
         },
         analysis_priorities: uniqueStrings(priorities).slice(0, 8),
         strings_considered: stringValues.length,

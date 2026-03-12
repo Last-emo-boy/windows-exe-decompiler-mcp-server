@@ -15,12 +15,24 @@ import { createRuntimeDetectHandler } from '../tools/runtime-detect.js'
 import { createCodeReconstructPlanHandler } from '../tools/code-reconstruct-plan.js'
 import { createCodeReconstructExportHandler } from '../tools/code-reconstruct-export.js'
 import { createDotNetReconstructExportHandler } from '../tools/dotnet-reconstruct-export.js'
-import { findBestGhidraAnalysis } from '../ghidra-analysis-status.js'
+import {
+  findBestGhidraAnalysis,
+  isGhidraCapabilityReady,
+} from '../ghidra-analysis-status.js'
 import { loadDynamicTraceEvidence } from '../dynamic-trace.js'
 import {
   loadSemanticFunctionExplanationIndex,
   loadSemanticNameSuggestionIndex,
 } from '../semantic-name-suggestion-artifacts.js'
+import {
+  BinaryRoleProfileDataSchema,
+  createBinaryRoleProfileHandler,
+} from '../tools/binary-role-profile.js'
+import {
+  RustBinaryAnalyzeDataSchema,
+  createRustBinaryAnalyzeHandler,
+} from '../tools/rust-binary-analyze.js'
+import { createFunctionIndexRecoverWorkflowHandler } from './function-index-recover.js'
 import {
   AnalysisProvenanceSchema,
   buildRuntimeArtifactProvenance,
@@ -32,7 +44,7 @@ import {
 } from '../selection-diff.js'
 
 const TOOL_NAME = 'workflow.reconstruct'
-const TOOL_VERSION = '0.1.3'
+const TOOL_VERSION = '0.1.4'
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 export const ReconstructWorkflowInputSchema = z.object({
@@ -114,6 +126,14 @@ export const ReconstructWorkflowInputSchema = z.object({
     .string()
     .optional()
     .describe('Optional baseline semantic artifact session selector used when compare_semantic_scope=session'),
+  include_preflight: z
+    .boolean()
+    .default(true)
+    .describe('Run binary role and language-specific preflight profiling before planning and export'),
+  auto_recover_function_index: z
+    .boolean()
+    .default(true)
+    .describe('When native function-index coverage is missing, automatically run workflow.function_index_recover before export'),
   include_plan: z
     .boolean()
     .default(true)
@@ -230,6 +250,38 @@ const ExportSummarySchema = z.object({
   managed_profile: ManagedProfileSchema.nullable(),
 })
 
+const PreflightRustProfileSchema = z.object({
+  suspected_rust: z.boolean(),
+  confidence: z.number().min(0).max(1),
+  primary_runtime: z.string().nullable(),
+  runtime_hints: z.array(z.string()),
+  crate_hints: z.array(z.string()),
+  cargo_paths: z.array(z.string()),
+  recovered_function_count: z.number().int().nonnegative(),
+  recovered_symbol_count: z.number().int().nonnegative(),
+  importable_with_code_functions_define: z.boolean(),
+  analysis_priorities: z.array(z.string()),
+})
+
+const FunctionIndexRecoverySummarySchema = z.object({
+  applied: z.boolean(),
+  define_from: z.enum(['smart_recover', 'symbols_recover']).nullable(),
+  recovered_function_count: z.number().int().nonnegative(),
+  recovered_symbol_count: z.number().int().nonnegative(),
+  imported_count: z.number().int().nonnegative(),
+  function_index_status: z.enum(['ready']).nullable(),
+  decompile_status: z.enum(['missing']).nullable(),
+  cfg_status: z.enum(['missing']).nullable(),
+  recovery_strategy: z.array(z.string()),
+  next_steps: z.array(z.string()),
+})
+
+const PreflightSummarySchema = z.object({
+  binary_profile: BinaryRoleProfileDataSchema.nullable(),
+  rust_profile: PreflightRustProfileSchema.nullable(),
+  function_index_recovery: FunctionIndexRecoverySummarySchema.nullable(),
+})
+
 const ReconstructQueuedDataSchema = z.object({
   job_id: z.string(),
   status: z.literal('queued'),
@@ -245,6 +297,9 @@ const ReconstructCompletedDataSchema = z.object({
   degraded: z.boolean(),
   stage_status: z.object({
     runtime: z.enum(['ok', 'failed']),
+    preflight_binary_profile: z.enum(['ok', 'failed', 'skipped']),
+    preflight_rust_profile: z.enum(['ok', 'failed', 'skipped']),
+    function_index_recovery: z.enum(['ok', 'failed', 'skipped']),
     plan: z.enum(['ok', 'failed', 'skipped']),
     export_primary: z.enum(['ok', 'failed', 'skipped']),
     export_fallback: z.enum(['ok', 'failed', 'skipped']),
@@ -252,6 +307,7 @@ const ReconstructCompletedDataSchema = z.object({
   provenance: AnalysisProvenanceSchema,
   selection_diffs: AnalysisSelectionDiffSchema.optional(),
   runtime: RuntimeSummarySchema,
+  preflight: PreflightSummarySchema.optional(),
   plan: PlanSummarySchema.nullable(),
   export: ExportSummarySchema.nullable(),
   notes: z.array(z.string()),
@@ -282,7 +338,7 @@ export type ReconstructWorkflowOutput = z.infer<typeof ReconstructWorkflowOutput
 export const reconstructWorkflowToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
   description:
-    'Run a complete source-reconstruction workflow with auto routing (native/.NET), planning, export, and cache observability.',
+    'Run a complete source-reconstruction workflow with auto routing (native/.NET), binary/language preflight profiling, optional function-index recovery, planning, export, and cache observability.',
   inputSchema: ReconstructWorkflowInputSchema,
   outputSchema: ReconstructWorkflowOutputSchema,
 }
@@ -342,11 +398,29 @@ interface DotNetExportData {
   classes: unknown[]
 }
 
+interface RustBinaryAnalyzeData extends z.infer<typeof RustBinaryAnalyzeDataSchema> {}
+
+interface FunctionIndexRecoveryData {
+  sample_id: string
+  define_from: 'smart_recover' | 'symbols_recover'
+  recovered_function_count: number
+  recovered_symbol_count: number
+  imported_count: number
+  function_index_status: 'ready'
+  decompile_status: 'missing'
+  cfg_status: 'missing'
+  recovery_strategy: string[]
+  next_steps: string[]
+}
+
 interface ReconstructWorkflowDependencies {
   runtimeDetectHandler?: (args: ToolArgs) => Promise<WorkerResult>
   planHandler?: (args: ToolArgs) => Promise<WorkerResult>
   nativeExportHandler?: (args: ToolArgs) => Promise<WorkerResult>
   dotnetExportHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  binaryRoleProfileHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  rustBinaryAnalyzeHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  functionIndexRecoverHandler?: (args: ToolArgs) => Promise<WorkerResult>
 }
 
 function normalizeError(error: unknown): string {
@@ -374,6 +448,67 @@ function summarizeRuntime(runtimeData?: RuntimeDetectData) {
   }
 }
 
+function pickLatestAnalysisMarker(
+  analyses: Array<{
+    stage: string
+    backend: string
+    status: string
+    started_at: string | null
+    finished_at: string | null
+  }>,
+  predicate: (analysis: { stage: string; backend: string }) => boolean
+) {
+  const sorted = [...analyses]
+    .filter(predicate)
+    .sort((left, right) => {
+      const leftTs = new Date(left.finished_at || left.started_at || 0).getTime()
+      const rightTs = new Date(right.finished_at || right.started_at || 0).getTime()
+      return rightTs - leftTs
+    })
+
+  const selected = sorted[0]
+  if (!selected) {
+    return null
+  }
+
+  return {
+    stage: selected.stage,
+    backend: selected.backend,
+    status: selected.status,
+    finished_at: selected.finished_at || selected.started_at || null,
+  }
+}
+
+function summarizeRustPreflight(data: RustBinaryAnalyzeData) {
+  return {
+    suspected_rust: data.suspected_rust,
+    confidence: data.confidence,
+    primary_runtime: data.primary_runtime,
+    runtime_hints: data.runtime_hints,
+    crate_hints: data.crate_hints,
+    cargo_paths: data.cargo_paths,
+    recovered_function_count: data.recovered_function_count,
+    recovered_symbol_count: data.recovered_symbol_count,
+    importable_with_code_functions_define: data.importable_with_code_functions_define,
+    analysis_priorities: data.analysis_priorities,
+  }
+}
+
+function summarizeFunctionIndexRecovery(data: FunctionIndexRecoveryData) {
+  return {
+    applied: true,
+    define_from: data.define_from,
+    recovered_function_count: data.recovered_function_count,
+    recovered_symbol_count: data.recovered_symbol_count,
+    imported_count: data.imported_count,
+    function_index_status: data.function_index_status,
+    decompile_status: data.decompile_status,
+    cfg_status: data.cfg_status,
+    recovery_strategy: data.recovery_strategy,
+    next_steps: data.next_steps,
+  }
+}
+
 export function createReconstructWorkflowHandler(
   workspaceManager: WorkspaceManager,
   database: DatabaseManager,
@@ -393,6 +528,15 @@ export function createReconstructWorkflowHandler(
   const dotnetExportHandler =
     dependencies?.dotnetExportHandler ||
     createDotNetReconstructExportHandler(workspaceManager, database, cacheManager)
+  const binaryRoleProfileHandler =
+    dependencies?.binaryRoleProfileHandler ||
+    createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
+  const rustBinaryAnalyzeHandler =
+    dependencies?.rustBinaryAnalyzeHandler ||
+    createRustBinaryAnalyzeHandler(workspaceManager, database, cacheManager)
+  const functionIndexRecoverHandler =
+    dependencies?.functionIndexRecoverHandler ||
+    createFunctionIndexRecoverWorkflowHandler(workspaceManager, database, cacheManager)
 
   return async (args: ToolArgs): Promise<WorkerResult> => {
     const input = ReconstructWorkflowInputSchema.parse(args)
@@ -447,6 +591,9 @@ export function createReconstructWorkflowHandler(
       const notes: string[] = []
       const stageStatus = {
         runtime: 'failed' as 'ok' | 'failed',
+        preflight_binary_profile: 'skipped' as 'ok' | 'failed' | 'skipped',
+        preflight_rust_profile: 'skipped' as 'ok' | 'failed' | 'skipped',
+        function_index_recovery: 'skipped' as 'ok' | 'failed' | 'skipped',
         plan: 'skipped' as 'ok' | 'failed' | 'skipped',
         export_primary: 'skipped' as 'ok' | 'failed' | 'skipped',
         export_fallback: 'skipped' as 'ok' | 'failed' | 'skipped',
@@ -499,10 +646,100 @@ export function createReconstructWorkflowHandler(
         warnings.push('Selected native path while runtime indicates .NET; forcing native as requested.')
       }
 
-      const completedGhidraAnalysis = findBestGhidraAnalysis(
-        database.findAnalysesBySample(input.sample_id),
-        'function_index'
+      let analyses = database.findAnalysesBySample(input.sample_id)
+      let completedGhidraAnalysis = findBestGhidraAnalysis(analyses, 'function_index')
+      const hasReadyGhidraFunctionIndex = Boolean(
+        completedGhidraAnalysis && isGhidraCapabilityReady(completedGhidraAnalysis, 'function_index')
       )
+      const hasFunctionDefinitionIndex = analyses.some(
+        (analysis) => analysis.stage === 'function_definition' && analysis.status === 'done'
+      )
+
+      let binaryProfileData: z.infer<typeof BinaryRoleProfileDataSchema> | null = null
+      let rustProfileData: RustBinaryAnalyzeData | null = null
+      let functionIndexRecoveryData: ReturnType<typeof summarizeFunctionIndexRecovery> | null = null
+      let functionIndexRecoveryApplied = false
+
+      if (input.include_preflight) {
+        const binaryProfileResult = await binaryRoleProfileHandler({
+          sample_id: input.sample_id,
+          force_refresh: !input.reuse_cached,
+        })
+
+        if (binaryProfileResult.ok && binaryProfileResult.data) {
+          binaryProfileData = binaryProfileResult.data as z.infer<typeof BinaryRoleProfileDataSchema>
+          stageStatus.preflight_binary_profile = 'ok'
+        } else {
+          stageStatus.preflight_binary_profile = 'failed'
+          warnings.push(
+            `binary.role.profile unavailable: ${(binaryProfileResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+
+        if (binaryProfileResult.warnings?.length) {
+          warnings.push(...binaryProfileResult.warnings.map((item) => `binary.role.profile: ${item}`))
+        }
+      }
+
+      if (selectedPath === 'native' && !runtimeData?.is_dotnet && input.include_preflight) {
+        const rustProfileResult = await rustBinaryAnalyzeHandler({
+          sample_id: input.sample_id,
+          force_refresh: !input.reuse_cached,
+        })
+
+        if (rustProfileResult.ok && rustProfileResult.data) {
+          rustProfileData = rustProfileResult.data as RustBinaryAnalyzeData
+          stageStatus.preflight_rust_profile = 'ok'
+        } else {
+          stageStatus.preflight_rust_profile = 'failed'
+          warnings.push(
+            `rust_binary.analyze unavailable: ${(rustProfileResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+
+        if (rustProfileResult.warnings?.length) {
+          warnings.push(...rustProfileResult.warnings.map((item) => `rust_binary.analyze: ${item}`))
+        }
+      }
+
+      if (
+        selectedPath === 'native' &&
+        input.auto_recover_function_index &&
+        !hasReadyGhidraFunctionIndex &&
+        !hasFunctionDefinitionIndex
+      ) {
+        const functionIndexRecoverResult = await functionIndexRecoverHandler({
+          sample_id: input.sample_id,
+          define_from: 'auto',
+          include_rank_preview: false,
+          persist_artifact: true,
+          register_analysis: true,
+          replace_all: true,
+          force_refresh: !input.reuse_cached,
+        })
+
+        if (functionIndexRecoverResult.ok && functionIndexRecoverResult.data) {
+          functionIndexRecoveryData = summarizeFunctionIndexRecovery(
+            functionIndexRecoverResult.data as FunctionIndexRecoveryData
+          )
+          functionIndexRecoveryApplied = true
+          stageStatus.function_index_recovery = 'ok'
+          analyses = database.findAnalysesBySample(input.sample_id)
+          completedGhidraAnalysis = findBestGhidraAnalysis(analyses, 'function_index')
+        } else {
+          stageStatus.function_index_recovery = 'failed'
+          warnings.push(
+            `workflow.function_index_recover unavailable: ${(functionIndexRecoverResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+
+        if (functionIndexRecoverResult.warnings?.length) {
+          warnings.push(
+            ...functionIndexRecoverResult.warnings.map((item) => `workflow.function_index_recover: ${item}`)
+          )
+        }
+      }
+
       const dynamicEvidence = await loadDynamicTraceEvidence(workspaceManager, database, input.sample_id, {
         evidenceScope: input.evidence_scope,
         sessionTag: input.evidence_session_tag,
@@ -605,8 +842,21 @@ export function createReconstructWorkflowHandler(
           )
         )
       }
-      const analysisMarker =
-        completedGhidraAnalysis?.finished_at || completedGhidraAnalysis?.id || 'none'
+      const functionDefinitionMarker = pickLatestAnalysisMarker(
+        analyses,
+        (analysis) => analysis.stage === 'function_definition'
+      )
+      const analysisMarker = JSON.stringify({
+        ghidra_function_index: completedGhidraAnalysis
+          ? {
+              id: completedGhidraAnalysis.id,
+              status: completedGhidraAnalysis.status,
+              finished_at:
+                completedGhidraAnalysis.finished_at || completedGhidraAnalysis.started_at || null,
+            }
+          : null,
+        function_definition: functionDefinitionMarker,
+      })
 
       const cacheKey = generateCacheKey({
         sampleSha256: sample.sha256,
@@ -630,6 +880,8 @@ export function createReconstructWorkflowHandler(
           compare_evidence_session_tag: input.compare_evidence_session_tag || null,
           compare_semantic_scope: input.compare_semantic_scope || null,
           compare_semantic_session_tag: input.compare_semantic_session_tag || null,
+          include_preflight: input.include_preflight,
+          auto_recover_function_index: input.auto_recover_function_index,
           include_plan: input.include_plan,
           include_obfuscation_fallback: input.include_obfuscation_fallback,
           fallback_on_error: input.fallback_on_error,
@@ -720,7 +972,7 @@ export function createReconstructWorkflowHandler(
             include_obfuscation_fallback: input.include_obfuscation_fallback,
             evidence_scope: input.evidence_scope,
             evidence_session_tag: input.evidence_session_tag,
-            reuse_cached: input.reuse_cached,
+            reuse_cached: input.reuse_cached && !functionIndexRecoveryApplied,
           })
           if (!dotnetResult.ok || !dotnetResult.data) {
             return {
@@ -777,7 +1029,7 @@ export function createReconstructWorkflowHandler(
           evidence_session_tag: input.evidence_session_tag,
           semantic_scope: input.semantic_scope,
           semantic_session_tag: input.semantic_session_tag,
-          reuse_cached: input.reuse_cached,
+          reuse_cached: input.reuse_cached && !functionIndexRecoveryApplied,
         })
 
         if (!nativeResult.ok || !nativeResult.data) {
@@ -898,6 +1150,30 @@ export function createReconstructWorkflowHandler(
       } else {
         notes.push('Runtime signal indicates native path; exact original source text is not recoverable.')
       }
+      if (
+        binaryProfileData?.export_dispatch_profile?.likely_dispatch_model &&
+        binaryProfileData.export_dispatch_profile.likely_dispatch_model !== 'none'
+      ) {
+        notes.push(
+          `Binary role preflight suggests dispatch model: ${binaryProfileData.export_dispatch_profile.likely_dispatch_model}.`
+        )
+      }
+      if (binaryProfileData?.host_interaction_profile?.likely_hosted) {
+        notes.push('Binary role preflight suggests the sample is likely hosted as a DLL/plugin/service component.')
+      }
+      if (rustProfileData?.suspected_rust) {
+        notes.push(
+          `Rust preflight recovered ${rustProfileData.recovered_function_count} function candidates and ${rustProfileData.recovered_symbol_count} symbol hints.`
+        )
+        if (rustProfileData.crate_hints.length > 0) {
+          notes.push(`Rust crate hints: ${rustProfileData.crate_hints.slice(0, 4).join(', ')}.`)
+        }
+      }
+      if (functionIndexRecoveryData?.applied) {
+        notes.push(
+          `Function index recovery imported ${functionIndexRecoveryData.imported_count} recovered functions before export.`
+        )
+      }
       if (exportSummary?.binary_profile?.analysis_priorities?.length) {
         notes.push(
           `Binary profile priorities: ${exportSummary.binary_profile.analysis_priorities.join(', ')}.`
@@ -923,6 +1199,14 @@ export function createReconstructWorkflowHandler(
         provenance,
         selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
         runtime: summarizeRuntime(runtimeData),
+        preflight:
+          input.include_preflight || stageStatus.function_index_recovery !== 'skipped'
+            ? {
+                binary_profile: binaryProfileData,
+                rust_profile: rustProfileData ? summarizeRustPreflight(rustProfileData) : null,
+                function_index_recovery: functionIndexRecoveryData,
+              }
+            : undefined,
         plan: planSummary,
         export: exportSummary,
         notes,

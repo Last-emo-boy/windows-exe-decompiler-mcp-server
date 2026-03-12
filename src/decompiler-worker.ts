@@ -33,9 +33,11 @@ import {
   decodeProcessStreams,
   type DecodedProcessStreams,
 } from './process-output.js';
+import { smartRecoverFunctionsFromPE, type SmartRecoveredFunction } from './pe-runtime-functions.js';
 import type { DatabaseManager, Analysis } from './database.js';
 import type { WorkspaceManager } from './workspace-manager.js';
 import type { JobResult } from './types.js';
+import { formatMissingOriginalError, resolvePrimarySamplePath } from './sample-workspace.js';
 
 /**
  * Options for Ghidra analysis
@@ -47,6 +49,10 @@ export interface GhidraOptions {
   analysisOptions?: Record<string, unknown>;
   timeout?: number;
   maxCpu?: string;
+  processor?: string;
+  languageId?: string;
+  cspec?: string;
+  scriptPaths?: string[];
   abortSignal?: AbortSignal;
 }
 
@@ -287,6 +293,12 @@ interface FunctionExtractionResult {
   warnings: string[];
   scriptUsed?: string;
   attempts: FunctionExtractionAttempt[];
+}
+
+interface FunctionRecoveryResult {
+  functions: GhidraFunction[];
+  warnings: string[];
+  recoveryMetadata?: Record<string, unknown>;
 }
 
 interface GhidraCapabilityProbeResult {
@@ -576,31 +588,86 @@ export class DecompilerWorker {
     throw lastError instanceof Error ? lastError : new Error(`${operationLabel} failed`);
   }
 
-  /**
-   * Resolve sample file path in workspace/original.
-   * Prefer legacy "sample.exe" name, then fall back to first regular file.
-   */
-  private resolveSamplePath(originalDir: string): string {
-    const legacyPath = path.join(originalDir, 'sample.exe');
-    if (fs.existsSync(legacyPath)) {
-      return legacyPath;
+  private async resolveSamplePathForSample(sampleId: string): Promise<string> {
+    const { samplePath, integrity } = await resolvePrimarySamplePath(this.workspaceManager, sampleId);
+    if (!samplePath) {
+      throw new Error(formatMissingOriginalError(sampleId, integrity));
+    }
+    return samplePath;
+  }
+
+  private getAlternateWorkspaceRoot(): string | null {
+    const currentRoot = this.workspaceManager.getWorkspaceRoot();
+    const siblingRoot = path.join(path.dirname(path.dirname(currentRoot)), 'workspaces');
+    if (path.resolve(siblingRoot) === path.resolve(currentRoot)) {
+      return null;
+    }
+    return fs.existsSync(siblingRoot) ? siblingRoot : null;
+  }
+
+  private findLatestProjectInGhidraDir(ghidraDir: string): { projectPath: string; projectKey: string } | null {
+    if (!fs.existsSync(ghidraDir)) {
+      return null;
     }
 
-    if (!fs.existsSync(originalDir)) {
-      throw new Error(`Sample directory not found: ${originalDir}`);
+    const candidates = fs
+      .readdirSync(ghidraDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory() && entry.name.startsWith('project_'))
+      .map((entry) => {
+        const projectPath = path.join(ghidraDir, entry.name);
+        const projectKey = entry.name.slice('project_'.length);
+        const gprPath = path.join(projectPath, `${projectKey}.gpr`);
+        const stats = fs.statSync(projectPath);
+        return {
+          projectPath,
+          projectKey,
+          gprPath,
+          mtimeMs: stats.mtimeMs,
+        };
+      })
+      .filter((item) => fs.existsSync(item.gprPath))
+      .sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+    if (candidates.length === 0) {
+      return null;
     }
 
-    const files = fs
-      .readdirSync(originalDir, { withFileTypes: true })
-      .filter(entry => entry.isFile())
-      .map(entry => entry.name)
-      .sort((a, b) => a.localeCompare(b));
+    return {
+      projectPath: candidates[0].projectPath,
+      projectKey: candidates[0].projectKey,
+    };
+  }
 
-    if (files.length === 0) {
-      throw new Error(`Sample file not found in workspace: ${originalDir}`);
+  private findRecoveredProject(sampleId: string, originalProjectPath: string): { projectPath: string; projectKey: string } | null {
+    const sha256 = sampleId.startsWith('sha256:') ? sampleId.slice('sha256:'.length) : sampleId;
+    const bucket1 = sha256.slice(0, 2);
+    const bucket2 = sha256.slice(2, 4);
+    const projectDirName = path.basename(originalProjectPath);
+    const currentRoot = this.workspaceManager.getWorkspaceRoot();
+    const roots = [currentRoot, this.getAlternateWorkspaceRoot()].filter(
+      (value): value is string => Boolean(value)
+    );
+
+    for (const root of roots) {
+      const ghidraDir = path.join(root, bucket1, bucket2, sha256, 'ghidra');
+      const mappedProjectPath = path.join(ghidraDir, projectDirName);
+      if (fs.existsSync(mappedProjectPath)) {
+        const projectKey = projectDirName.startsWith('project_')
+          ? projectDirName.slice('project_'.length)
+          : projectDirName;
+        return {
+          projectPath: mappedProjectPath,
+          projectKey,
+        };
+      }
+
+      const latestProject = this.findLatestProjectInGhidraDir(ghidraDir);
+      if (latestProject) {
+        return latestProject;
+      }
     }
 
-    return path.join(originalDir, files[0]);
+    return null;
   }
 
   /**
@@ -817,9 +884,29 @@ export class DecompilerWorker {
 
   private buildAnalyzeBaseArgs(
     projectPath: string,
-    projectKey: string
+    projectKey: string,
+    options?: GhidraOptions
   ): string[] {
-    return [projectPath, projectKey];
+    const args: string[] = [projectPath, projectKey];
+    const processor = options?.languageId || options?.processor;
+    if (processor) {
+      args.push('-processor', processor);
+    }
+    if (options?.cspec) {
+      args.push('-cspec', options.cspec);
+    }
+    return args;
+  }
+
+  private buildScriptPath(options?: GhidraOptions): string {
+    const scriptPaths = Array.from(
+      new Set(
+        [ghidraConfig.scriptsDir, ...(options?.scriptPaths || [])]
+          .map((item) => item?.trim())
+          .filter((item): item is string => Boolean(item))
+      )
+    );
+    return scriptPaths.join(path.delimiter);
   }
 
   private buildAnalysisArgs(
@@ -832,7 +919,7 @@ export class DecompilerWorker {
     const maxCpu = options.maxCpu || '4';
 
     return [
-      ...this.buildAnalyzeBaseArgs(projectPath, projectKey),
+      ...this.buildAnalyzeBaseArgs(projectPath, projectKey, options),
       '-import',
       samplePath,
       '-max-cpu',
@@ -846,14 +933,15 @@ export class DecompilerWorker {
     projectPath: string,
     projectKey: string,
     samplePath: string,
-    scriptName: string
+    scriptName: string,
+    options?: GhidraOptions
   ): string[] {
     return [
-      ...this.buildAnalyzeBaseArgs(projectPath, projectKey),
+      ...this.buildAnalyzeBaseArgs(projectPath, projectKey, options),
       '-process',
       path.basename(samplePath),
       '-scriptPath',
-      ghidraConfig.scriptsDir,
+      this.buildScriptPath(options),
       '-postScript',
       scriptName,
       '-noanalysis',
@@ -912,10 +1000,11 @@ export class DecompilerWorker {
     projectKey: string,
     samplePath: string,
     scriptName: string,
-    timeoutMs: number
+    timeoutMs: number,
+    options?: GhidraOptions
   ): Promise<GhidraCommandOutput> {
     const command = ghidraConfig.analyzeHeadlessPath;
-    const args = this.buildExtractFunctionsArgs(projectPath, projectKey, samplePath, scriptName);
+    const args = this.buildExtractFunctionsArgs(projectPath, projectKey, samplePath, scriptName, options);
 
     logger.debug(
       {
@@ -942,7 +1031,8 @@ export class DecompilerWorker {
     projectPath: string,
     projectKey: string,
     samplePath: string,
-    timeoutMs: number
+    timeoutMs: number,
+    options?: GhidraOptions
   ): Promise<FunctionExtractionResult> {
     const warnings: string[] = [];
     const attempts: FunctionExtractionAttempt[] = [];
@@ -958,7 +1048,8 @@ export class DecompilerWorker {
           projectKey,
           samplePath,
           scriptName,
-          timeoutMs
+          timeoutMs,
+          options
         );
       } catch (error) {
         const diagnostics =
@@ -1055,6 +1146,55 @@ export class DecompilerWorker {
       functions[0];
 
     return preferred?.address;
+  }
+
+  private tryRecoverFunctionsFromPE(samplePath: string): FunctionRecoveryResult {
+    const recovery = smartRecoverFunctionsFromPE(samplePath);
+    const functions: GhidraFunction[] = recovery.functions.map((item: SmartRecoveredFunction) => ({
+      address: item.address,
+      name: item.name,
+      size: item.size,
+      is_thunk: false,
+      is_external: false,
+      calling_convention: 'unknown',
+      signature: `${item.name}()`,
+      callers: [],
+      caller_count: 0,
+      callees: [],
+      callee_count: 0,
+      caller_relationships: [],
+      callee_relationships: [],
+      is_entry_point: item.isEntryPoint,
+      is_exported: item.isExported,
+    }));
+
+    return {
+      functions,
+      warnings: recovery.warnings,
+      recoveryMetadata: {
+        strategy: recovery.strategy,
+        machine: recovery.machine,
+        machine_name: recovery.machineName,
+        image_base: recovery.imageBase,
+        entry_point_rva: recovery.entryPointRva,
+        count: recovery.count,
+        recovered_functions: recovery.functions.map((item) => ({
+          address: item.address,
+          rva: item.rva,
+          size: item.size,
+          name: item.name,
+          name_source: item.nameSource,
+          confidence: item.confidence,
+          source: item.source,
+          section_name: item.sectionName,
+          executable_section: item.executableSection,
+          is_entry_point: item.isEntryPoint,
+          is_exported: item.isExported,
+          export_name: item.exportName,
+          evidence: item.evidence,
+        })),
+      },
+    };
   }
 
   private buildCapabilityReadyStatus(
@@ -1157,6 +1297,7 @@ export class DecompilerWorker {
   }
 
   private resolveAnalysisProject(
+    sampleId: string,
     analysis: Analysis
   ): { analysis: Analysis; projectPath: string; projectKey: string } {
     const metadata = parseGhidraAnalysisMetadata(analysis.output_json);
@@ -1167,6 +1308,33 @@ export class DecompilerWorker {
       throw new Error(
         `Ghidra analysis ${analysis.id} has no reusable project metadata for downstream scripts.`
       );
+    }
+
+    if (fs.existsSync(projectPath)) {
+      return {
+        analysis,
+        projectPath,
+        projectKey,
+      };
+    }
+
+    const recoveredProject = this.findRecoveredProject(sampleId, projectPath);
+    if (recoveredProject) {
+      logger.warn(
+        {
+          sampleId,
+          analysisId: analysis.id,
+          originalProjectPath: projectPath,
+          recoveredProjectPath: recoveredProject.projectPath,
+          recoveredProjectKey: recoveredProject.projectKey,
+        },
+        'Recorded Ghidra project path is missing; using recovered project path from sample ghidra workspace'
+      );
+      return {
+        analysis,
+        projectPath: recoveredProject.projectPath,
+        projectKey: recoveredProject.projectKey,
+      };
     }
 
     return {
@@ -1202,7 +1370,7 @@ export class DecompilerWorker {
       );
     }
 
-    const project = this.resolveAnalysisProject(selected);
+    const project = this.resolveAnalysisProject(sampleId, selected);
     return {
       ...project,
       readiness,
@@ -1257,7 +1425,7 @@ export class DecompilerWorker {
 
       // 3. Get workspace paths
       const workspace = await this.workspaceManager.getWorkspace(sampleId);
-      const samplePath = this.resolveSamplePath(workspace.original);
+      const samplePath = await this.resolveSamplePathForSample(sampleId);
 
       // Verify sample file exists
       if (!fs.existsSync(samplePath)) {
@@ -1290,24 +1458,60 @@ export class DecompilerWorker {
         projectPath,
         projectKey,
         samplePath,
-        options.timeout || 300000
+        options.timeout || 300000,
+        options
       );
       const analysisOutput = extraction.output;
       const extractionWarnings = extraction.warnings || [];
       const extractionAttempts = extraction.attempts || [];
-      const probeTarget = analysisOutput
-        ? this.selectProbeTarget(analysisOutput.functions)
+      let recoveredFunctions: FunctionRecoveryResult | undefined;
+      const combinedWarnings = [...extractionWarnings];
+      const analysisOutputHasFunctions = Boolean(
+        analysisOutput && analysisOutput.functions.length > 0
+      );
+      const shouldRecoverFromPE = !analysisOutput || !analysisOutputHasFunctions;
+      if (analysisOutput && !analysisOutputHasFunctions) {
+        combinedWarnings.push(
+          'Ghidra post-script extraction completed but returned zero functions; attempting PE metadata recovery from .pdata / exception directory.'
+        );
+      }
+      if (shouldRecoverFromPE) {
+        try {
+          recoveredFunctions = this.tryRecoverFunctionsFromPE(samplePath);
+          if (recoveredFunctions.functions.length > 0) {
+            combinedWarnings.push(
+              `Recovered ${recoveredFunctions.functions.length} function candidates from PE exception metadata after Ghidra post-script extraction failed.`
+            );
+          }
+          if (recoveredFunctions.warnings.length > 0) {
+            combinedWarnings.push(...recoveredFunctions.warnings);
+          }
+        } catch (recoveryError) {
+          combinedWarnings.push(
+            `PE metadata recovery failed after Ghidra extraction failure: ${
+              recoveryError instanceof Error ? recoveryError.message : String(recoveryError)
+            }`
+          );
+        }
+      }
+      const effectiveFunctions = analysisOutputHasFunctions
+        ? analysisOutput?.functions || []
+        : recoveredFunctions?.functions || [];
+      const probeTarget = analysisOutputHasFunctions
+        ? this.selectProbeTarget((analysisOutput?.functions || []))
         : undefined;
       let decompileProbe: GhidraCapabilityProbeResult | undefined;
       let cfgProbe: GhidraCapabilityProbeResult | undefined;
 
-      if (analysisOutput) {
+      if (effectiveFunctions.length > 0) {
         // 7. Store functions to database (Requirement 8.4)
-        await this.storeFunctions(sampleId, analysisOutput.functions);
+        await this.storeFunctions(sampleId, effectiveFunctions);
 
         // 8. Store analysis artifact
         const artifactId = randomUUID();
-        const artifactPath = `ghidra/functions_${projectKey}.json`;
+        const artifactPath = analysisOutput
+          ? `ghidra/functions_${projectKey}.json`
+          : `ghidra/recovered_functions_${projectKey}.json`;
         const artifactFullPath = path.join(workspace.root, artifactPath);
 
         // Ensure directory exists
@@ -1317,25 +1521,34 @@ export class DecompilerWorker {
         }
 
         // Write artifact
-        fs.writeFileSync(artifactFullPath, JSON.stringify(analysisOutput, null, 2));
+        const artifactPayload =
+          (analysisOutputHasFunctions ? analysisOutput : undefined) ||
+          {
+            program_name: path.basename(samplePath),
+            program_path: samplePath,
+            function_count: recoveredFunctions?.functions.length || 0,
+            functions: recoveredFunctions?.functions || [],
+            recovery: recoveredFunctions?.recoveryMetadata || {},
+          };
+        fs.writeFileSync(artifactFullPath, JSON.stringify(artifactPayload, null, 2));
 
         // Compute artifact SHA256
         const artifactSha256 = createHash('sha256')
-          .update(JSON.stringify(analysisOutput))
+          .update(JSON.stringify(artifactPayload))
           .digest('hex');
 
         // Insert artifact record
         this.database.insertArtifact({
           id: artifactId,
           sample_id: sampleId,
-          type: 'ghidra_functions',
+          type: analysisOutputHasFunctions ? 'ghidra_functions' : 'function_recovery',
           path: artifactPath,
           sha256: artifactSha256,
           mime: 'application/json',
           created_at: new Date().toISOString()
         });
 
-        if (probeTarget) {
+        if (analysisOutput && probeTarget) {
           const probeTimeoutMs = Math.max(
             5000,
             Math.min(15000, Math.floor((options.timeout || 300000) / 6))
@@ -1361,16 +1574,23 @@ export class DecompilerWorker {
 
       // 9. Update analysis status
       const elapsedMs = Date.now() - startTime;
-      const status: 'done' | 'partial_success' = analysisOutput ? 'done' : 'partial_success';
-      const functionCount = analysisOutput?.function_count || 0;
-      const functionIndexReady = Boolean(analysisOutput && functionCount > 0);
+      const status: 'done' | 'partial_success' = analysisOutputHasFunctions ? 'done' : 'partial_success';
+      const functionCount = analysisOutputHasFunctions
+        ? analysisOutput?.function_count || analysisOutput?.functions.length || 0
+        : recoveredFunctions?.functions.length || 0;
+      const functionIndexRecovered =
+        !analysisOutputHasFunctions && Boolean(recoveredFunctions && functionCount > 0);
+      const functionIndexReady = Boolean(analysisOutputHasFunctions && functionCount > 0);
       const readiness = {
         function_index: {
-          available: functionIndexReady,
-          status: functionIndexReady ? 'ready' : 'missing',
+          available: functionIndexReady || functionIndexRecovered,
+          status: functionIndexReady ? 'ready' : functionIndexRecovered ? 'degraded' : 'missing',
+          reason: functionIndexRecovered
+            ? 'Function candidates were recovered from PE exception metadata (.pdata) after Ghidra post-script extraction failed.'
+            : undefined,
           checked_at: new Date().toISOString(),
           warnings:
-            extractionWarnings.length > 0 ? extractionWarnings : undefined,
+            combinedWarnings.length > 0 ? combinedWarnings : undefined,
         } satisfies GhidraCapabilityStatus,
         decompile: functionIndexReady
           ? decompileProbe?.status ||
@@ -1383,7 +1603,9 @@ export class DecompilerWorker {
           : ({
               available: false,
               status: 'missing',
-              reason: 'Function index is unavailable, so decompile readiness was not probed.',
+              reason: functionIndexRecovered
+                ? 'Function candidates were recovered from PE metadata only; Ghidra decompile readiness was not established.'
+                : 'Function index is unavailable, so decompile readiness was not probed.',
               checked_at: new Date().toISOString(),
             } satisfies GhidraCapabilityStatus),
         cfg: functionIndexReady
@@ -1397,7 +1619,9 @@ export class DecompilerWorker {
           : ({
               available: false,
               status: 'missing',
-              reason: 'Function index is unavailable, so CFG readiness was not probed.',
+              reason: functionIndexRecovered
+                ? 'Function candidates were recovered from PE metadata only; Ghidra CFG readiness was not established.'
+                : 'Function index is unavailable, so CFG readiness was not probed.',
               checked_at: new Date().toISOString(),
             } satisfies GhidraCapabilityStatus),
       };
@@ -1410,11 +1634,16 @@ export class DecompilerWorker {
           project_key: projectKey,
           readiness,
           function_extraction: {
-            status: analysisOutput ? 'success' : 'failed',
+            status: analysisOutputHasFunctions
+              ? 'success'
+              : functionIndexRecovered
+                ? 'recovered_via_smart_recover'
+                : 'failed',
             script_used: extraction.scriptUsed,
-            warnings: extractionWarnings,
+            warnings: combinedWarnings,
             attempts: extractionAttempts,
           },
+          function_recovery: recoveredFunctions?.recoveryMetadata,
           end_to_end_probe: {
             target: probeTarget,
             decompile: decompileProbe?.status,
@@ -1453,7 +1682,7 @@ export class DecompilerWorker {
         functionCount,
         projectPath,
         status,
-        warnings: extractionWarnings.length > 0 ? extractionWarnings : undefined,
+        warnings: combinedWarnings.length > 0 ? combinedWarnings : undefined,
         readiness,
       };
 
@@ -1817,8 +2046,8 @@ export class DecompilerWorker {
     const resolved = this.resolveGhidraAnalysisForCapability(sampleId, 'decompile');
 
     // 2. Get workspace and project paths
-    const workspace = await this.workspaceManager.getWorkspace(sampleId);
-    const samplePath = this.resolveSamplePath(workspace.original);
+    await this.workspaceManager.getWorkspace(sampleId);
+    const samplePath = await this.resolveSamplePathForSample(sampleId);
 
     // Verify sample file exists
     if (!fs.existsSync(samplePath)) {
@@ -2343,8 +2572,8 @@ export class DecompilerWorker {
     const resolved = this.resolveGhidraAnalysisForCapability(sampleId, 'cfg');
 
     // 2. Get workspace and project paths
-    const workspace = await this.workspaceManager.getWorkspace(sampleId);
-    const samplePath = this.resolveSamplePath(workspace.original);
+    await this.workspaceManager.getWorkspace(sampleId);
+    const samplePath = await this.resolveSamplePathForSample(sampleId);
 
     // Verify sample file exists
     if (!fs.existsSync(samplePath)) {
@@ -2482,8 +2711,8 @@ export class DecompilerWorker {
     timeout: number
   ): Promise<FunctionSearchResult> {
     const resolved = this.resolveGhidraAnalysisForCapability(sampleId, 'function_index');
-    const workspace = await this.workspaceManager.getWorkspace(sampleId);
-    const samplePath = this.resolveSamplePath(workspace.original);
+    await this.workspaceManager.getWorkspace(sampleId);
+    const samplePath = await this.resolveSamplePathForSample(sampleId);
 
     if (!fs.existsSync(samplePath)) {
       throw new Error(`Sample file not found: ${samplePath}`);

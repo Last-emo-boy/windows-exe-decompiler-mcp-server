@@ -4,7 +4,7 @@
 
 import { jest } from '@jest/globals'
 import { MCPServer } from '../../src/server'
-import { Config } from '../../src/config'
+import { Config, getDefaultAuditLogPath, getDefaultCacheRoot } from '../../src/config'
 import { z } from 'zod'
 import { TextContent } from '@modelcontextprotocol/sdk/types.js'
 
@@ -38,11 +38,13 @@ describe('MCPServer', () => {
       },
       cache: {
         enabled: true,
+        root: getDefaultCacheRoot(),
         ttl: 30 * 24 * 60 * 60,
       },
       logging: {
         level: 'error',
         pretty: false,
+        auditPath: getDefaultAuditLogPath(),
       },
     }
 

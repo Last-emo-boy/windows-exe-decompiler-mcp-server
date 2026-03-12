@@ -14,6 +14,16 @@ Then run the helper script from the repository root:
 .\install-to-codex.ps1
 ```
 
+By default, the script writes a stable `WORKSPACE_ROOT` under your user profile:
+
+- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+
+It also pins:
+
+- `DB_PATH`
+- `CACHE_ROOT`
+- `AUDIT_LOG_PATH`
+
 If Ghidra is not already configured through `GHIDRA_PATH` or
 `GHIDRA_INSTALL_DIR`, pass it explicitly:
 
@@ -21,11 +31,18 @@ If Ghidra is not already configured through `GHIDRA_PATH` or
 .\install-to-codex.ps1 -GhidraPath "C:\tools\ghidra"
 ```
 
+If you want a different persistent workspace root:
+
+```powershell
+.\install-to-codex.ps1 -WorkspaceRoot "D:\reverse-data\workspaces"
+```
+
 ## What the script does
 
 - validates that `dist/index.js` exists
 - registers the MCP server with Codex
 - updates `~/.codex/config.toml`
+- writes `WORKSPACE_ROOT` so workspaces do not depend on the current repo path
 - writes `GHIDRA_PATH` and `GHIDRA_INSTALL_DIR` when a Ghidra path is provided
 
 ## Manual configuration example
@@ -41,7 +58,7 @@ cwd = "E:/path/to/repo"
 startup_timeout_sec = 30
 tool_timeout_sec = 300
 enabled = true
-env = { GHIDRA_PATH = "C:/tools/ghidra", GHIDRA_INSTALL_DIR = "C:/tools/ghidra" }
+env = { WORKSPACE_ROOT = "C:/Users/<you>/.windows-exe-decompiler-mcp-server/workspaces", GHIDRA_PATH = "C:/tools/ghidra", GHIDRA_INSTALL_DIR = "C:/tools/ghidra" }
 ```
 
 ## Verify

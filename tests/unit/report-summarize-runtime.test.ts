@@ -276,6 +276,30 @@ describe('report.summarize runtime evidence integration', () => {
           plugin_binary: { likely: true, confidence: 0.69, evidence: ['export:RunPlugin'] },
           driver_binary: { likely: false, confidence: 0.05, evidence: [] },
         },
+        export_dispatch_profile: {
+          command_like_exports: ['RunPlugin'],
+          callback_like_exports: [],
+          registration_exports: ['DllRegisterServer'],
+          ordinal_only_exports: 0,
+          likely_dispatch_model: 'com_registration_and_class_factory',
+          confidence: 0.73,
+        },
+        com_profile: {
+          clsid_strings: [],
+          progid_strings: ['Acme.Plugin'],
+          interface_hints: ['IClassFactory'],
+          registration_strings: ['InprocServer32'],
+          class_factory_exports: ['DllRegisterServer'],
+          confidence: 0.81,
+        },
+        host_interaction_profile: {
+          likely_hosted: true,
+          host_hints: ['Plugin host extension'],
+          callback_exports: [],
+          callback_strings: [],
+          service_hooks: [],
+          confidence: 0.6,
+        },
         analysis_priorities: ['trace_export_surface_first', 'trace_com_activation_and_class_factory_flow'],
         strings_considered: 10,
       },
@@ -296,6 +320,109 @@ describe('report.summarize runtime evidence integration', () => {
     expect(data.summary).toContain('Binary role profile suggests dll')
     expect(data.evidence.some((item: string) => item.includes('binary_profile_priority'))).toBe(true)
     expect(data.recommendation).toContain('trace_export_surface_first')
+  })
+
+  test('should attach rust recovery profile and compiler artifacts to report summary output', async () => {
+    const sampleId = 'sha256:' + 'c'.repeat(64)
+    database.insertSample({
+      id: sampleId,
+      sha256: 'c'.repeat(64),
+      md5: 'c'.repeat(32),
+      size: 8192,
+      file_type: 'PE32+ executable',
+      created_at: new Date().toISOString(),
+      source: 'unit-test',
+    })
+
+    const triageHandler = async (_args: ToolArgs): Promise<WorkerResult> => ({
+      ok: true,
+      data: {
+        summary: 'Static triage suggests a command-driven PE utility.',
+        confidence: 0.68,
+        threat_level: 'clean',
+        iocs: {
+          suspicious_imports: [],
+          suspicious_strings: [],
+          yara_matches: [],
+        },
+        evidence: ['Static hint.'],
+        recommendation: 'Review code paths.',
+        inference: {
+          classification: 'unknown',
+          hypotheses: ['The binary may be a utility framework.'],
+          false_positive_risks: ['Static evidence alone is ambiguous.'],
+          tooling_assessment: {
+            help_text_detected: false,
+            cli_surface_detected: true,
+            framework_hints: [],
+            toolchain_markers: [],
+          },
+        },
+      },
+    })
+    const rustBinaryAnalyzeHandler = async (_args: ToolArgs): Promise<WorkerResult> => ({
+      ok: true,
+      data: {
+        sample_id: sampleId,
+        suspected_rust: true,
+        confidence: 0.87,
+        primary_runtime: 'rust',
+        runtime_hints: ['rust', 'msvc'],
+        cargo_paths: ['cargo\\registry\\src\\tokio-1.0.0\\src\\runtime'],
+        rust_markers: ['rust_panic'],
+        async_runtime_markers: ['tokio'],
+        panic_markers: ['panic'],
+        crate_hints: ['tokio', 'goblin'],
+        library_profile: {
+          ecosystems: ['rust'],
+          top_crates: ['tokio', 'goblin'],
+          notable_libraries: ['tokio', 'goblin'],
+          evidence: ['cargo registry path'],
+        },
+        binary_profile: undefined,
+        recovered_function_count: 42,
+        recovered_function_strategy: ['pdata_runtime_function'],
+        recovered_symbol_count: 8,
+        recovered_symbol_preview: [
+          {
+            address: '0x140001000',
+            recovered_name: 'rust_entry_point_00001000',
+            name_strategy: 'rust_entry_point',
+            confidence: 0.88,
+          },
+        ],
+        components: {
+          runtime_detect: { ok: true, warning_count: 0, error_count: 0 },
+          strings_extract: { ok: true, warning_count: 0, error_count: 0 },
+          smart_recover: { ok: true, warning_count: 0, error_count: 0 },
+          symbols_recover: { ok: true, warning_count: 0, error_count: 0 },
+          binary_role_profile: { ok: true, warning_count: 0, error_count: 0 },
+        },
+        importable_with_code_functions_define: true,
+        evidence: ['Recovered function boundaries from .pdata.'],
+        analysis_priorities: ['feed_recovered_boundaries_into_code.functions.define'],
+        next_steps: ['Use code.functions.define to materialize the recovered index.'],
+      },
+    })
+
+    const handler = createReportSummarizeHandler(workspaceManager, database, cacheManager, {
+      triageHandler,
+      rustBinaryAnalyzeHandler,
+    })
+    const result = await handler({
+      sample_id: sampleId,
+      mode: 'triage',
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.rust_profile.suspected_rust).toBe(true)
+    expect(data.summary).toContain('Rust-focused analysis suggests a Rust-oriented binary')
+    expect(data.iocs.compiler_artifacts.cargo_paths).toContain('cargo\\registry\\src\\tokio-1.0.0\\src\\runtime')
+    expect(data.iocs.compiler_artifacts.rust_markers).toContain('rust_panic')
+    expect(data.iocs.compiler_artifacts.library_profile.top_crates).toContain('tokio')
+    expect(data.evidence.some((item: string) => item.includes('rust_analysis_priority'))).toBe(true)
+    expect(data.recommendation).toContain('feed_recovered_boundaries_into_code.functions.define')
   })
 
   test('should return runtime-evidence fallback when triage fails', async () => {

@@ -171,12 +171,29 @@ Most MCP clients can start this server with:
 This repository already includes local install scripts:
 
 - Codex: [`install-to-codex.ps1`](./install-to-codex.ps1)
+- Claude Code: [`install-to-claude.ps1`](./install-to-claude.ps1)
 - GitHub Copilot: [`install-to-copilot.ps1`](./install-to-copilot.ps1)
 
 Related docs:
 
 - [`CODEX_INSTALLATION.md`](./CODEX_INSTALLATION.md)
 - [`COPILOT_INSTALLATION.md`](./COPILOT_INSTALLATION.md)
+- [`CLAUDE_INSTALLATION.md`](./CLAUDE_INSTALLATION.md)
+
+By default, the server now stores persistent sample workspaces under the user
+profile instead of `./workspaces`:
+
+- Windows: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+
+The same user-level app root is also used for:
+
+- SQLite database: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/data/database.db`
+- File cache: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/cache`
+- Audit log: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/audit.log`
+
+You can still override these with environment variables or a user config file at:
+
+- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/config.json`
 
 ## Sample ingest note
 
