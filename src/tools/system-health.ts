@@ -16,6 +16,16 @@ import type { CacheManager } from '../cache-manager.js'
 import { checkGhidraHealth, type GhidraHealthStatus } from '../ghidra-config.js'
 import { resolvePackagePath } from '../runtime-paths.js'
 import { lookupCachedResult } from './cache-observability.js'
+import {
+  RequiredUserInputSchema,
+  SetupActionSchema,
+  buildBaselinePythonSetupActions,
+  buildGhidraRequiredUserInputs,
+  buildGhidraSetupActions,
+  buildPyGhidraSetupActions,
+  mergeRequiredUserInputs,
+  mergeSetupActions,
+} from '../setup-guidance.js'
 
 const TOOL_NAME = 'system.health'
 
@@ -77,6 +87,8 @@ export const SystemHealthOutputSchema = z.object({
       }),
       cache_observability: CacheObservabilitySchema,
       recommendations: z.array(z.string()),
+      setup_actions: z.array(SetupActionSchema),
+      required_user_inputs: z.array(RequiredUserInputSchema),
     })
     .optional(),
   warnings: z.array(z.string()).optional(),
@@ -260,6 +272,8 @@ export function createSystemHealthHandler(
 
     try {
       const recommendations: string[] = []
+      let setupActions = [] as z.infer<typeof SetupActionSchema>[]
+      let requiredUserInputs = [] as z.infer<typeof RequiredUserInputSchema>[]
       const warnings: string[] = []
 
       const workspaceRoot = workspaceManager.getWorkspaceRoot()
@@ -321,9 +335,15 @@ export function createSystemHealthHandler(
             recommendations.push(
               'Install pyghidra in the active Python environment to improve script compatibility.'
             )
+            setupActions = mergeSetupActions(setupActions, buildPyGhidraSetupActions())
           }
           if (!ghidraStatus.ok) {
             recommendations.push('Fix Ghidra install path or launch check before decompiler workloads.')
+            setupActions = mergeSetupActions(setupActions, buildGhidraSetupActions())
+            requiredUserInputs = mergeRequiredUserInputs(
+              requiredUserInputs,
+              buildGhidraRequiredUserInputs()
+            )
           }
         } catch (error) {
           ghidraComponent = {
@@ -332,6 +352,15 @@ export function createSystemHealthHandler(
             error: normalizeError(error),
           }
           recommendations.push('Investigate ghidra.health probe failure.')
+          setupActions = mergeSetupActions(
+            setupActions,
+            buildGhidraSetupActions(),
+            buildPyGhidraSetupActions()
+          )
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            buildGhidraRequiredUserInputs()
+          )
         }
       }
 
@@ -359,6 +388,7 @@ export function createSystemHealthHandler(
             recommendations.push(
               'Install/repair Python dependencies (yara-python, flare-floss, yara rules) for static analysis stability.'
             )
+            setupActions = mergeSetupActions(setupActions, buildBaselinePythonSetupActions())
           }
         } catch (error) {
           staticWorkerComponent = {
@@ -367,6 +397,7 @@ export function createSystemHealthHandler(
             error: normalizeError(error),
           }
           recommendations.push('Fix Python runtime or static worker startup to avoid analysis outages.')
+          setupActions = mergeSetupActions(setupActions, buildBaselinePythonSetupActions())
         }
       }
 
@@ -506,6 +537,8 @@ export function createSystemHealthHandler(
           },
           cache_observability: cacheObservability,
           recommendations,
+          setup_actions: setupActions,
+          required_user_inputs: requiredUserInputs,
         },
         warnings: warnings.length > 0 ? warnings : undefined,
         metrics: {

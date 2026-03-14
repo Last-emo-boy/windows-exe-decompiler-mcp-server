@@ -412,4 +412,74 @@ describe('workflow.function_explanation_review tool', () => {
       })
     )
   })
+
+  test('should surface setup guidance when explanation export refresh fails due to missing Ghidra configuration', async () => {
+    await setupSample('sha256:' + 'e'.repeat(64), 'e')
+
+    const explainReviewHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          review_status: 'sampled_and_applied',
+          prompt_name: 'reverse.function_explanation_review',
+          client: {
+            name: 'generic-mcp-client',
+            version: '1.0.0',
+            sampling_available: true,
+          },
+          prepare: {
+            prepared_count: 1,
+            artifact_id: 'artifact-prepare',
+          },
+          sampling: {
+            attempted: true,
+            model: 'gpt-5',
+            stop_reason: 'endTurn',
+            parsed_explanation_count: 1,
+          },
+          apply: {
+            attempted: true,
+            accepted_count: 1,
+            rejected_count: 0,
+            artifact_id: 'artifact-apply',
+          },
+          confidence_policy: {
+            calibrated: false,
+            explanation_scores_are_heuristic: true,
+            meaning: 'heuristic',
+          },
+          next_steps: [],
+        },
+      })
+
+    const reconstructWorkflowHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: false,
+        errors: ['Ghidra analyzeHeadless path is missing'],
+      })
+
+    const handler = createFunctionExplanationReviewWorkflowHandler(
+      workspaceManager,
+      database,
+      cacheManager,
+      undefined,
+      {
+        explainReviewHandler,
+        reconstructWorkflowHandler,
+      }
+    )
+
+    const result = await handler({
+      sample_id: 'sha256:' + 'e'.repeat(64),
+      rerun_export: true,
+    })
+
+    expect(result.ok).toBe(false)
+    expect((result.setup_actions || []).map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect((result.required_user_inputs || []).map((item: any) => item.key)).toContain(
+      'ghidra_install_dir'
+    )
+  })
 })

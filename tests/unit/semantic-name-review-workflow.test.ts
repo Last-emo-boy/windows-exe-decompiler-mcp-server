@@ -611,4 +611,82 @@ describe('workflow.semantic_name_review tool', () => {
     expect(data.export.notes[0]).toContain('skipped')
     expect(reconstructWorkflowHandler).not.toHaveBeenCalled()
   })
+
+  test('should surface setup guidance when export refresh fails due to missing Ghidra configuration', async () => {
+    await setupSample('sha256:' + 'e'.repeat(64), 'e')
+    const renameReviewHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          review_status: 'sampled_and_applied',
+          prompt_name: 'reverse.semantic_name_review',
+          client: {
+            name: 'generic-mcp-client',
+            version: '1.0.0',
+            sampling_available: true,
+          },
+          prepare: {
+            prepared_count: 1,
+            unresolved_count: 1,
+            include_resolved: false,
+            artifact_id: 'artifact-prepare',
+          },
+          sampling: {
+            attempted: true,
+            model: 'gpt-5',
+            stop_reason: 'endTurn',
+            parsed_suggestion_count: 1,
+          },
+          apply: {
+            attempted: true,
+            accepted_count: 1,
+            rejected_count: 0,
+            artifact_id: 'artifact-apply',
+          },
+          confidence_policy: {
+            calibrated: false,
+            rule_priority_over_llm: true,
+            llm_acceptance_threshold: 0.62,
+            meaning: 'Rule-based names win unless an LLM suggestion exceeds the acceptance threshold.',
+          },
+          reconstruct: {
+            attempted: true,
+            reconstructed_count: 1,
+            llm_or_hybrid_count: 1,
+            functions: [],
+          },
+          next_steps: [],
+        },
+      })
+
+    const reconstructWorkflowHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: false,
+        errors: ['GHIDRA_PATH is not configured'],
+      })
+
+    const handler = createSemanticNameReviewWorkflowHandler(
+      workspaceManager,
+      database,
+      cacheManager,
+      undefined,
+      {
+        renameReviewHandler,
+        reconstructWorkflowHandler,
+      }
+    )
+
+    const result = await handler({
+      sample_id: 'sha256:' + 'e'.repeat(64),
+      rerun_export: true,
+    })
+
+    expect(result.ok).toBe(false)
+    expect((result.setup_actions || []).map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect((result.required_user_inputs || []).map((item: any) => item.key)).toContain(
+      'ghidra_install_dir'
+    )
+  })
 })

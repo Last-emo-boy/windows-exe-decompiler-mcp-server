@@ -110,10 +110,15 @@ describe('report.summarize runtime evidence integration', () => {
               purpose: 'process_operation_plan',
               source: 'frida',
               confidence: 0.91,
+              base_address: '0x1000',
+              size: 512,
+              protection: 'read_write_plan',
+              module_name: 'akasha.exe',
+              segment_name: '.text',
               indicators: ['WriteProcessMemory', 'ResumeThread'],
             },
           ],
-          modules: ['kernel32.dll'],
+          modules: ['kernel32.dll', 'akasha.exe'],
           strings: ['remote thread'],
           stages: ['prepare_remote_process_access', 'resolve_dynamic_apis'],
           risk_hints: ['Process-memory manipulation APIs were observed in runtime evidence.'],
@@ -193,6 +198,10 @@ describe('report.summarize runtime evidence integration', () => {
     expect(data.threat_level).toBe('suspicious')
     expect(data.iocs.high_value_iocs.suspicious_apis).toContain('WriteProcessMemory')
     expect(data.evidence.some((item: string) => item.includes('Imported runtime trace observed'))).toBe(true)
+    expect(data.evidence).toContain('Runtime protections: read_write_plan.')
+    expect(data.evidence).toContain('Runtime region owners: akasha.exe.')
+    expect(data.evidence).toContain('Runtime observed modules: kernel32.dll, akasha.exe.')
+    expect(data.evidence).toContain('Runtime segment names: .text.')
     expect(data.evidence_lineage.layers.some((item: any) => item.layer === 'static_only')).toBe(true)
     expect(data.evidence_lineage.layers.some((item: any) => item.layer === 'executed_trace')).toBe(true)
     expect(data.evidence_lineage.latest_runtime_artifact_at).toBeTruthy()
@@ -284,18 +293,21 @@ describe('report.summarize runtime evidence integration', () => {
           likely_dispatch_model: 'com_registration_and_class_factory',
           confidence: 0.73,
         },
+        lifecycle_surface: ['DllMain', 'DLL_PROCESS_ATTACH'],
         com_profile: {
           clsid_strings: [],
           progid_strings: ['Acme.Plugin'],
           interface_hints: ['IClassFactory'],
           registration_strings: ['InprocServer32'],
           class_factory_exports: ['DllRegisterServer'],
+          class_factory_surface: ['DllGetClassObject', 'IClassFactory::CreateInstance'],
           confidence: 0.81,
         },
         host_interaction_profile: {
           likely_hosted: true,
           host_hints: ['Plugin host extension'],
           callback_exports: [],
+          callback_surface: ['InitializePlugin'],
           callback_strings: [],
           service_hooks: [],
           confidence: 0.6,
@@ -318,7 +330,15 @@ describe('report.summarize runtime evidence integration', () => {
     const data = result.data as any
     expect(data.binary_profile.binary_role).toBe('dll')
     expect(data.summary).toContain('Binary role profile suggests dll')
+    expect(data.summary).toContain('registration_exports=DllRegisterServer')
+    expect(data.summary).toContain('dll_lifecycle=DllMain, DLL_PROCESS_ATTACH')
+    expect(data.summary).toContain('class_factory_exports=DllRegisterServer')
+    expect(data.summary).toContain('class_factory_surface=DllGetClassObject, IClassFactory::CreateInstance')
+    expect(data.summary).toContain('callback_surface=InitializePlugin')
+    expect(data.summary).toContain('host_hints=Plugin host extension')
     expect(data.evidence.some((item: string) => item.includes('binary_profile_priority'))).toBe(true)
+    expect(data.evidence.some((item: string) => item.includes('binary_profile_surface: class_factory_export=DllRegisterServer'))).toBe(true)
+    expect(data.evidence.some((item: string) => item.includes('binary_profile_surface: dll_lifecycle=DllMain'))).toBe(true)
     expect(data.recommendation).toContain('trace_export_surface_first')
   })
 

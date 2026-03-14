@@ -19,6 +19,15 @@ import {
   parseGhidraAnalysisMetadata,
 } from '../ghidra-analysis-status.js'
 import { DecompilerWorker } from '../decompiler-worker.js'
+import {
+  RequiredUserInputSchema,
+  SetupActionSchema,
+  buildGhidraRequiredUserInputs,
+  buildGhidraSetupActions,
+  buildPyGhidraSetupActions,
+  mergeRequiredUserInputs,
+  mergeSetupActions,
+} from '../setup-guidance.js'
 
 export const ghidraHealthInputSchema = z.object({
   timeout_ms: z
@@ -49,11 +58,28 @@ export const ghidraHealthInputSchema = z.object({
 
 export type GhidraHealthInput = z.infer<typeof ghidraHealthInputSchema>
 
+export const ghidraHealthOutputSchema = z.object({
+  ok: z.boolean(),
+  data: z
+    .object({
+      environment: z.any(),
+      downstream: z.record(z.any()).optional(),
+      reaped_persisted_analysis_ids: z.array(z.string()),
+      reaped_persisted_analysis_count: z.number().int().nonnegative(),
+      setup_actions: z.array(SetupActionSchema),
+      required_user_inputs: z.array(RequiredUserInputSchema),
+    })
+    .optional(),
+  errors: z.array(z.string()).optional(),
+  warnings: z.array(z.string()).optional(),
+})
+
 export const ghidraHealthToolDefinition: ToolDefinition = {
   name: 'ghidra.health',
   description:
     'Run a Ghidra environment health check plus optional end-to-end downstream probes using a real analyzed sample/project.',
   inputSchema: ghidraHealthInputSchema,
+  outputSchema: ghidraHealthOutputSchema,
 }
 
 interface GhidraHealthDependencies {
@@ -128,6 +154,19 @@ export function createGhidraHealthHandler(
       const result = runHealthCheck(input.timeout_ms)
       const warnings = [...result.warnings]
       const errors = [...result.errors]
+      let setupActions = [] as z.infer<typeof SetupActionSchema>[]
+      let requiredUserInputs = [] as z.infer<typeof RequiredUserInputSchema>[]
+
+      if (!result.ok) {
+        setupActions = mergeSetupActions(setupActions, buildGhidraSetupActions())
+        requiredUserInputs = mergeRequiredUserInputs(
+          requiredUserInputs,
+          buildGhidraRequiredUserInputs()
+        )
+      }
+      if (result.checks?.pyghidra_available === false) {
+        setupActions = mergeSetupActions(setupActions, buildPyGhidraSetupActions())
+      }
 
       let reapedAnalyses: string[] = []
       if (database && typeof input.stale_running_ms === 'number') {
@@ -269,6 +308,8 @@ export function createGhidraHealthHandler(
             downstream,
             reaped_persisted_analysis_ids: reapedAnalyses,
             reaped_persisted_analysis_count: reapedAnalyses.length,
+            setup_actions: setupActions,
+            required_user_inputs: requiredUserInputs,
           },
           errors: errors.length > 0 ? errors : undefined,
           warnings: warnings.length > 0 ? warnings : undefined,

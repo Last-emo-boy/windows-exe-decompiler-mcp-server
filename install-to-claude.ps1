@@ -399,11 +399,29 @@ if ($null -eq $claudeCommand) {
     exit 0
 }
 
-Push-Location $projectRootFull
+$verifyLocation = $projectRootFull
+if ($Scope -eq "user") {
+    $verifyLocation = $env:USERPROFILE
+}
+
+Push-Location $verifyLocation
 try {
     & $claudeCommand.Source mcp get $ServerName
     if ($LASTEXITCODE -ne 0) {
         throw "Claude could not resolve MCP server '$ServerName' after writing the config."
+    }
+
+    if ($Scope -eq "user") {
+        Push-Location $projectRootFull
+        try {
+            $localOverride = & $claudeCommand.Source mcp get $ServerName 2>$null
+            if ($LASTEXITCODE -eq 0 -and ($localOverride -join "`n") -match "Scope:\s+Local config") {
+                Write-Host ""
+                Write-Host "Note: this repository also has a local Claude MCP registration. Inside this repo, Claude will prefer the local scope over the user scope." -ForegroundColor Yellow
+            }
+        } finally {
+            Pop-Location
+        }
     }
 
     Write-Host ""

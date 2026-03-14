@@ -143,6 +143,8 @@ describe('system.health tool', () => {
     expect(data.components.ghidra.status).toBe('degraded')
     expect(Array.isArray(data.recommendations)).toBe(true)
     expect(data.recommendations.length).toBeGreaterThan(0)
+    expect(data.setup_actions.map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect(data.required_user_inputs.map((item: any) => item.key)).toContain('ghidra_install_dir')
   })
 
   test('should return unhealthy when essential component fails', async () => {
@@ -179,6 +181,7 @@ describe('system.health tool', () => {
     expect(data.overall_status).toBe('degraded')
     expect(data.components.static_worker.status).toBe('degraded')
     expect(data.components.ghidra.status).toBe('skipped')
+    expect(data.setup_actions.map((item: any) => item.id)).toContain('install_python_requirements')
   })
 
   test('should report cache sample-state consistency when sample_id is provided', async () => {

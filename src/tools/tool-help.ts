@@ -189,6 +189,24 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
     }
   }
 
+  if (toolName === 'dll.export.profile') {
+    if (path === 'sample_id') {
+      return 'Use this when you want a DLL-first view of exports, callback surfaces, DllMain lifecycle hints, and host/plugin style invocation patterns.'
+    }
+    if (path === 'max_exports') {
+      return 'Increase this for DLLs with broad export surfaces, command dispatch tables, or heavy use of forwarded exports.'
+    }
+  }
+
+  if (toolName === 'com.role.profile') {
+    if (path === 'sample_id') {
+      return 'Use this when a PE sample looks like a COM server or exposes registration/class-factory style exports.'
+    }
+    if (path === 'max_strings') {
+      return 'Increase this when CLSID, ProgID, InprocServer32, or interface strings are sparse and you need stronger COM confidence.'
+    }
+  }
+
   if (toolName === 'ghidra.analyze') {
     if (path === 'options.processor') {
       return 'Use this when you want analyzeHeadless to force a specific processor/language family. Prefer options.language_id when you already know the exact Ghidra language ID.'
@@ -261,6 +279,39 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
     }
   }
 
+  if (toolName === 'code.module.review.prepare') {
+    if (path === 'sample_id') {
+      return 'Use this when reconstruct already produces grouped modules and you want an external LLM to review module roles, summaries, and rewrite guidance.'
+    }
+    if (path === 'role_target') {
+      return 'Forward a binary-role hint such as dll_library, com_server, or native_rust_executable so module preparation keeps role-aware modules visible.'
+    }
+  }
+
+  if (toolName === 'code.module.review') {
+    if (path === 'role_focus_areas') {
+      return 'Useful for DLL/COM/plugin samples when you want module review to emphasize export dispatch, class factory, callback surface, or lifecycle modules.'
+    }
+  }
+
+  if (toolName === 'workflow.module_reconstruction_review') {
+    if (path === 'rerun_export') {
+      return 'When true, the workflow refreshes reconstruct/export after module reviews are applied so rewrite headers and reverse_notes.md reflect the new module guidance.'
+    }
+    if (path === 'export_path') {
+      return 'auto is usually correct. Override to native or dotnet only when you already know the reconstruction path that should be refreshed after module review.'
+    }
+  }
+
+  if (toolName === 'system.setup.guide') {
+    if (path === 'focus') {
+      return 'Use all for a first-run bootstrap guide, ghidra when you specifically need the install path/environment guidance, and dynamic when you only need runtime-analysis extras.'
+    }
+    if (path === 'include_optional') {
+      return 'When false, only required setup steps are returned. Leave true to include optional extras such as PyGhidra and dynamic-analysis components.'
+    }
+  }
+
   if (path === 'evidence_scope') {
     return 'Controls runtime evidence selection only. Use session for one runtime import/replay lineage, latest for the newest artifact window, all to aggregate historical runtime evidence.'
   }
@@ -284,6 +335,20 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
 
 function buildUsageNotes(definition: ToolDefinition): string[] {
   const notes: string[] = []
+  if (definition.name === 'system.setup.guide') {
+    notes.push(
+      'Use this before first-run or after a degraded health probe when the MCP client needs exact pip install commands and required user-supplied paths such as GHIDRA_PATH.'
+    )
+  }
+  if (
+    definition.name === 'dynamic.dependencies' ||
+    definition.name === 'system.health' ||
+    definition.name === 'ghidra.health'
+  ) {
+    notes.push(
+      'When the environment is degraded, inspect setup_actions and required_user_inputs before retrying. These fields are intended for MCP clients to present exact pip install commands and missing path inputs.'
+    )
+  }
   const inputFields = buildSchemaSummary(definition.inputSchema, definition.name).fields.map((item) => item.path)
 
   const hasEvidenceScope = inputFields.includes('evidence_scope')
@@ -348,6 +413,24 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     )
   }
 
+  if (definition.name === 'dll.export.profile') {
+    notes.push(
+      'Use this tool when a sample is DLL-like and you want a focused view of exports, forwarders, DllMain-style lifecycle hints, and plugin/host callback behavior.'
+    )
+    notes.push(
+      'Prefer this before workflow.reconstruct for DLLs, shell extensions, plugins, and command-dispatch libraries so later analysis is role-aware.'
+    )
+  }
+
+  if (definition.name === 'com.role.profile') {
+    notes.push(
+      'Use this tool when you suspect COM registration or class-factory behavior. It highlights CLSID, ProgID, registration strings, and DllGetClassObject-style exports.'
+    )
+    notes.push(
+      'Prefer this before reconstruct or semantic review on COM servers so naming and explanation passes start from activation-flow context instead of generic DLL assumptions.'
+    )
+  }
+
   if (definition.name === 'pe.pdata.extract') {
     notes.push(
       'Use this tool when Ghidra post-scripts fail or a Rust x64 sample reports zero functions. It parses PE unwind metadata directly and does not require successful Ghidra function indexing.'
@@ -393,6 +476,24 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     )
     notes.push(
       'Use this after ghidra.analyze returns zero functions or degraded function_index readiness. The output includes imported function previews and an optional ranked preview.'
+    )
+  }
+
+  if (definition.name === 'code.module.review.prepare') {
+    notes.push(
+      'Use this when grouped modules already exist and you want an external LLM to review module roles, summaries, and rewrite guidance instead of focusing on individual functions.'
+    )
+  }
+
+  if (definition.name === 'code.module.review') {
+    notes.push(
+      'This is the module-level analogue of code.function.explain.review. It uses MCP sampling when available and otherwise returns a prompt contract for any tool-calling LLM client.'
+    )
+  }
+
+  if (definition.name === 'workflow.module_reconstruction_review') {
+    notes.push(
+      'Use this high-level workflow when you want module review plus an optional reconstruct/export refresh in one MCP call.'
     )
   }
 

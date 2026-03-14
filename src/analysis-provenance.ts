@@ -3,6 +3,7 @@ import type { DynamicEvidenceScope, DynamicTraceSummary } from './dynamic-trace.
 import type {
   SemanticArtifactScope,
   SemanticFunctionExplanationIndex,
+  SemanticModuleReviewIndex,
   SemanticNameSuggestionIndex,
 } from './semantic-name-suggestion-artifacts.js'
 
@@ -21,6 +22,7 @@ export const AnalysisProvenanceSchema = z.object({
   runtime: ArtifactSelectionProvenanceSchema,
   semantic_names: ArtifactSelectionProvenanceSchema.optional(),
   semantic_explanations: ArtifactSelectionProvenanceSchema.optional(),
+  semantic_module_reviews: ArtifactSelectionProvenanceSchema.optional(),
 })
 
 type ArtifactSelectionProvenance = z.infer<typeof ArtifactSelectionProvenanceSchema>
@@ -71,10 +73,14 @@ export function buildRuntimeArtifactProvenance(
 }
 
 export function buildSemanticArtifactProvenance(
-  label: 'semantic naming artifacts' | 'semantic explanation artifacts',
+  label:
+    | 'semantic naming artifacts'
+    | 'semantic explanation artifacts'
+    | 'semantic module review artifacts',
   index:
     | SemanticNameSuggestionIndex
     | SemanticFunctionExplanationIndex
+    | SemanticModuleReviewIndex
     | null
     | undefined,
   scope: SemanticArtifactScope,

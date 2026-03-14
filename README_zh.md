@@ -1,12 +1,12 @@
 # Windows EXE Decompiler MCP Server
 
-英文版见 [`README.md`](./README.md)
+English version: [`README.md`](./README.md)
 
-这是一个面向 Windows 逆向分析的 MCP Server。它把 PE 画像、Ghidra 辅助分析、运行时证据导入、Rust/.NET 恢复、源码风格重建和报告生成统一暴露为 MCP 工具，供任意支持 tool calling 的 LLM 调用。
+这是一个面向 Windows 可执行文件、DLL、COM 组件和 .NET 程序的 MCP Server。它把 PE 初筛、Ghidra 辅助分析、运行时证据导入、Rust/.NET 恢复、源码风格重建，以及 LLM 参与的语义 review 暴露成统一的 MCP 工具，供任何支持 tool calling 的 LLM 调用。
 
-## 这个项目解决什么问题
+## 这个项目适合做什么
 
-这个项目的目标不是堆很多一次性的本地脚本，而是把逆向分析能力沉淀成可复用、可编排、可复盘的 MCP 能力层。
+它不是一堆一次性的本地脚本，而是一层可复用、可编排、可复盘的逆向分析能力。
 
 它适合用来：
 
@@ -27,12 +27,15 @@
 - `pe.imports.extract`
 - `pe.exports.extract`
 - `pe.pdata.extract`
+- `dll.export.profile`
+- `com.role.profile`
 - `strings.extract`
 - `strings.floss.decode`
 - `yara.scan`
 - `runtime.detect`
 - `packer.detect`
 - `binary.role.profile`
+- `system.setup.guide`
 
 ### Ghidra 与函数分析
 
@@ -83,12 +86,13 @@
 - `code.function.explain.prepare`
 - `code.function.explain.review`
 - `code.function.explain.apply`
+- `code.module.review.prepare`
+- `code.module.review`
+- `code.module.review.apply`
 - `code.reconstruct.plan`
 - `code.reconstruct.export`
 
 ## 高层 workflow
-
-这些是最适合作为 MCP 客户端主入口的高层编排工具。
 
 ### `workflow.triage`
 
@@ -100,16 +104,16 @@
 
 ### `workflow.reconstruct`
 
-这是当前最重要的高层重建入口。
-
-它可以：
+这是当前最重要的高层重建入口。它可以：
 
 - 执行 binary preflight
 - 识别 Rust 倾向样本
+- 识别 DLL 生命周期、导出分发、callback surface 和 COM 激活线索
 - 在 Ghidra 函数索引缺失或退化时自动恢复函数索引
 - 导出 native 或 .NET 的重建结果
 - 可选执行 build 验证和 harness 验证
-- 在结果中带上 runtime / semantic provenance 和 diff 信息
+- 把 runtime / semantic provenance 和 diff 一起带到结果中
+- 根据 DLL / COM / Rust 的角色画像自动调整导出策略
 
 ### `workflow.function_index_recover`
 
@@ -119,52 +123,56 @@
 2. `pe.symbols.recover`
 3. `code.functions.define`
 
-当 Ghidra 分析存在，但函数提取为空或退化时，优先走这条链。
+当 Ghidra 已分析但函数提取为空或退化时，优先走这条链。
 
 ### `workflow.semantic_name_review`
 
-给外部 LLM 做语义命名 review 的高层 workflow。可以准备证据、通过 MCP sampling 发起 naming review、应用结果，并可选刷新 reconstruct/export。
+给外部 LLM 做函数语义命名 review 的高层 workflow。它可以准备证据、通过 MCP sampling 发起命名 review、应用结果，并可选刷新 reconstruct/export。
 
 ### `workflow.function_explanation_review`
 
-给外部 LLM 做函数解释 review 的高层 workflow。可以准备证据、请求结构化解释、应用结果，并可选重新导出重建结果。
+给外部 LLM 做函数解释 review 的高层 workflow。它可以准备证据、请求结构化解释、应用结果，并可选重跑 reconstruct/export。
+
+### `workflow.module_reconstruction_review`
+
+给外部 LLM 做模块级重建 review 的高层 workflow。它可以准备模块证据、请求结构化模块摘要和改写建议、应用结果，并可选刷新 reconstruct/export。
 
 ## 通用恢复模型
 
 这个 Server 不假设 Ghidra 一定能正确提取函数。
 
-对于 Rust、Go、重优化 native 或其他困难样本，恢复链是：
+对于 Rust、Go、重优化 native 或其他困难样本，推荐恢复链是：
 
 1. `ghidra.analyze`
 2. 如果 Ghidra post-script 提取失败，则走 `pe.pdata.extract`
 3. 用 `code.functions.smart_recover` 恢复函数边界
-4. 用 `pe.symbols.recover` 恢复函数名线索
+4. 用 `pe.symbols.recover` 恢复函数命名线索
 5. 用 `code.functions.define` 导入函数索引
 6. 再继续使用 `code.functions.list`、`code.functions.rank`、`code.functions.reconstruct` 或 `workflow.reconstruct`
 
-也就是说，这个系统会把：
+也就是说，系统会把：
 
 - `function_index`
 - `decompile`
 - `cfg`
 
-明确区分成不同就绪状态，而不是混成一个“分析成功/失败”。
+拆成不同的能力状态，而不是混成单一的“分析成功/失败”。
 
 ## Evidence Scope 与 Semantic Scope
 
-多数高层工具现在都支持显式作用域控制，避免历史证据污染当前结果。
+多数高层工具支持显式作用域控制，避免历史证据污染当前结果。
 
 运行时证据作用域：
 
 - `evidence_scope=all`
 - `evidence_scope=latest`
-- `evidence_scope=session`，并配合 `evidence_session_tag`
+- `evidence_scope=session`，配合 `evidence_session_tag`
 
-语义命名 / 函数解释作用域：
+语义命名 / 函数解释 / 模块 review 作用域：
 
 - `semantic_scope=all`
 - `semantic_scope=latest`
-- `semantic_scope=session`，并配合 `semantic_session_tag`
+- `semantic_scope=session`，配合 `semantic_session_tag`
 
 也支持基线对比：
 
@@ -173,22 +181,58 @@
 - `compare_semantic_scope`
 - `compare_semantic_session_tag`
 
-这样 MCP 客户端不仅能问“当前结果是什么”，还可以问“和上一轮证据或语义 review 相比发生了什么变化”。
+这样 MCP 客户端不止能问“当前结果是什么”，还可以问“和上一轮证据或语义 review 相比变化了什么”。
 
-## 异步 job 模型
+## LLM 参与的 review 层
 
-以下长任务支持队列化执行和后台完成：
+当前已经支持三层结构化 review：
+
+- 函数命名 review
+- 函数解释 review
+- 模块重建 review
+
+统一流程是：
+
+1. 准备结构化证据包
+2. 在客户端支持 sampling 时发起受约束 review
+3. 把接受的结果写回稳定 semantic artifact
+4. 按显式 semantic scope 重跑 reconstruct/export/report
+
+## 异步 job 模式
+
+以下长任务支持排队执行和后台完成：
 
 - `workflow.deep_static`
 - `workflow.reconstruct`
 - `workflow.semantic_name_review`
 - `workflow.function_explanation_review`
+- `workflow.module_reconstruction_review`
 
 配套任务工具：
 
 - `task.status`
 - `task.cancel`
 - `task.sweep`
+
+## 环境 bootstrap 与安装引导
+
+如果用户一开始没有配 Python 依赖、动态分析依赖或 Ghidra，可以使用：
+
+- `system.health`
+- `dynamic.dependencies`
+- `ghidra.health`
+- `system.setup.guide`
+
+这些工具会返回结构化的：
+
+- `setup_actions`
+- `required_user_inputs`
+
+方便 MCP 客户端显式要求用户执行：
+
+- `python -m pip install ...`
+- 提供 `GHIDRA_PATH` / `GHIDRA_INSTALL_DIR`
+- 安装 Speakeasy / Frida 等可选动态分析依赖
 
 ## 项目结构
 
@@ -208,7 +252,7 @@ docs/QUALITY_EVALUATION.md   回归与发布质量检查说明
 
 ## 环境要求
 
-必须：
+必需：
 
 - Node.js 18+
 - npm 9+
@@ -282,7 +326,7 @@ npm start
 - Claude Code: [`install-to-claude.ps1`](./install-to-claude.ps1)
 - GitHub Copilot: [`install-to-copilot.ps1`](./install-to-copilot.ps1)
 
-配套文档：
+相关文档：
 
 - [`CODEX_INSTALLATION.md`](./CODEX_INSTALLATION.md)
 - [`COPILOT_INSTALLATION.md`](./COPILOT_INSTALLATION.md)
@@ -301,9 +345,9 @@ npm start
 
 - `%USERPROFILE%/.windows-exe-decompiler-mcp-server/config.json`
 
-## 样本导入说明
+## 本地样本导入提示
 
-对于本地 IDE 客户端，例如 VS Code 或 Copilot，优先传本地路径：
+对于本地 IDE 客户端，优先传绝对路径：
 
 ```json
 {
@@ -314,72 +358,72 @@ npm start
 }
 ```
 
-只有当 MCP 客户端无法访问与 Server 相同的文件系统时，才使用 `bytes_b64`。
+只有当客户端和 Server 不共享同一文件系统时，才使用 `bytes_b64`。
 
 ## 发布到 npm
 
-已发布的 npm 包包含：
+发布包包含：
 
 - 编译后的 `dist/`
-- `bin/` 中的 CLI 入口
+- `bin/` CLI 入口
 - Python worker 与 YARA 规则
 - Ghidra 辅助脚本
 - .NET 元数据辅助源码
 - MCP 客户端安装脚本
 
-不会包含：
+不包含：
 
 - tests
-- 本地 workspaces
+- 本地 workspace
 - cache
 - 生成报告
-- 草稿和内部进度文档
+- 草稿文档和内部进度记录
 
 发布前检查：
 
-1. 更新 [`package.json`](./package.json) 版本号
-2. 执行 `npm run release:check`
-3. 检查 `npm run pack:dry-run`
-4. 执行 `npm login`
-5. 执行 `npm publish --access public`
+1. 更新 [`package.json`](./package.json) 中的版本号。
+2. 运行 `npm run release:check`。
+3. 检查 `npm run pack:dry-run`。
+4. 执行 `npm login`。
+5. 执行 `npm publish --access public`。
 
-仓库已包含 GitHub 自动化：
+仓库内置 GitHub 自动化：
 
 - [`ci.yml`](./.github/workflows/ci.yml)
 - [`publish-npm.yml`](./.github/workflows/publish-npm.yml)
 - [`dependabot.yml`](./.github/dependabot.yml)
 
-如果用 GitHub Actions 发布，请配置仓库 secret：
+如果要用 GitHub Actions 自动发布，请配置仓库 secret：
 
 - `NPM_TOKEN`
 
 ## 安全边界
 
-这个项目面向分析工作流，不面向真实恶意操作。
+这个项目用于分析工作流，不是实时恶意操作工具。
 
 当前强项：
 
-- PE 初筛和分类辅助
+- PE 初筛与角色画像
 - 逆向证据提取
 - IOC 与 ATT&CK 导出
 - 运行时证据导入与关联
-- 源码风格重建与 review
+- 源码风格重建与语义 review
 
 当前非目标：
 
 - 复杂 native 二进制的原始源码恢复
-- 仅靠静态证据做高置信家族归因
-- 对所有壳做全自动脱壳
-- 对重优化代码中的每个函数都做高置信语义恢复
+- 仅靠静态证据对家族归因给出绝对结论
+- 对所有壳实现全自动脱壳
+- 对所有重优化函数给出高置信的完整语义恢复
 
-## 贡献与发布
+## 贡献与发布流程
 
-- 贡献指南：[`CONTRIBUTING.md`](./CONTRIBUTING.md)
-- 质量评估说明：[`docs/QUALITY_EVALUATION.md`](./docs/QUALITY_EVALUATION.md)
-- 样本基准示例：[`examples/benchmark-corpus.example.json`](./examples/benchmark-corpus.example.json)
-- 安全策略：[`SECURITY.md`](./SECURITY.md)
+- Contributor guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Quality evaluation notes: [`docs/QUALITY_EVALUATION.md`](./docs/QUALITY_EVALUATION.md)
+- Example benchmark corpus: [`examples/benchmark-corpus.example.json`](./examples/benchmark-corpus.example.json)
+- Security policy: [`SECURITY.md`](./SECURITY.md)
 
-## 使用已发布包
+## 使用已发布的 npm 包
 
 ```json
 {
@@ -396,6 +440,6 @@ npm start
 }
 ```
 
-## 许可证
+## License
 
-本项目使用 MIT 许可证，见 [`LICENSE`](./LICENSE)。
+MIT 协议，见 [`LICENSE`](./LICENSE)。

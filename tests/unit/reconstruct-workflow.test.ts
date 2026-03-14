@@ -133,7 +133,7 @@ describe('workflow.reconstruct tool', () => {
     })
   }
 
-  function createBinaryProfilePayload(sampleId: string) {
+  function createBinaryProfilePayload(sampleId: string): any {
     return {
       sample_id: sampleId,
       original_filename: 'akasha.exe',
@@ -619,16 +619,29 @@ describe('workflow.reconstruct tool', () => {
     const data = result.data as any
     expect(data.selected_path).toBe('native')
     expect(data.stage_status.preflight_binary_profile).toBe('ok')
+    expect(data.stage_status.preflight_dll_profile).toBe('ok')
+    expect(data.stage_status.preflight_com_profile).toBe('ok')
     expect(data.stage_status.preflight_rust_profile).toBe('ok')
     expect(data.stage_status.function_index_recovery).toBe('ok')
     expect(data.preflight.binary_profile.binary_role).toBe('executable')
+    expect(data.preflight.dll_profile.likely_entry_model).toBe('dll_lifecycle_only')
+    expect(data.preflight.com_profile.activation_model).toBe('not_com_like')
     expect(data.preflight.rust_profile.suspected_rust).toBe(true)
     expect(data.preflight.function_index_recovery.imported_count).toBe(5061)
+    expect(data.preflight.role_strategy.target_role).toBe('native_rust_executable')
+    expect(data.preflight.role_strategy.export_tuning.topk).toBe(20)
     expect(data.notes.join(' ')).toContain('Rust preflight recovered 5061 function candidates')
     expect(data.notes.join(' ')).toContain('Function index recovery imported 5061 recovered functions')
+    expect(data.notes.join(' ')).toContain('Role-aware strategy selected target role native_rust_executable')
+    expect(data.notes.join(' ')).toContain('Role-aware export tuning: topk=20')
     expect(functionIndexRecoverHandler).toHaveBeenCalledTimes(1)
     expect(nativeExportHandler).toHaveBeenCalledWith(
       expect.objectContaining({
+        topk: 20,
+        module_limit: 9,
+        role_target: 'native_rust_executable',
+        role_focus_areas: expect.arrayContaining(['pdata_recovery_and_runtime_wrappers']),
+        role_priority_order: expect.arrayContaining(['recover_function_index_from_pdata']),
         reuse_cached: false,
       })
     )
@@ -710,6 +723,136 @@ describe('workflow.reconstruct tool', () => {
     expect(nativeExportHandler).toHaveBeenCalledWith(
       expect.objectContaining({
         reuse_cached: true,
+      })
+    )
+  })
+
+  test('should derive a COM-oriented role strategy for library-like samples', async () => {
+    const sampleId = 'sha256:' + 'c'.repeat(64)
+    await setupSample(sampleId, 'c')
+
+    const runtimeDetectHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          is_dotnet: false,
+          suspected: [{ runtime: 'native', confidence: 0.71, evidence: ['pe32+'] }],
+        },
+      })
+
+    const binaryProfile = createBinaryProfilePayload(sampleId)
+    binaryProfile.binary_role = 'dll'
+    binaryProfile.indicators.com_server = {
+      likely: true,
+      confidence: 0.87,
+      evidence: ['DllGetClassObject', 'CLSID'],
+    }
+    binaryProfile.com_profile = {
+      clsid_strings: ['{01234567-89AB-CDEF-0123-456789ABCDEF}'],
+      progid_strings: ['Acme.Operator'],
+      interface_hints: ['IUnknown', 'IDispatch'],
+      registration_strings: ['InprocServer32'],
+      class_factory_exports: ['DllGetClassObject'],
+      confidence: 0.92,
+    }
+    binaryProfile.export_dispatch_profile.registration_exports = ['DllRegisterServer', 'DllUnregisterServer']
+    binaryProfile.host_interaction_profile.likely_hosted = true
+    binaryProfile.host_interaction_profile.host_hints = ['Explorer shell extension']
+    binaryProfile.analysis_priorities = ['trace_com_activation_and_class_factory_flow']
+
+    const binaryRoleProfileHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: binaryProfile,
+      })
+
+    const nativeExportHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          export_root: 'reports/reconstruct/com-demo',
+          manifest_path: 'reports/reconstruct/com-demo/manifest.json',
+          gaps_path: 'reports/reconstruct/com-demo/gaps.md',
+          notes_path: 'reports/reconstruct/com-demo/reverse_notes.md',
+          build_validation: { status: 'skipped' },
+          harness_validation: { status: 'skipped' },
+          module_count: 3,
+          unresolved_count: 4,
+          binary_profile: {
+            binary_role: 'dll',
+            original_filename: 'comdemo.dll',
+            export_count: 3,
+            forwarder_count: 0,
+            notable_exports: ['DllGetClassObject', 'DllRegisterServer'],
+            packed: false,
+            packing_confidence: 0.03,
+            analysis_priorities: ['trace_com_activation_and_class_factory_flow'],
+          },
+        },
+      })
+
+    const handler = createReconstructWorkflowHandler(workspaceManager, database, cacheManager, {
+      runtimeDetectHandler,
+      binaryRoleProfileHandler,
+      nativeExportHandler,
+      functionIndexRecoverHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          sample_id: sampleId,
+          define_from: 'symbols_recover',
+          recovered_function_count: 12,
+          recovered_symbol_count: 10,
+          imported_count: 12,
+          function_index_status: 'ready',
+          decompile_status: 'missing',
+          cfg_status: 'missing',
+          recovery_strategy: ['exports'],
+          imported_function_preview: [],
+          recovered_symbol_preview: [],
+          next_steps: ['Review DllGetClassObject'],
+        },
+      }),
+      rustBinaryAnalyzeHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          ...createRustProfilePayload(sampleId),
+          suspected_rust: false,
+          confidence: 0.08,
+          crate_hints: [],
+          cargo_paths: [],
+          recovered_function_count: 0,
+          recovered_symbol_count: 0,
+          analysis_priorities: [],
+        },
+      }),
+    })
+
+    const result = await handler({
+      sample_id: sampleId,
+      include_preflight: true,
+      auto_recover_function_index: false,
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.preflight.com_profile.likely_com_server).toBe(true)
+    expect(data.preflight.role_strategy.target_role).toBe('com_server')
+    expect(data.preflight.role_strategy.focus_areas).toContain('class_factory_and_registration')
+    expect(data.preflight.role_strategy.export_tuning.topk).toBe(20)
+    expect(data.notes.join(' ')).toContain('COM preflight suggests activation model')
+    expect(nativeExportHandler).toHaveBeenCalledWith(
+      expect.objectContaining({
+        topk: 20,
+        module_limit: 10,
+        min_module_size: 1,
+        include_imports: true,
+        include_strings: true,
+        role_target: 'com_server',
+        role_focus_areas: expect.arrayContaining(['class_factory_and_registration']),
+        role_priority_order: expect.arrayContaining(['trace_com_activation_and_class_factory_flow']),
       })
     )
   })
@@ -1084,13 +1227,13 @@ describe('workflow.reconstruct tool', () => {
         .fn<(args: ToolArgs) => Promise<WorkerResult>>()
         .mockResolvedValue({
           ok: false,
-          errors: ['native failed'],
+          errors: ['Ghidra install path missing for native export'],
         }),
       dotnetExportHandler: jest
         .fn<(args: ToolArgs) => Promise<WorkerResult>>()
         .mockResolvedValue({
           ok: false,
-          errors: ['dotnet failed'],
+          errors: ['fallback export skipped after Ghidra failure'],
         }),
     })
 
@@ -1103,5 +1246,9 @@ describe('workflow.reconstruct tool', () => {
 
     expect(result.ok).toBe(false)
     expect(result.errors?.[0]).toContain('allow_partial=false')
+    expect((result.setup_actions || []).map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect((result.required_user_inputs || []).map((item: any) => item.key)).toContain(
+      'ghidra_install_dir'
+    )
   })
 })

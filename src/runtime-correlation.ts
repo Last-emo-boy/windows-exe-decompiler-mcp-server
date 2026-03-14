@@ -22,6 +22,11 @@ export interface RuntimeCorrelation {
   artifact_count?: number
   executed_artifact_count?: number
   matched_memory_regions?: string[]
+  matched_protections?: string[]
+  matched_address_ranges?: string[]
+  matched_region_owners?: string[]
+  matched_observed_modules?: string[]
+  matched_segment_names?: string[]
   suggested_modules?: string[]
   matched_by?: string[]
   provenance_layers?: string[]
@@ -179,6 +184,42 @@ export function deriveRuntimeStageCandidates(input: RuntimeCorrelationInput): st
     stages.add('scan_pe_layout')
   }
 
+  if (
+    behaviorTags.has('dll_lifecycle') ||
+    /\b(dllmain|dllregisterserver|dllunregisterserver|dllinstall|dllcanunloadnow|dll_process_attach|dll_thread_attach|disablethreadlibrarycalls)\b/i.test(
+      semanticCorpus
+    )
+  ) {
+    stages.add('dll_lifecycle')
+  }
+
+  if (
+    behaviorTags.has('com_activation') ||
+    /\b(cocreateinstance|queryinterface|registerclassobject|dllgetclassobject|iclassfactory|clsid_|progid|inprocserver32|localserver32)\b/i.test(
+      semanticCorpus
+    )
+  ) {
+    stages.add('com_activation')
+  }
+
+  if (
+    behaviorTags.has('export_dispatch') ||
+    /\b(export dispatch|forwarded export|ordinal|dispatch exported|dllcanunloadnow|dllgetclassobject)\b/i.test(
+      semanticCorpus
+    )
+  ) {
+    stages.add('export_dispatch')
+  }
+
+  if (
+    behaviorTags.has('plugin_callback') ||
+    /\b(callback|plugin|hook|event sink|notify|host extension|host interaction)\b/i.test(
+      semanticCorpus
+    )
+  ) {
+    stages.add('callback_surface')
+  }
+
   return Array.from(stages)
 }
 
@@ -198,9 +239,125 @@ function regionMatchersForStage(stage: string): RegExp[] {
       return [/registry/i, /key/i]
     case 'scan_pe_layout':
       return [/packer/i, /entropy/i, /section/i, /layout/i]
+    case 'dll_lifecycle':
+      return [/dll/i, /lifecycle/i, /attach/i, /detach/i, /module/i]
+    case 'com_activation':
+      return [/com/i, /class/i, /factory/i, /activation/i, /registration/i]
+    case 'export_dispatch':
+      return [/export/i, /dispatch/i, /ordinal/i, /forward/i]
+    case 'callback_surface':
+      return [/callback/i, /plugin/i, /hook/i, /notify/i, /host/i]
     default:
       return []
   }
+}
+
+function protectionMatchersForStage(stage: string): RegExp[] {
+  switch (stage) {
+    case 'resolve_dynamic_apis':
+      return [/image/i, /r-x/i, /execute/i]
+    case 'prepare_remote_process_access':
+      return [/read_write/i, /write/i, /execute/i, /rwx/i]
+    case 'anti_analysis_checks':
+    case 'check_execution_environment':
+      return [/read/i, /image/i]
+    case 'file_operations':
+      return [/file/i, /read_write/i, /container/i]
+    case 'registry_operations':
+    case 'stage_registry_state':
+      return [/read_write/i, /data/i]
+    case 'scan_pe_layout':
+      return [/image/i, /container/i, /read/i]
+    case 'dll_lifecycle':
+    case 'com_activation':
+    case 'export_dispatch':
+    case 'callback_surface':
+      return [/image/i, /read/i, /execute/i]
+    default:
+      return []
+  }
+}
+
+function ownerMatchersForStage(stage: string): RegExp[] {
+  switch (stage) {
+    case 'resolve_dynamic_apis':
+    case 'prepare_remote_process_access':
+      return [/kernel32/i, /kernelbase/i, /ntdll/i, /\.exe$/i, /\.dll$/i]
+    case 'anti_analysis_checks':
+    case 'check_execution_environment':
+      return [/kernel32/i, /kernelbase/i, /ntdll/i]
+    case 'file_operations':
+      return [/kernel32/i, /kernelbase/i, /shlwapi/i]
+    case 'registry_operations':
+    case 'stage_registry_state':
+      return [/advapi32/i]
+    case 'scan_pe_layout':
+      return [/\.exe$/i, /\.dll$/i]
+    case 'dll_lifecycle':
+      return [/\.dll$/i, /\.ocx$/i, /\.cpl$/i]
+    case 'com_activation':
+      return [/ole32/i, /oleaut32/i, /combase/i, /rpcrt4/i, /\.dll$/i]
+    case 'export_dispatch':
+      return [/\.dll$/i, /\.ocx$/i, /\.cpl$/i]
+    case 'callback_surface':
+      return [/plugin/i, /host/i, /extension/i, /addin/i, /\.dll$/i]
+    default:
+      return []
+  }
+}
+
+function segmentMatchersForStage(stage: string): RegExp[] {
+  switch (stage) {
+    case 'scan_pe_layout':
+      return [/\.pdata/i, /\.xdata/i, /\.text/i, /\.rsrc/i]
+    case 'dll_lifecycle':
+      return [/\.tls/i, /\.crt/i, /\.rdata/i, /init/i]
+    case 'com_activation':
+      return [/\.idata/i, /\.rdata/i, /class/i, /factory/i]
+    case 'export_dispatch':
+      return [/\.edata/i, /export/i, /dispatch/i]
+    case 'callback_surface':
+      return [/callback/i, /hook/i, /event/i, /notify/i]
+    case 'prepare_remote_process_access':
+      return [/\.text/i, /\.data/i]
+    default:
+      return []
+  }
+}
+
+function collectMatchedMetadataValues(
+  values: string[],
+  candidateStages: string[],
+  input: RuntimeCorrelationInput,
+  matchersForStage: (stage: string) => RegExp[],
+  fallbackMatcher?: (lowered: string, semanticCorpus: string) => boolean
+): string[] {
+  const semanticCorpus = buildSemanticCorpus(input)
+  const matched = new Set<string>()
+
+  for (const value of values) {
+    const lowered = value.toLowerCase()
+    for (const stage of candidateStages) {
+      if (matchersForStage(stage).some((matcher) => matcher.test(lowered))) {
+        matched.add(value)
+      }
+    }
+    if (fallbackMatcher?.(lowered, semanticCorpus)) {
+      matched.add(value)
+    }
+  }
+
+  return Array.from(matched).slice(0, 6)
+}
+
+function collectMatchedAddressRanges(
+  matchedMemoryRegions: string[],
+  dynamicEvidence: DynamicTraceSummary
+): string[] {
+  if (matchedMemoryRegions.length === 0) {
+    return []
+  }
+  return dedupe(dynamicEvidence.address_ranges || []).slice(0, Math.max(1, matchedMemoryRegions.length))
 }
 
 function collectMatchedMemoryRegions(
@@ -255,6 +412,37 @@ export function correlateFunctionWithRuntimeEvidence(
   const observedStages = new Set((dynamicEvidence.stages || []).map((item) => item.toLowerCase()))
   const matchedStages = candidateStages.filter((item) => observedStages.has(item.toLowerCase()))
   const matchedMemoryRegions = collectMatchedMemoryRegions(candidateStages, input, dynamicEvidence)
+  const matchedProtections = collectMatchedMetadataValues(
+    dynamicEvidence.protections || [],
+    candidateStages,
+    input,
+    protectionMatchersForStage,
+    (lowered, semanticCorpus) =>
+      semanticCorpus.includes('remote') && /(read_write|write|execute|rwx)/i.test(lowered)
+  )
+  const matchedRegionOwners = collectMatchedMetadataValues(
+    dynamicEvidence.region_owners || [],
+    candidateStages,
+    input,
+    ownerMatchersForStage,
+    (lowered, semanticCorpus) =>
+      semanticCorpus.includes('com') && /(ole32|oleaut32|combase|rpcrt4)/i.test(lowered)
+  )
+  const matchedObservedModules = collectMatchedMetadataValues(
+    dynamicEvidence.observed_modules || [],
+    candidateStages,
+    input,
+    ownerMatchersForStage,
+    (lowered, semanticCorpus) =>
+      semanticCorpus.includes('com') && /(ole32|oleaut32|combase|rpcrt4)/i.test(lowered)
+  )
+  const matchedSegmentNames = collectMatchedMetadataValues(
+    dynamicEvidence.segment_names || [],
+    candidateStages,
+    input,
+    segmentMatchersForStage
+  )
+  const matchedAddressRanges = collectMatchedAddressRanges(matchedMemoryRegions, dynamicEvidence)
   const evidenceSources = summarizeEvidenceSources(dynamicEvidence)
   const sourceNames = summarizeSourceNames(dynamicEvidence)
   const provenanceLayers = summarizeProvenanceLayers(dynamicEvidence)
@@ -266,7 +454,15 @@ export function correlateFunctionWithRuntimeEvidence(
     input.semanticSummary ? 'semantic_summary' : '',
   ])
 
-  if (matchedApis.length === 0 && matchedStages.length === 0 && matchedMemoryRegions.length === 0) {
+  if (
+    matchedApis.length === 0 &&
+    matchedStages.length === 0 &&
+    matchedMemoryRegions.length === 0 &&
+    matchedProtections.length === 0 &&
+    matchedRegionOwners.length === 0 &&
+    matchedObservedModules.length === 0 &&
+    matchedSegmentNames.length === 0
+  ) {
     return undefined
   }
 
@@ -282,6 +478,21 @@ export function correlateFunctionWithRuntimeEvidence(
   }
   if (matchedMemoryRegions.length > 0) {
     notes.push(`Runtime memory regions align with this function: ${matchedMemoryRegions.slice(0, 4).join(', ')}`)
+  }
+  if (matchedProtections.length > 0) {
+    notes.push(`Runtime protections align with this function: ${matchedProtections.slice(0, 4).join(', ')}`)
+  }
+  if (matchedRegionOwners.length > 0) {
+    notes.push(`Runtime region owners align with this function: ${matchedRegionOwners.slice(0, 4).join(', ')}`)
+  }
+  if (matchedObservedModules.length > 0) {
+    notes.push(`Runtime modules align with this function: ${matchedObservedModules.slice(0, 4).join(', ')}`)
+  }
+  if (matchedSegmentNames.length > 0) {
+    notes.push(`Runtime segments align with this function: ${matchedSegmentNames.slice(0, 4).join(', ')}`)
+  }
+  if (matchedAddressRanges.length > 0) {
+    notes.push(`Runtime address ranges associated with this function: ${matchedAddressRanges.slice(0, 3).join(', ')}`)
   }
   if (dynamicEvidence.executed) {
     notes.push('Correlation includes executed runtime evidence, not just static or memory-only hints.')
@@ -319,6 +530,22 @@ export function correlateFunctionWithRuntimeEvidence(
     ...(matchedMemoryRegions.some((item) => /network|socket|http|pipe|ipc/i.test(item))
       ? ['network_ops']
       : []),
+    ...(matchedRegionOwners.some((item) => /ole32|oleaut32|combase|rpcrt4/i.test(item)) ||
+    matchedObservedModules.some((item) => /ole32|oleaut32|combase|rpcrt4/i.test(item))
+      ? ['com_activation']
+      : []),
+    ...(matchedSegmentNames.some((item) => /\.edata|export|dispatch/i.test(item)) ||
+    matchedStages.some((item) => item.toLowerCase() === 'export_dispatch')
+      ? ['export_dispatch']
+      : []),
+    ...(matchedSegmentNames.some((item) => /\.tls|\.crt|init/i.test(item)) ||
+    matchedStages.some((item) => item.toLowerCase() === 'dll_lifecycle')
+      ? ['dll_lifecycle']
+      : []),
+    ...(matchedStages.some((item) => item.toLowerCase() === 'callback_surface') ||
+    matchedObservedModules.some((item) => /plugin|host|extension|addin/i.test(item))
+      ? ['callback_surface']
+      : []),
   ])
 
   if (suggestedModules.length > 0) {
@@ -330,7 +557,9 @@ export function correlateFunctionWithRuntimeEvidence(
       Math.min(0.24, dedupe(matchedApis).length * 0.08) +
       Math.min(0.16, dedupe(matchedStages).length * 0.06) +
       Math.min(0.12, highSignalMatches.length * 0.05) +
-      Math.min(0.1, matchedMemoryRegions.length * 0.04),
+      Math.min(0.1, matchedMemoryRegions.length * 0.04) +
+      Math.min(0.07, matchedProtections.length * 0.02) +
+      Math.min(0.07, (matchedRegionOwners.length + matchedObservedModules.length + matchedSegmentNames.length) * 0.015),
     0.45,
     0.97
   )
@@ -346,6 +575,11 @@ export function correlateFunctionWithRuntimeEvidence(
     artifact_count: dynamicEvidence.artifact_count,
     executed_artifact_count: dynamicEvidence.executed_artifact_count || 0,
     matched_memory_regions: matchedMemoryRegions,
+    matched_protections: matchedProtections,
+    matched_address_ranges: matchedAddressRanges,
+    matched_region_owners: matchedRegionOwners,
+    matched_observed_modules: matchedObservedModules,
+    matched_segment_names: matchedSegmentNames,
     suggested_modules: suggestedModules,
     matched_by: matchedBy,
     provenance_layers: provenanceLayers,
@@ -369,6 +603,14 @@ export function modulesSuggestedByRuntimeStages(stages: string[] = []): string[]
       modules.add('packer_analysis')
     } else if (stage === 'resolve_dynamic_apis') {
       modules.add('process_ops')
+    } else if (stage === 'dll_lifecycle') {
+      modules.add('dll_lifecycle')
+    } else if (stage === 'com_activation') {
+      modules.add('com_activation')
+    } else if (stage === 'export_dispatch') {
+      modules.add('export_dispatch')
+    } else if (stage === 'callback_surface') {
+      modules.add('callback_surface')
     }
   }
   return Array.from(modules)

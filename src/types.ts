@@ -130,6 +130,8 @@ export interface WorkerResult {
   data?: unknown
   errors?: string[]
   warnings?: string[]
+  setup_actions?: unknown[]
+  required_user_inputs?: unknown[]
   artifacts?: ArtifactRef[]
   metrics?: Record<string, unknown>
 }

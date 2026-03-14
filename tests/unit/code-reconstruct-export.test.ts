@@ -15,6 +15,7 @@ import {
 } from '../../src/tools/code-reconstruct-export.js'
 import {
   persistSemanticFunctionExplanationsArtifact,
+  persistSemanticModuleReviewsArtifact,
   persistSemanticNameSuggestionsArtifact,
 } from '../../src/semantic-name-suggestion-artifacts.js'
 
@@ -774,6 +775,184 @@ describe('code.reconstruct.export tool', () => {
     )
   })
 
+  test('should preserve DLL and COM role-aware modules even when they are smaller than min_module_size', async () => {
+    const sampleId = 'sha256:' + 'd'.repeat(64)
+    await setupSample(sampleId, 'd')
+
+    const reconstructFunctionsHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          functions: [
+            {
+              function: 'dll_entry_handler',
+              address: '0x500000',
+              confidence: 0.74,
+              gaps: [],
+              behavior_tags: [],
+              semantic_summary: 'Handles DLL process attach/detach and calls DisableThreadLibraryCalls during initialization.',
+              xref_signals: [
+                {
+                  api: 'DisableThreadLibraryCalls',
+                  provenance: 'static_named_call',
+                  confidence: 0.8,
+                  evidence: ['callee:DisableThreadLibraryCalls'],
+                },
+              ],
+              call_context: { callers: [], callees: [] },
+              runtime_context: {
+                corroborated_apis: ['DisableThreadLibraryCalls'],
+                corroborated_stages: ['dll_lifecycle'],
+                notes: ['Runtime segment hints indicate DLL attach/detach state.'],
+                confidence: 0.77,
+                executed: false,
+                matched_memory_regions: ['dll_lifecycle_state'],
+                matched_protections: ['r-x_image'],
+                matched_region_owners: ['sample.dll'],
+                matched_observed_modules: ['sample.dll'],
+                matched_segment_names: ['.tls'],
+                matched_address_ranges: ['0x500000-0x500180'],
+                suggested_modules: ['dll_lifecycle'],
+                matched_by: ['semantic_summary'],
+              },
+              source_like_snippet: 'int dll_entry_handler(void){return 0;}',
+              rank_reasons: [],
+            },
+            {
+              function: 'class_factory_entry',
+              address: '0x500100',
+              confidence: 0.81,
+              gaps: [],
+              behavior_tags: [],
+              semantic_summary: 'Implements DllGetClassObject and IClassFactory activation for InprocServer32 registration.',
+              xref_signals: [],
+              call_context: { callers: [], callees: [] },
+              runtime_context: {
+                corroborated_apis: ['CoCreateInstance'],
+                corroborated_stages: ['com_activation', 'export_dispatch'],
+                notes: ['Observed COM activation metadata in runtime import set.'],
+                confidence: 0.83,
+                executed: false,
+                matched_memory_regions: ['class_factory_surface'],
+                matched_protections: ['r-x_image'],
+                matched_region_owners: ['ole32.dll'],
+                matched_observed_modules: ['ole32.dll', 'sample.dll'],
+                matched_segment_names: ['.edata'],
+                matched_address_ranges: ['0x500100-0x5002a0'],
+                suggested_modules: ['com_activation', 'export_dispatch'],
+                matched_by: ['semantic_summary', 'string_hint'],
+              },
+              source_like_snippet: 'int class_factory_entry(void){return 1;}',
+              rank_reasons: ['string_context:DllGetClassObject'],
+            },
+            {
+              function: 'plugin_callback_entry',
+              address: '0x500200',
+              confidence: 0.69,
+              gaps: [],
+              behavior_tags: [],
+              semantic_summary: 'Registers plugin callbacks and notifies the host extension entrypoint.',
+              xref_signals: [],
+              call_context: { callers: [], callees: [] },
+              runtime_context: {
+                corroborated_apis: [],
+                corroborated_stages: ['callback_surface'],
+                notes: ['Observed plugin host callback strings.'],
+                confidence: 0.7,
+                executed: false,
+                matched_memory_regions: ['callback_surface'],
+                matched_protections: ['r-x_image'],
+                matched_region_owners: ['plugin_host.dll'],
+                matched_observed_modules: ['plugin_host.dll'],
+                matched_segment_names: ['callback_dispatch'],
+                matched_address_ranges: ['0x500200-0x500260'],
+                suggested_modules: ['callback_surface'],
+                matched_by: ['string_hint'],
+              },
+              source_like_snippet: 'int plugin_callback_entry(void){return 2;}',
+              rank_reasons: ['string_context:InitializePlugin'],
+            },
+          ],
+        },
+      })
+
+    const handler = createCodeReconstructExportHandler(
+      workspaceManager,
+      database,
+      cacheManager,
+      {
+        reconstructFunctionsHandler,
+        importsExtractHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            imports: {
+              'kernel32.dll': ['DisableThreadLibraryCalls'],
+              'ole32.dll': ['CoCreateInstance'],
+            },
+          },
+        }),
+        stringsExtractHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+          ok: true,
+          data: {
+            summary: {
+              top_high_value: [
+                { string: 'DllGetClassObject', categories: ['command'] },
+                { string: 'InprocServer32', categories: ['command'] },
+                { string: 'InitializePlugin callback', categories: ['command'] },
+              ],
+            },
+          },
+        }),
+        searchFunctions: jest.fn<(sampleId: string, options: any) => Promise<any>>().mockResolvedValue({
+          ok: true,
+          matches: [],
+          count: 0,
+        }) as any,
+        ...buildBinaryMetadataDependencies(),
+      }
+    )
+
+    const result = await handler({
+      sample_id: sampleId,
+      export_name: 'role_aware_dll_com_export',
+      min_module_size: 2,
+      validate_build: false,
+      run_harness: false,
+      role_target: 'com_server',
+      role_focus_areas: [
+        'class_factory_and_registration',
+        'host_callbacks_and_attach_detach',
+        'dll_entry_lifecycle',
+      ],
+      role_priority_order: [
+        'trace_com_activation_and_class_factory_flow',
+        'identify_host_callbacks_and_extension_contract',
+        'review_dllmain_lifecycle_and_attach_detach_side_effects',
+      ],
+      reuse_cached: false,
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.modules.some((module: any) => module.name === 'dll_lifecycle')).toBe(true)
+    expect(data.modules.some((module: any) => module.name === 'com_activation')).toBe(true)
+    expect(data.modules.some((module: any) => module.name === 'callback_surface')).toBe(true)
+
+    const comModule = data.modules.find((module: any) => module.name === 'com_activation')
+    expect(comModule.role_hint).toContain('COM activation')
+    expect(comModule.focus_matches).toContain('target:com_server')
+    expect(
+      comModule.focus_matches.some((item: string) => item.includes('class_factory_and_registration'))
+    ).toBe(true)
+    const rewrite = fs.readFileSync(path.join((await workspaceManager.getWorkspace(sampleId)).root, comModule.rewrite_path), 'utf-8')
+    expect(rewrite).toContain('COM Activation Surface')
+    expect(rewrite).toContain('role_focus: target:com_server')
+    expect(rewrite).toContain('prioritized_functions: class_factory_entry')
+    expect(rewrite).toContain('owners=ole32.dll')
+    expect(rewrite).toContain('segments=.edata')
+  })
+
   test('should emit semantic rewrite scaffolding for process and packer modules', async () => {
     const sampleId = 'sha256:' + '7'.repeat(64)
     await setupSample(sampleId, '7')
@@ -864,6 +1043,12 @@ describe('code.reconstruct.export tool', () => {
                   evidence: ['api:WriteProcessMemory/ReadProcessMemory'],
                 },
               ],
+              return_role: {
+                role: 'resolved_symbol_pointer',
+                inferred_type: 'void *',
+                confidence: 0.78,
+                evidence: ['api:GetProcAddress/LoadLibrary*'],
+              },
               state_roles: [
                 {
                   state_key: 'dynamic_api_table',
@@ -917,6 +1102,12 @@ describe('code.reconstruct.export tool', () => {
                   evidence: ['summary:packer_or_pe_layout_scan'],
                 },
               ],
+              return_role: {
+                role: 'heuristic_match_score',
+                inferred_type: 'int',
+                confidence: 0.66,
+                evidence: ['strings:packer/protector'],
+              },
               state_roles: [
                 {
                   state_key: 'packer_heuristics',
@@ -1060,6 +1251,7 @@ describe('code.reconstruct.export tool', () => {
     )
     expect(processRewrite).toContain('semantic_parameters: runtime_ctx stores recovered mutable state')
     expect(processRewrite).toContain('parameter_roles: string_arg_0=>target_process_selector<const char *>')
+    expect(processRewrite).toContain('return_role: resolved_symbol_pointer<void *>')
     expect(processRewrite).toContain('state_roles: dynamic_api_table=>Caches dynamically resolved imports or late-bound API pointers.')
     expect(processRewrite).toContain('struct_inference: remote_process_request=>AkRemoteProcessRequest')
     expect(processRewrite).toContain('regions=process_operation_plan')
@@ -1091,6 +1283,7 @@ describe('code.reconstruct.export tool', () => {
     expect(packerRewrite).toContain('static int scan_packer_signatures(AkPackerHeuristics *heuristics)')
     expect(packerRewrite).toContain('static int finalize_packer_assessment(const AkPackerHeuristics *heuristics)')
     expect(packerRewrite).toContain('parameter_roles: pointer_arg_0=>image_view<void *>')
+    expect(packerRewrite).toContain('return_role: heuristic_match_score<int>')
     expect(packerRewrite).toContain('state_roles: packer_heuristics=>Accumulates packer heuristics, matched signatures, and section-layout findings.')
     expect(packerRewrite).toContain('struct_inference: packer_scan_session=>AkPackerScanSession')
     expect(packerRewrite).toContain(
@@ -1607,6 +1800,112 @@ describe('code.reconstruct.export tool', () => {
     const processModule = data.modules.find((module: any) => module.name === 'process_ops')
     expect(processModule.functions[0].explanation_behavior).toBe('beta_behavior')
     expect(processModule.functions[0].explanation_summary).toContain('beta summary')
+  })
+
+  test('should propagate module review artifacts into rewrite headers and manifest output', async () => {
+    const sampleId = 'sha256:' + '8'.repeat(64)
+    await setupSample(sampleId, '8')
+
+    await persistSemanticModuleReviewsArtifact(workspaceManager, database, {
+      schema_version: 1,
+      sample_id: sampleId,
+      created_at: new Date().toISOString(),
+      session_tag: 'module-review-session',
+      client_name: 'claude-desktop',
+      model_name: 'generic-tool-calling-llm',
+      prepare_artifact_id: 'artifact-module-review-prepare',
+      reviews: [
+        {
+          module_name: 'process_ops',
+          refined_name: 'remote_process_operations',
+          summary:
+            'Groups runtime wrappers, remote process access, and execution-transfer routines.',
+          role_hint:
+            'Role-aware focus on remote process operations, runtime wrappers, and execution transfer.',
+          confidence: 0.88,
+          assumptions: ['The grouped helpers all feed a shared remote-operation dispatcher.'],
+          evidence_used: ['runtime:prepare_remote_process_access', 'api:WriteProcessMemory'],
+          rewrite_guidance: [
+            'Split remote handle acquisition from execution-transfer helpers.',
+            'Promote runtime wrapper state into an explicit session object.',
+          ],
+          focus_areas: ['process_ops', 'runtime_wrappers'],
+          priority_functions: ['FUN_140081090', 'FUN_14008d790'],
+        },
+      ],
+    })
+
+    const reconstructFunctionsHandler = jest
+      .fn<(args: ToolArgs) => Promise<WorkerResult>>()
+      .mockResolvedValue({
+        ok: true,
+        data: {
+          functions: [
+            {
+              function: 'FUN_140081090',
+              address: '0x140081090',
+              confidence: 0.94,
+              gaps: [],
+              suggested_name: 'write_remote_memory',
+              suggested_role: 'Writes payload bytes into a remote process region.',
+              rename_confidence: 0.91,
+              rename_evidence: ['api:WriteProcessMemory'],
+              behavior_tags: ['process_injection'],
+              semantic_summary: 'Writes payload bytes into a remote process region.',
+              xref_signals: [],
+              call_context: { callers: [], callees: [] },
+              source_like_snippet: 'int FUN_140081090(void){return 0;}',
+              rank_reasons: [],
+            },
+          ],
+        },
+      })
+
+    const handler = createCodeReconstructExportHandler(workspaceManager, database, cacheManager, {
+      reconstructFunctionsHandler,
+      importsExtractHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: { imports: {} },
+      }),
+      stringsExtractHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: { summary: {} },
+      }),
+      runtimeEvidenceLoader: jest.fn(async () => null),
+      ...buildBinaryMetadataDependencies(),
+    })
+
+    const result = await handler({
+      sample_id: sampleId,
+      export_name: 'module_review_export',
+      semantic_scope: 'session',
+      semantic_session_tag: 'module-review-session',
+      min_module_size: 1,
+      validate_build: false,
+      run_harness: false,
+      reuse_cached: false,
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    const workspace = await workspaceManager.getWorkspace(sampleId)
+    const processModule = data.modules.find((module: any) => module.name === 'process_ops')
+    expect(processModule.refined_name).toBe('remote_process_operations')
+    expect(processModule.review_summary).toContain('remote process access')
+    expect(processModule.review_confidence).toBeCloseTo(0.88, 2)
+    expect(data.provenance.semantic_module_reviews.artifact_count).toBe(1)
+    expect(data.provenance.semantic_module_reviews.session_tags).toContain('module-review-session')
+
+    const rewrite = fs.readFileSync(path.join(workspace.root, processModule.rewrite_path), 'utf-8')
+    expect(rewrite).toContain('module_review_name: remote_process_operations')
+    expect(rewrite).toContain('module_review_summary: Groups runtime wrappers, remote process access')
+    expect(rewrite).toContain(
+      'module_rewrite_guidance: Split remote handle acquisition from execution-transfer helpers. | Promote runtime wrapper state into an explicit session object.'
+    )
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(workspace.root, data.manifest_path), 'utf-8'))
+    expect(manifest.provenance.semantic_module_reviews.artifact_count).toBe(1)
+    expect(manifest.modules[0].refined_name).toBe('remote_process_operations')
   })
 
   test('should invalidate export cache when semantic naming artifacts change', async () => {

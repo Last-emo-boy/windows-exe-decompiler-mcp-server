@@ -339,6 +339,9 @@ type TriageSummaryData = {
 }
 
 function buildBinaryProfileSummary(binaryProfile: z.infer<typeof BinaryRoleProfileDataSchema>): string {
+  const lifecycleSurface = binaryProfile.lifecycle_surface || []
+  const classFactorySurface = binaryProfile.com_profile.class_factory_surface || []
+  const callbackSurface = binaryProfile.host_interaction_profile.callback_surface || []
   const parts = [
     `Binary role profile suggests ${binaryProfile.binary_role} (confidence=${binaryProfile.role_confidence.toFixed(2)})`,
   ]
@@ -354,8 +357,35 @@ function buildBinaryProfileSummary(binaryProfile: z.infer<typeof BinaryRoleProfi
   if (binaryProfile.export_dispatch_profile.likely_dispatch_model !== 'none') {
     parts.push(`dispatch_model=${binaryProfile.export_dispatch_profile.likely_dispatch_model}`)
   }
+  if (binaryProfile.export_dispatch_profile.registration_exports.length > 0) {
+    parts.push(
+      `registration_exports=${binaryProfile.export_dispatch_profile.registration_exports.slice(0, 2).join(', ')}`
+    )
+  }
+  if (lifecycleSurface.length > 0) {
+    parts.push(`dll_lifecycle=${lifecycleSurface.slice(0, 2).join(', ')}`)
+  }
+  if (binaryProfile.com_profile.class_factory_exports.length > 0) {
+    parts.push(
+      `class_factory_exports=${binaryProfile.com_profile.class_factory_exports.slice(0, 2).join(', ')}`
+    )
+  }
+  if (classFactorySurface.length > 0) {
+    parts.push(`class_factory_surface=${classFactorySurface.slice(0, 2).join(', ')}`)
+  }
+  if (binaryProfile.host_interaction_profile.callback_exports.length > 0) {
+    parts.push(
+      `callback_exports=${binaryProfile.host_interaction_profile.callback_exports.slice(0, 2).join(', ')}`
+    )
+  }
+  if (callbackSurface.length > 0) {
+    parts.push(`callback_surface=${callbackSurface.slice(0, 2).join(', ')}`)
+  }
   if (binaryProfile.host_interaction_profile.likely_hosted) {
     parts.push('host/plugin interaction surface detected')
+  }
+  if (binaryProfile.host_interaction_profile.host_hints.length > 0) {
+    parts.push(`host_hints=${binaryProfile.host_interaction_profile.host_hints.slice(0, 2).join(', ')}`)
   }
   if (binaryProfile.packed) {
     parts.push('packing signals present')
@@ -372,9 +402,27 @@ function augmentWithBinaryProfile(
   }
 
   const summaryLine = buildBinaryProfileSummary(binaryProfile)
+  const lifecycleSurface = binaryProfile.lifecycle_surface || []
+  const classFactorySurface = binaryProfile.com_profile.class_factory_surface || []
+  const callbackSurface = binaryProfile.host_interaction_profile.callback_surface || []
   const evidenceLines = dedupe([
     summaryLine,
     ...binaryProfile.analysis_priorities.map((item) => `binary_profile_priority: ${item}`),
+    ...binaryProfile.export_dispatch_profile.registration_exports.map(
+      (item) => `binary_profile_surface: registration_export=${item}`
+    ),
+    ...lifecycleSurface.map((item) => `binary_profile_surface: dll_lifecycle=${item}`),
+    ...binaryProfile.com_profile.class_factory_exports.map(
+      (item) => `binary_profile_surface: class_factory_export=${item}`
+    ),
+    ...classFactorySurface.map((item) => `binary_profile_surface: class_factory_surface=${item}`),
+    ...binaryProfile.host_interaction_profile.callback_exports.map(
+      (item) => `binary_profile_surface: callback_export=${item}`
+    ),
+    ...callbackSurface.map((item) => `binary_profile_surface: callback_surface=${item}`),
+    ...binaryProfile.host_interaction_profile.host_hints.map(
+      (item) => `binary_profile_surface: host_hint=${item}`
+    ),
   ])
   const recommendationSuffix =
     binaryProfile.analysis_priorities.length > 0
@@ -654,6 +702,18 @@ function augmentWithDynamicEvidence(
       buildEvidenceLayerHeadline(evidenceLineage),
       ...triageData.evidence,
       ...dynamicEvidence.evidence,
+      ...(dynamicEvidence.protections || []).length > 0
+        ? [`Runtime protections: ${(dynamicEvidence.protections || []).slice(0, 4).join(', ')}.`]
+        : [],
+      ...(dynamicEvidence.region_owners || []).length > 0
+        ? [`Runtime region owners: ${(dynamicEvidence.region_owners || []).slice(0, 4).join(', ')}.`]
+        : [],
+      ...(dynamicEvidence.observed_modules || []).length > 0
+        ? [`Runtime observed modules: ${(dynamicEvidence.observed_modules || []).slice(0, 4).join(', ')}.`]
+        : [],
+      ...(dynamicEvidence.segment_names || []).length > 0
+        ? [`Runtime segment names: ${(dynamicEvidence.segment_names || []).slice(0, 4).join(', ')}.`]
+        : [],
     ]),
     evidence_lineage: evidenceLineage,
     evidence_weights: {
@@ -673,6 +733,12 @@ function augmentWithDynamicEvidence(
             ...dynamicEvidence.stages.map(
               (item) => `Imported runtime evidence indicates stage: ${item}.`
             ),
+            ...(dynamicEvidence.observed_modules || [])
+              .slice(0, 3)
+              .map((item) => `Imported runtime evidence observed module: ${item}.`),
+            ...(dynamicEvidence.segment_names || [])
+              .slice(0, 3)
+              .map((item) => `Imported runtime evidence observed segment: ${item}.`),
           ]),
           false_positive_risks: dedupe([
             ...triageData.inference.false_positive_risks,

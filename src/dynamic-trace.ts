@@ -43,6 +43,8 @@ export interface NormalizedDynamicTraceMemoryRegion {
   base_address?: string
   size?: number
   protection?: string
+  module_name?: string
+  segment_name?: string
   indicators: string[]
 }
 
@@ -88,7 +90,11 @@ export interface DynamicTraceSummary {
   high_signal_apis: string[]
   memory_regions: string[]
   region_types?: string[]
+  protections?: string[]
+  address_ranges?: string[]
+  region_owners?: string[]
   observed_modules?: string[]
+  segment_names?: string[]
   observed_strings?: string[]
   stages: string[]
   risk_hints: string[]
@@ -384,6 +390,8 @@ function normalizeRegion(entry: unknown): NormalizedDynamicTraceMemoryRegion | n
     base_address: normalizeAddress(obj.base_address ?? obj.base ?? obj.start),
     size: readFirstNumber(obj, ['size']),
     protection: readFirstString(obj, ['protection', 'protect']),
+    module_name: readFirstString(obj, ['module_name', 'module', 'image']),
+    segment_name: readFirstString(obj, ['segment_name', 'section', 'segment']),
     indicators,
   }
 }
@@ -459,6 +467,7 @@ export function normalizeDynamicTrace(
   const modules = dedupeStrings([
     ...toStringArray(record.modules),
     ...apiCalls.map((item) => item.module || ''),
+    ...memoryRegions.map((item) => item.module_name || ''),
   ])
   const strings = dedupeStrings([
     ...toStringArray(record.strings),
@@ -579,6 +588,24 @@ export function summarizeDynamicTrace(trace: NormalizedDynamicTrace): DynamicTra
   const highSignalApis = observedApis.filter((item) => HIGH_SIGNAL_APIS.has(normalizeApiName(item)))
   const memoryRegions = trace.memory_regions.map((item) => item.purpose || item.region_type)
   const regionTypes = trace.memory_regions.map((item) => item.region_type)
+  const protections = trace.memory_regions.map((item) => item.protection || '')
+  const addressRanges = trace.memory_regions
+    .map((item) => {
+      if (!item.base_address) {
+        return ''
+      }
+      if (!item.size) {
+        return item.base_address
+      }
+      const start = Number.parseInt(item.base_address.replace(/^0x/i, ''), 16)
+      if (!Number.isFinite(start)) {
+        return item.base_address
+      }
+      return `${item.base_address}-0x${(start + item.size).toString(16)}`
+    })
+    .filter((item) => item.length > 0)
+  const regionOwners = trace.memory_regions.map((item) => item.module_name || '')
+  const segmentNames = trace.memory_regions.map((item) => item.segment_name || '')
   const evidence: string[] = []
 
   evidence.push(
@@ -592,6 +619,9 @@ export function summarizeDynamicTrace(trace: NormalizedDynamicTrace): DynamicTra
   }
   if (memoryRegions.length > 0) {
     evidence.push(`Memory regions or plans: ${dedupeStrings(memoryRegions, 8).join(', ')}`)
+  }
+  if (protections.some((item) => item.length > 0)) {
+    evidence.push(`Observed protections: ${dedupeStrings(protections, 8).join(', ')}`)
   }
   if (trace.stages.length > 0) {
     evidence.push(`Derived runtime stages: ${trace.stages.join(', ')}`)
@@ -611,7 +641,11 @@ export function summarizeDynamicTrace(trace: NormalizedDynamicTrace): DynamicTra
     high_signal_apis: dedupeStrings(highSignalApis, 12),
     memory_regions: dedupeStrings(memoryRegions, 12),
     region_types: dedupeStrings(regionTypes, 12),
+    protections: dedupeStrings(protections, 12),
+    address_ranges: dedupeStrings(addressRanges, 12),
+    region_owners: dedupeStrings(regionOwners, 12),
     observed_modules: dedupeStrings(trace.modules, 12),
+    segment_names: dedupeStrings(segmentNames, 12),
     observed_strings: dedupeStrings(trace.strings, 12),
     stages: trace.stages,
     risk_hints: trace.risk_hints,
@@ -749,8 +783,41 @@ export async function loadDynamicTraceEvidence(
       normalizedTraces.flatMap((item) => item.memory_regions.map((entry) => entry.region_type)),
       20
     ),
+    protections: dedupeStrings(
+      normalizedTraces.flatMap((item) => item.memory_regions.map((entry) => entry.protection || '')),
+      20
+    ),
+    address_ranges: dedupeStrings(
+      normalizedTraces.flatMap((item) =>
+        item.memory_regions.map((entry) => {
+          if (!entry.base_address) {
+            return ''
+          }
+          if (!entry.size) {
+            return entry.base_address
+          }
+          const start = Number.parseInt(entry.base_address.replace(/^0x/i, ''), 16)
+          if (!Number.isFinite(start)) {
+            return entry.base_address
+          }
+          return `${entry.base_address}-0x${(start + entry.size).toString(16)}`
+        })
+      ),
+      20
+    ),
+    region_owners: dedupeStrings(
+      normalizedTraces.flatMap((item) => item.memory_regions.map((entry) => entry.module_name || '')),
+      20
+    ),
     observed_modules: dedupeStrings(
-      normalizedTraces.flatMap((item) => item.modules),
+      normalizedTraces.flatMap((item) => [
+        ...item.modules,
+        ...item.memory_regions.map((entry) => entry.module_name || ''),
+      ]),
+      20
+    ),
+    segment_names: dedupeStrings(
+      normalizedTraces.flatMap((item) => item.memory_regions.map((entry) => entry.segment_name || '')),
       20
     ),
     observed_strings: dedupeStrings(
@@ -881,7 +948,11 @@ export async function loadDynamicTraceEvidence(
     high_signal_apis: dedupeStrings(highSignalApis, 12),
     memory_regions: aggregated.memory_regions,
     region_types: aggregated.region_types,
+    protections: aggregated.protections,
+    address_ranges: aggregated.address_ranges,
+    region_owners: aggregated.region_owners,
     observed_modules: aggregated.observed_modules,
+    segment_names: aggregated.segment_names,
     observed_strings: aggregated.observed_strings,
     stages: aggregated.stages,
     risk_hints: aggregated.risk_hints,

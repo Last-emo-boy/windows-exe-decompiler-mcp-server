@@ -119,5 +119,35 @@ describe('ghidra.health tool', () => {
     expect(payload.data.downstream.sample_id).toBe(sampleId)
     expect(payload.data.downstream.live_probe.decompile.ok).toBe(true)
     expect(payload.data.downstream.live_probe.cfg.ok).toBe(true)
+    expect(payload.data.setup_actions.map((item: any) => item.id)).toContain('install_pyghidra')
+  })
+
+  test('should report setup guidance when the Ghidra environment is not ready', async () => {
+    const handler = createGhidraHealthHandler(workspaceManager, database, {
+      checkGhidra: () => ({
+        ok: false,
+        checked_at: new Date().toISOString(),
+        install_dir: '',
+        analyze_headless_path: '',
+        scripts_dir: path.join(process.cwd(), 'ghidra_scripts'),
+        checks: {
+          install_dir_exists: false,
+          analyze_headless_exists: false,
+          scripts_dir_exists: true,
+          launch_ok: false,
+          pyghidra_available: false,
+        },
+        errors: ['install dir not found'],
+        warnings: [],
+      }),
+    })
+
+    const payload = parseToolText(await handler({ include_end_to_end: false }))
+
+    expect(payload.ok).toBe(false)
+    expect(payload.data.setup_actions.map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect(payload.data.required_user_inputs.map((item: any) => item.key)).toContain(
+      'ghidra_install_dir'
+    )
   })
 })

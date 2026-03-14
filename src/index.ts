@@ -84,6 +84,14 @@ import {
   createBinaryRoleProfileHandler,
 } from './tools/binary-role-profile.js'
 import {
+  dllExportProfileToolDefinition,
+  createDllExportProfileHandler,
+} from './tools/dll-export-profile.js'
+import {
+  comRoleProfileToolDefinition,
+  createComRoleProfileHandler,
+} from './tools/com-role-profile.js'
+import {
   rustBinaryAnalyzeToolDefinition,
   createRustBinaryAnalyzeHandler,
 } from './tools/rust-binary-analyze.js'
@@ -135,6 +143,10 @@ import {
   systemHealthToolDefinition,
   createSystemHealthHandler
 } from './tools/system-health.js'
+import {
+  systemSetupGuideToolDefinition,
+  createSystemSetupGuideHandler,
+} from './tools/system-setup-guide.js'
 import {
   dynamicDependenciesToolDefinition,
   createDynamicDependenciesHandler
@@ -251,6 +263,26 @@ import {
   functionExplanationReviewPromptDefinition,
   createFunctionExplanationReviewPromptHandler,
 } from './prompts/function-explanation-review.js'
+import {
+  moduleReconstructionReviewPromptDefinition,
+  createModuleReconstructionReviewPromptHandler,
+} from './prompts/module-reconstruction-review.js'
+import {
+  codeModuleReviewPrepareToolDefinition,
+  createCodeModuleReviewPrepareHandler,
+} from './tools/code-module-review-prepare.js'
+import {
+  codeModuleReviewApplyToolDefinition,
+  createCodeModuleReviewApplyHandler,
+} from './tools/code-module-review-apply.js'
+import {
+  codeModuleReviewToolDefinition,
+  createCodeModuleReviewHandler,
+} from './tools/code-module-review.js'
+import {
+  moduleReconstructionReviewWorkflowToolDefinition,
+  createModuleReconstructionReviewWorkflowHandler,
+} from './workflows/module-reconstruction-review.js'
 
 // Export public API
 export { MCPServer } from './server.js'
@@ -284,6 +316,10 @@ async function main() {
     server.registerPrompt(
       functionExplanationReviewPromptDefinition,
       createFunctionExplanationReviewPromptHandler()
+    )
+    server.registerPrompt(
+      moduleReconstructionReviewPromptDefinition,
+      createModuleReconstructionReviewPromptHandler()
     )
 
     // Task 8.1: sample.ingest tool
@@ -385,6 +421,14 @@ async function main() {
       createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
     )
     server.registerTool(
+      dllExportProfileToolDefinition,
+      createDllExportProfileHandler(workspaceManager, database, cacheManager)
+    )
+    server.registerTool(
+      comRoleProfileToolDefinition,
+      createComRoleProfileHandler(workspaceManager, database, cacheManager)
+    )
+    server.registerTool(
       rustBinaryAnalyzeToolDefinition,
       createRustBinaryAnalyzeHandler(workspaceManager, database, cacheManager)
     )
@@ -425,6 +469,17 @@ async function main() {
     server.registerTool(
       functionExplanationReviewWorkflowToolDefinition,
       createFunctionExplanationReviewWorkflowHandler(
+        workspaceManager,
+        database,
+        cacheManager,
+        server,
+        undefined,
+        jobQueue
+      )
+    )
+    server.registerTool(
+      moduleReconstructionReviewWorkflowToolDefinition,
+      createModuleReconstructionReviewWorkflowHandler(
         workspaceManager,
         database,
         cacheManager,
@@ -476,6 +531,10 @@ async function main() {
     server.registerTool(
       systemHealthToolDefinition,
       createSystemHealthHandler(workspaceManager, database, { cacheManager })
+    )
+    server.registerTool(
+      systemSetupGuideToolDefinition,
+      createSystemSetupGuideHandler()
     )
 
     // Task 18.22: dynamic.dependencies - probe dynamic-analysis component readiness
@@ -582,6 +641,18 @@ async function main() {
     server.registerTool(
       codeFunctionExplainApplyToolDefinition,
       createCodeFunctionExplainApplyHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      codeModuleReviewPrepareToolDefinition,
+      createCodeModuleReviewPrepareHandler(workspaceManager, database, cacheManager)
+    )
+    server.registerTool(
+      codeModuleReviewApplyToolDefinition,
+      createCodeModuleReviewApplyHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      codeModuleReviewToolDefinition,
+      createCodeModuleReviewHandler(workspaceManager, database, cacheManager, server)
     )
     server.registerTool(
       codeFunctionExplainReviewToolDefinition,

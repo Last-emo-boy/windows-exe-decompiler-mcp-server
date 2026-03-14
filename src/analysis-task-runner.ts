@@ -14,6 +14,7 @@ import { deepStaticWorkflow } from './workflows/deep-static.js'
 import { createReconstructWorkflowHandler } from './workflows/reconstruct.js'
 import { createSemanticNameReviewWorkflowHandler } from './workflows/semantic-name-review.js'
 import { createFunctionExplanationReviewWorkflowHandler } from './workflows/function-explanation-review.js'
+import { createModuleReconstructionReviewWorkflowHandler } from './workflows/module-reconstruction-review.js'
 
 export interface AnalysisTaskRunnerOptions {
   pollIntervalMs?: number
@@ -294,6 +295,37 @@ export class AnalysisTaskRunner {
 
       this.jobQueue.updateProgress(job.id, 5)
       const handler = createFunctionExplanationReviewWorkflowHandler(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager
+      )
+      const result = await handler(job.args || {})
+      this.jobQueue.updateProgress(job.id, 100)
+
+      return {
+        jobId: job.id,
+        ok: result.ok,
+        data: result.data,
+        errors: result.errors || [],
+        warnings: result.warnings || [],
+        artifacts: result.artifacts || [],
+        metrics: {
+          elapsedMs:
+            typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
+          peakRssMb: 0,
+        },
+      }
+    }
+
+    if (job.tool === 'workflow.module_reconstruction_review') {
+      if (!this.cacheManager) {
+        throw new Error(
+          'workflow.module_reconstruction_review requires cache manager for queued execution'
+        )
+      }
+
+      this.jobQueue.updateProgress(job.id, 5)
+      const handler = createModuleReconstructionReviewWorkflowHandler(
         this.workspaceManager,
         this.database,
         this.cacheManager

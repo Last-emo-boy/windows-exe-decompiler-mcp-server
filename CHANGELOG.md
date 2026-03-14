@@ -9,6 +9,15 @@ Versioning where practical.
 
 - Ongoing reverse-engineering coverage, MCP workflow orchestration, and packaging polish
 
+## [0.1.3] - 2026-03-14
+
+- Added DLL- and COM-oriented profiling with `dll.export.profile` and `com.role.profile`
+- Added module-level LLM review primitives: `code.module.review.prepare`, `code.module.review`, `code.module.review.apply`, prompt `reverse.module_reconstruction_review`, and `workflow.module_reconstruction_review`
+- Extended `workflow.reconstruct` with role-aware export strategy so DLL/COM/Rust preflight can influence module grouping and reconstruction priority
+- Improved runtime memory ingestion with segment/module hints, region ownership, and richer runtime provenance
+- Added structured setup guidance with `system.setup.guide` and surfaced install/input requirements from health checks and high-level workflows
+- Refined README, installation docs, and release packaging for the `0.1.3` npm/GitHub release
+
 ## [0.1.2] - 2026-03-12
 
 - Upgraded `workflow.reconstruct` with universal preflight orchestration, including binary role profiling, Rust-specific profiling, and optional automatic function-index recovery before export

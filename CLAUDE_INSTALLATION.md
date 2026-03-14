@@ -68,6 +68,10 @@ root. If you choose `local` or `user`, the script updates `~/.claude.json`.
 Use `local` only when you want this repo to override the global `user`
 registration.
 
+If both `user` and `local` registrations exist, Claude will show the `local`
+scope while you are inside that repository, and the `user` scope everywhere
+else.
+
 ## Manual Config Format
 
 Claude Code recognizes the standard MCP config shape:
@@ -107,7 +111,19 @@ If you used `project` scope, `claude mcp get` should report `Scope: Project
 config (shared via .mcp.json)`. If you used `local` or `user`, it should report
 the corresponding Claude config scope from `~/.claude.json`.
 
+## First-run setup guidance
+
+If Claude can connect to the MCP server but reports missing Python packages,
+dynamic-analysis extras, or Ghidra configuration, ask it to call:
+
+- `system.setup.guide`
+- `system.health`
+- `ghidra.health`
+
+These tools return structured `setup_actions` and `required_user_inputs`
+instead of only failing with a generic error.
+
 ## References
 
 - Claude Code MCP overview: https://docs.anthropic.com/en/docs/claude-code/mcp
-- Claude Code MCP CLI reference: https://docs.anthropic.com/en/docs/claude-code/mcp#manage-mcp-servers
+- Claude Code MCP management and CLI behavior: https://docs.anthropic.com/en/docs/claude-code/mcp#manage-mcp-servers

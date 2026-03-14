@@ -2,7 +2,7 @@
 
 Chinese version: [`README_zh.md`](./README_zh.md)
 
-An MCP server for Windows reverse engineering. It exposes PE triage, Ghidra-backed inspection, runtime evidence ingestion, Rust/.NET recovery, source-like reconstruction, and report generation as reusable MCP tools for any tool-calling LLM.
+An MCP server for Windows reverse engineering. It exposes PE triage, Ghidra-backed inspection, DLL/COM profiling, runtime evidence ingestion, Rust/.NET recovery, source-like reconstruction, and LLM-assisted review as reusable MCP tools for any tool-calling LLM.
 
 ## What this server is for
 
@@ -27,12 +27,15 @@ It is designed to help MCP clients:
 - `pe.imports.extract`
 - `pe.exports.extract`
 - `pe.pdata.extract`
+- `dll.export.profile`
+- `com.role.profile`
 - `strings.extract`
 - `strings.floss.decode`
 - `yara.scan`
 - `runtime.detect`
 - `packer.detect`
 - `binary.role.profile`
+- `system.setup.guide`
 
 ### Ghidra and function analysis
 
@@ -83,6 +86,9 @@ It is designed to help MCP clients:
 - `code.function.explain.prepare`
 - `code.function.explain.review`
 - `code.function.explain.apply`
+- `code.module.review.prepare`
+- `code.module.review`
+- `code.module.review.apply`
 - `code.reconstruct.plan`
 - `code.reconstruct.export`
 
@@ -106,9 +112,11 @@ It can:
 
 - run binary preflight
 - detect Rust-oriented samples
+- profile DLL lifecycle, export dispatch, callback surface, and COM activation hints
 - auto-recover a function index when Ghidra function extraction is missing or degraded
 - export native or .NET reconstruction output
 - optionally validate build and run the generated harness
+- tune export strategy based on role-aware preflight for native Rust, DLL, and COM-oriented samples
 - carry runtime and semantic provenance through the result
 
 ### `workflow.function_index_recover`
@@ -128,6 +136,10 @@ High-level semantic naming review workflow for external LLM clients. It can prep
 ### `workflow.function_explanation_review`
 
 High-level explanation workflow for external LLM clients. It can prepare evidence, request structured explanations, apply them, and optionally rerun reconstruct/export.
+
+### `workflow.module_reconstruction_review`
+
+High-level module review workflow for external LLM clients. It can prepare reconstructed modules for review, request structured module refinements through MCP sampling when available, apply accepted module summaries and guidance, and optionally refresh reconstruct/export output.
 
 ## Universal recovery model
 
@@ -154,7 +166,7 @@ Runtime evidence selection:
 - `evidence_scope=latest`
 - `evidence_scope=session` with `evidence_session_tag`
 
-Semantic naming / explanation selection:
+Semantic naming / explanation / module-review selection:
 
 - `semantic_scope=all`
 - `semantic_scope=latest`
@@ -167,7 +179,22 @@ Comparison-aware outputs are also supported through:
 - `compare_semantic_scope`
 - `compare_semantic_session_tag`
 
-This allows MCP clients to ask not only “what is the current result?” but also “what changed compared with the previous evidence or semantic review session?”
+This allows MCP clients to ask not only "what is the current result?" but also "what changed compared with the previous evidence or semantic review session?"
+
+## LLM review layers
+
+This server supports multiple structured review layers for MCP clients with tool calling and optional sampling:
+
+- function naming review
+- function explanation review
+- module reconstruction review
+
+Each layer follows the same pattern:
+
+1. prepare a structured evidence bundle
+2. optionally ask the connected MCP client to perform a constrained review through sampling
+3. apply accepted results as stable semantic artifacts
+4. rerun reconstruct/export/report workflows against explicit semantic scope
 
 ## Async job model
 
@@ -177,12 +204,28 @@ Long-running workflows support queued execution and background completion:
 - `workflow.reconstruct`
 - `workflow.semantic_name_review`
 - `workflow.function_explanation_review`
+- `workflow.module_reconstruction_review`
 
 Use these with:
 
 - `task.status`
 - `task.cancel`
 - `task.sweep`
+
+## Environment bootstrap and setup guidance
+
+If a client starts using the server before Python, dynamic-analysis extras, or Ghidra are configured, use:
+
+- `system.health`
+- `dynamic.dependencies`
+- `ghidra.health`
+- `system.setup.guide`
+
+These return structured setup actions and required user inputs so an MCP client can explicitly ask for:
+
+- `python -m pip install ...`
+- `GHIDRA_PATH` / `GHIDRA_INSTALL_DIR`
+- optional dynamic-analysis extras such as Speakeasy/Frida dependencies
 
 ## Project layout
 

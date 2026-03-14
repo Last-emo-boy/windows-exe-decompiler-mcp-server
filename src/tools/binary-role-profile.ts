@@ -83,6 +83,7 @@ export const ComProfileSchema = z.object({
   interface_hints: z.array(z.string()),
   registration_strings: z.array(z.string()),
   class_factory_exports: z.array(z.string()),
+  class_factory_surface: z.array(z.string()).default([]),
   confidence: z.number().min(0).max(1),
 })
 
@@ -90,6 +91,7 @@ export const HostInteractionProfileSchema = z.object({
   likely_hosted: z.boolean(),
   host_hints: z.array(z.string()),
   callback_exports: z.array(z.string()),
+  callback_surface: z.array(z.string()).default([]),
   callback_strings: z.array(z.string()),
   service_hooks: z.array(z.string()),
   confidence: z.number().min(0).max(1),
@@ -117,6 +119,7 @@ export const BinaryRoleProfileDataSchema = z.object({
     driver_binary: RoleIndicatorSchema,
   }),
   export_dispatch_profile: ExportDispatchProfileSchema,
+  lifecycle_surface: z.array(z.string()).default([]),
   com_profile: ComProfileSchema,
   host_interaction_profile: HostInteractionProfileSchema,
   analysis_priorities: z.array(z.string()),
@@ -608,6 +611,24 @@ export function createBinaryRoleProfileHandler(
       if (networkImports.length > 0) priorities.push('review_network_session_setup_and_remote_endpoints')
       if (processImports.length > 0) priorities.push('review_process_manipulation_and_dynamic_resolution_paths')
 
+      const lifecycleSurface = uniqueStrings([
+        ...exportNames.filter((item) => /dllmain|dllentry|initialize/i.test(item)),
+        ...importFunctions.filter((item) => /disablethreadlibrarycalls|getmodulehandle|freelibrary/i.test(item)),
+        ...stringValues.filter((item) => /dllmain|dll_process_attach|dll_process_detach|thread_attach|thread_detach/i.test(item)),
+      ]).slice(0, input.max_exports)
+
+      const classFactorySurface = uniqueStrings([
+        ...comExports,
+        ...interfaceHints.filter((item) => /iclassfactory|iunknown|idispatch/i.test(item)),
+        ...stringValues.filter((item) => /createinstance|lockserver|dllgetclassobject|cocreateinstance/i.test(item)),
+      ]).slice(0, input.max_exports)
+
+      const callbackSurface = uniqueStrings([
+        ...callbackLikeExports,
+        ...callbackStrings,
+        ...hostHints.filter((item) => /plugin|extension|host/i.test(item)),
+      ]).slice(0, input.max_exports)
+
       const payload = {
         sample_id: input.sample_id,
         original_filename: originalFilename,
@@ -654,18 +675,21 @@ export function createBinaryRoleProfileHandler(
           likely_dispatch_model: likelyDispatchModel,
           confidence: clamp(exportDispatchScore),
         },
+        lifecycle_surface: lifecycleSurface,
         com_profile: {
           clsid_strings: clsidStrings,
           progid_strings: progIdStrings,
           interface_hints: interfaceHints,
           registration_strings: registrationStrings,
           class_factory_exports: comExports.slice(0, input.max_exports),
+          class_factory_surface: classFactorySurface,
           confidence: clamp(comScore),
         },
         host_interaction_profile: {
           likely_hosted: hostInteractionScore >= 0.55,
           host_hints: hostHints,
           callback_exports: callbackLikeExports.slice(0, input.max_exports),
+          callback_surface: callbackSurface,
           callback_strings: callbackStrings,
           service_hooks: serviceHooks,
           confidence: clamp(hostInteractionScore),

@@ -76,12 +76,24 @@ or:
 /mcp show windows-exe-decompiler
 ```
 
+## First-run setup guidance
+
+If Copilot can reach the MCP server but the server reports missing Python
+packages, dynamic-analysis extras, or Ghidra configuration, ask Copilot to call:
+
+- `system.setup.guide`
+- `system.health`
+- `ghidra.health`
+
+These tools return structured setup actions and missing user inputs.
+
 ## References
 
 - https://code.visualstudio.com/docs/copilot/customization/mcp-servers
 - https://code.visualstudio.com/docs/copilot/reference/mcp-configuration
 - https://docs.github.com/copilot/how-tos/copilot-cli/customize-copilot/add-mcp-servers
 - https://docs.github.com/en/enterprise-cloud@latest/copilot/reference/cli-command-reference
+- https://docs.github.com/en/copilot/how-tos/use-copilot-agents/coding-agent/extend-coding-agent-with-mcp
 
 ## Scope
 
@@ -90,4 +102,4 @@ These instructions are for local Copilot clients such as:
 - VS Code with GitHub Copilot
 - GitHub Copilot CLI
 
-They do not configure GitHub.com hosted coding agents.
+They do not configure GitHub.com hosted coding agents. For hosted coding-agent MCP setup, use the GitHub MCP coding-agent documentation linked above.

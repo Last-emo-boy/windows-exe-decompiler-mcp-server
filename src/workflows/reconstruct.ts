@@ -29,6 +29,14 @@ import {
   createBinaryRoleProfileHandler,
 } from '../tools/binary-role-profile.js'
 import {
+  ComRoleProfileDataSchema,
+  createComRoleProfileHandler,
+} from '../tools/com-role-profile.js'
+import {
+  DllExportProfileDataSchema,
+  createDllExportProfileHandler,
+} from '../tools/dll-export-profile.js'
+import {
   RustBinaryAnalyzeDataSchema,
   createRustBinaryAnalyzeHandler,
 } from '../tools/rust-binary-analyze.js'
@@ -42,9 +50,16 @@ import {
   AnalysisSelectionDiffSchema,
   buildArtifactSelectionDiff,
 } from '../selection-diff.js'
+import {
+  RequiredUserInputSchema,
+  SetupActionSchema,
+  collectSetupGuidanceFromWorkerResult,
+  mergeRequiredUserInputs,
+  mergeSetupActions,
+} from '../setup-guidance.js'
 
 const TOOL_NAME = 'workflow.reconstruct'
-const TOOL_VERSION = '0.1.4'
+const TOOL_VERSION = '0.1.5'
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 export const ReconstructWorkflowInputSchema = z.object({
@@ -263,6 +278,49 @@ const PreflightRustProfileSchema = z.object({
   analysis_priorities: z.array(z.string()),
 })
 
+const PreflightDllProfileSchema = z.object({
+  library_like: z.boolean(),
+  role_confidence: z.number().min(0).max(1),
+  likely_entry_model: z.string(),
+  dll_entry_hints: z.array(z.string()),
+  dispatch_model: z.string(),
+  host_hints: z.array(z.string()),
+  lifecycle_surface: DllExportProfileDataSchema.shape.lifecycle_surface,
+  class_factory_surface: DllExportProfileDataSchema.shape.class_factory_surface,
+  callback_surface: DllExportProfileDataSchema.shape.callback_surface,
+  analysis_priorities: z.array(z.string()),
+})
+
+const PreflightComProfileSchema = z.object({
+  likely_com_server: z.boolean(),
+  com_confidence: z.number().min(0).max(1),
+  activation_model: z.string(),
+  class_factory_exports: z.array(z.string()),
+  registration_exports: z.array(z.string()),
+  clsid_strings: z.array(z.string()),
+  progid_strings: z.array(z.string()),
+  interface_hints: z.array(z.string()),
+  class_factory_surface: ComRoleProfileDataSchema.shape.class_factory_surface,
+  activation_steps: z.array(z.string()),
+  analysis_priorities: z.array(z.string()),
+})
+
+const RoleAwareExportTuningSchema = z.object({
+  topk: z.number().int().positive(),
+  module_limit: z.number().int().positive(),
+  min_module_size: z.number().int().positive(),
+  include_imports: z.boolean(),
+  include_strings: z.boolean(),
+})
+
+const RoleAwareStrategySchema = z.object({
+  target_role: z.string(),
+  priority_order: z.array(z.string()),
+  focus_areas: z.array(z.string()),
+  rationale: z.array(z.string()),
+  export_tuning: RoleAwareExportTuningSchema,
+})
+
 const FunctionIndexRecoverySummarySchema = z.object({
   applied: z.boolean(),
   define_from: z.enum(['smart_recover', 'symbols_recover']).nullable(),
@@ -278,8 +336,11 @@ const FunctionIndexRecoverySummarySchema = z.object({
 
 const PreflightSummarySchema = z.object({
   binary_profile: BinaryRoleProfileDataSchema.nullable(),
+  dll_profile: PreflightDllProfileSchema.nullable(),
+  com_profile: PreflightComProfileSchema.nullable(),
   rust_profile: PreflightRustProfileSchema.nullable(),
   function_index_recovery: FunctionIndexRecoverySummarySchema.nullable(),
+  role_strategy: RoleAwareStrategySchema.nullable(),
 })
 
 const ReconstructQueuedDataSchema = z.object({
@@ -298,6 +359,8 @@ const ReconstructCompletedDataSchema = z.object({
   stage_status: z.object({
     runtime: z.enum(['ok', 'failed']),
     preflight_binary_profile: z.enum(['ok', 'failed', 'skipped']),
+    preflight_dll_profile: z.enum(['ok', 'failed', 'skipped']),
+    preflight_com_profile: z.enum(['ok', 'failed', 'skipped']),
     preflight_rust_profile: z.enum(['ok', 'failed', 'skipped']),
     function_index_recovery: z.enum(['ok', 'failed', 'skipped']),
     plan: z.enum(['ok', 'failed', 'skipped']),
@@ -318,6 +381,8 @@ export const ReconstructWorkflowOutputSchema = z.object({
   data: z.union([ReconstructCompletedDataSchema, ReconstructQueuedDataSchema]).optional(),
   warnings: z.array(z.string()).optional(),
   errors: z.array(z.string()).optional(),
+  setup_actions: z.array(SetupActionSchema).optional(),
+  required_user_inputs: z.array(RequiredUserInputSchema).optional(),
   artifacts: z.array(z.any()).optional(),
   metrics: z
     .object({
@@ -399,6 +464,8 @@ interface DotNetExportData {
 }
 
 interface RustBinaryAnalyzeData extends z.infer<typeof RustBinaryAnalyzeDataSchema> {}
+interface DllExportProfileData extends z.infer<typeof DllExportProfileDataSchema> {}
+interface ComRoleProfileData extends z.infer<typeof ComRoleProfileDataSchema> {}
 
 interface FunctionIndexRecoveryData {
   sample_id: string
@@ -419,6 +486,8 @@ interface ReconstructWorkflowDependencies {
   nativeExportHandler?: (args: ToolArgs) => Promise<WorkerResult>
   dotnetExportHandler?: (args: ToolArgs) => Promise<WorkerResult>
   binaryRoleProfileHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  dllExportProfileHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  comRoleProfileHandler?: (args: ToolArgs) => Promise<WorkerResult>
   rustBinaryAnalyzeHandler?: (args: ToolArgs) => Promise<WorkerResult>
   functionIndexRecoverHandler?: (args: ToolArgs) => Promise<WorkerResult>
 }
@@ -494,6 +563,133 @@ function summarizeRustPreflight(data: RustBinaryAnalyzeData) {
   }
 }
 
+function summarizeDllPreflight(data: DllExportProfileData) {
+  return {
+    library_like: data.library_like,
+    role_confidence: data.role_confidence,
+    likely_entry_model: data.likely_entry_model,
+    dll_entry_hints: data.dll_entry_hints,
+    dispatch_model: data.export_dispatch_profile.likely_dispatch_model,
+    host_hints: data.host_interaction_profile.host_hints,
+    lifecycle_surface: data.lifecycle_surface,
+    class_factory_surface: data.class_factory_surface,
+    callback_surface: data.callback_surface,
+    analysis_priorities: data.analysis_priorities,
+  }
+}
+
+function summarizeComPreflight(data: ComRoleProfileData) {
+  return {
+    likely_com_server: data.likely_com_server,
+    com_confidence: data.com_confidence,
+    activation_model: data.activation_model,
+    class_factory_exports: data.class_factory_exports,
+    registration_exports: data.registration_exports,
+    clsid_strings: data.clsid_strings,
+    progid_strings: data.progid_strings,
+    interface_hints: data.interface_hints,
+    class_factory_surface: data.class_factory_surface,
+    activation_steps: data.activation_steps,
+    analysis_priorities: data.analysis_priorities,
+  }
+}
+
+function buildRoleAwareStrategy(args: {
+  runtimeData?: RuntimeDetectData
+  binaryProfile: z.infer<typeof BinaryRoleProfileDataSchema> | null
+  dllProfile: ReturnType<typeof summarizeDllPreflight> | null
+  comProfile: ReturnType<typeof summarizeComPreflight> | null
+  rustProfile: ReturnType<typeof summarizeRustPreflight> | null
+}) {
+  const rationale: string[] = []
+  const focusAreas = new Set<string>()
+  const priorityOrder = new Set<string>()
+  let targetRole = 'native_executable'
+  const exportTuning = {
+    topk: 16,
+    module_limit: 8,
+    min_module_size: 1,
+    include_imports: true,
+    include_strings: true,
+  }
+
+  if (args.runtimeData?.is_dotnet) {
+    targetRole = 'managed_assembly'
+    rationale.push('runtime.detect reported CLR/.NET metadata')
+    focusAreas.add('managed_metadata_and_il')
+  } else if (args.comProfile?.likely_com_server) {
+    targetRole = 'com_server'
+    rationale.push(`COM preflight suggests activation model ${args.comProfile.activation_model}`)
+    focusAreas.add('class_factory_and_registration')
+    exportTuning.topk = 20
+    exportTuning.module_limit = 10
+  } else if (args.dllProfile?.library_like && args.dllProfile.dispatch_model !== 'none') {
+    targetRole = 'export_dispatch_dll'
+    rationale.push(`DLL preflight suggests dispatch model ${args.dllProfile.dispatch_model}`)
+    focusAreas.add('export_dispatch_surface')
+    exportTuning.topk = 18
+    exportTuning.module_limit = 10
+  } else if (args.dllProfile?.library_like && args.dllProfile.host_hints.length > 0) {
+    targetRole = 'hosted_plugin_or_service_dll'
+    rationale.push('DLL preflight suggests hosted/plugin lifecycle')
+    focusAreas.add('host_callbacks_and_attach_detach')
+    exportTuning.topk = 18
+    exportTuning.module_limit = 9
+  } else if (args.dllProfile?.library_like) {
+    targetRole = 'dll_library'
+    rationale.push(`DLL preflight suggests entry model ${args.dllProfile.likely_entry_model}`)
+    focusAreas.add('dllmain_and_export_surface')
+    exportTuning.topk = 18
+    exportTuning.module_limit = 9
+  } else if (args.rustProfile?.suspected_rust) {
+    targetRole = 'native_rust_executable'
+    rationale.push(`Rust preflight confidence ${args.rustProfile.confidence.toFixed(2)}`)
+    focusAreas.add('pdata_recovery_and_runtime_wrappers')
+    exportTuning.topk = 20
+    exportTuning.module_limit = 9
+  } else if (args.binaryProfile?.indicators.service_binary.likely) {
+    targetRole = 'service_binary'
+    rationale.push('binary.role.profile found service-oriented indicators')
+    focusAreas.add('service_entrypoints_and_hooks')
+    exportTuning.topk = 18
+    exportTuning.module_limit = 9
+  }
+
+  for (const item of args.binaryProfile?.analysis_priorities || []) {
+    priorityOrder.add(item)
+  }
+  for (const item of args.dllProfile?.analysis_priorities || []) {
+    priorityOrder.add(item)
+  }
+  for (const item of args.comProfile?.analysis_priorities || []) {
+    priorityOrder.add(item)
+  }
+  for (const item of args.rustProfile?.analysis_priorities || []) {
+    priorityOrder.add(item)
+  }
+
+  if (args.comProfile?.class_factory_exports.length) {
+    focusAreas.add('class_factory_exports')
+  }
+  if (args.dllProfile?.dll_entry_hints.length) {
+    focusAreas.add('dll_entry_lifecycle')
+  }
+  if (args.binaryProfile?.export_dispatch_profile.likely_dispatch_model !== 'none') {
+    focusAreas.add('dispatch_model_reconstruction')
+  }
+  if (args.binaryProfile?.host_interaction_profile.likely_hosted) {
+    focusAreas.add('host_interaction_model')
+  }
+
+  return {
+    target_role: targetRole,
+    priority_order: Array.from(priorityOrder),
+    focus_areas: Array.from(focusAreas),
+    rationale,
+    export_tuning: exportTuning,
+  }
+}
+
 function summarizeFunctionIndexRecovery(data: FunctionIndexRecoveryData) {
   return {
     applied: true,
@@ -531,6 +727,16 @@ export function createReconstructWorkflowHandler(
   const binaryRoleProfileHandler =
     dependencies?.binaryRoleProfileHandler ||
     createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
+  const dllExportProfileHandler =
+    dependencies?.dllExportProfileHandler ||
+    createDllExportProfileHandler(workspaceManager, database, cacheManager, {
+      binaryRoleProfileHandler,
+    })
+  const comRoleProfileHandler =
+    dependencies?.comRoleProfileHandler ||
+    createComRoleProfileHandler(workspaceManager, database, cacheManager, {
+      binaryRoleProfileHandler,
+    })
   const rustBinaryAnalyzeHandler =
     dependencies?.rustBinaryAnalyzeHandler ||
     createRustBinaryAnalyzeHandler(workspaceManager, database, cacheManager)
@@ -589,9 +795,13 @@ export function createReconstructWorkflowHandler(
 
       const warnings: string[] = []
       const notes: string[] = []
+      let setupActions = [] as z.infer<typeof SetupActionSchema>[]
+      let requiredUserInputs = [] as z.infer<typeof RequiredUserInputSchema>[]
       const stageStatus = {
         runtime: 'failed' as 'ok' | 'failed',
         preflight_binary_profile: 'skipped' as 'ok' | 'failed' | 'skipped',
+        preflight_dll_profile: 'skipped' as 'ok' | 'failed' | 'skipped',
+        preflight_com_profile: 'skipped' as 'ok' | 'failed' | 'skipped',
         preflight_rust_profile: 'skipped' as 'ok' | 'failed' | 'skipped',
         function_index_recovery: 'skipped' as 'ok' | 'failed' | 'skipped',
         plan: 'skipped' as 'ok' | 'failed' | 'skipped',
@@ -614,6 +824,14 @@ export function createReconstructWorkflowHandler(
         stageStatus.runtime = 'ok'
       } else {
         stageStatus.runtime = 'ok'
+      }
+      {
+        const setupGuidance = collectSetupGuidanceFromWorkerResult(runtimeResult)
+        setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+        requiredUserInputs = mergeRequiredUserInputs(
+          requiredUserInputs,
+          setupGuidance.requiredUserInputs
+        )
       }
 
       let selectedPath: 'native' | 'dotnet'
@@ -656,9 +874,12 @@ export function createReconstructWorkflowHandler(
       )
 
       let binaryProfileData: z.infer<typeof BinaryRoleProfileDataSchema> | null = null
+      let dllProfileData: ReturnType<typeof summarizeDllPreflight> | null = null
+      let comProfileData: ReturnType<typeof summarizeComPreflight> | null = null
       let rustProfileData: RustBinaryAnalyzeData | null = null
       let functionIndexRecoveryData: ReturnType<typeof summarizeFunctionIndexRecovery> | null = null
       let functionIndexRecoveryApplied = false
+      let roleStrategy: ReturnType<typeof buildRoleAwareStrategy> | null = null
 
       if (input.include_preflight) {
         const binaryProfileResult = await binaryRoleProfileHandler({
@@ -678,6 +899,70 @@ export function createReconstructWorkflowHandler(
 
         if (binaryProfileResult.warnings?.length) {
           warnings.push(...binaryProfileResult.warnings.map((item) => `binary.role.profile: ${item}`))
+        }
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(binaryProfileResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
+          )
+        }
+      }
+
+      if (selectedPath === 'native' && !runtimeData?.is_dotnet && input.include_preflight) {
+        const dllProfileResult = await dllExportProfileHandler({
+          sample_id: input.sample_id,
+          force_refresh: !input.reuse_cached,
+        })
+
+        if (dllProfileResult.ok && dllProfileResult.data) {
+          dllProfileData = summarizeDllPreflight(dllProfileResult.data as DllExportProfileData)
+          stageStatus.preflight_dll_profile = 'ok'
+        } else {
+          stageStatus.preflight_dll_profile = 'failed'
+          warnings.push(
+            `dll.export.profile unavailable: ${(dllProfileResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+
+        if (dllProfileResult.warnings?.length) {
+          warnings.push(...dllProfileResult.warnings.map((item) => `dll.export.profile: ${item}`))
+        }
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(dllProfileResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
+          )
+        }
+
+        const comProfileResult = await comRoleProfileHandler({
+          sample_id: input.sample_id,
+          force_refresh: !input.reuse_cached,
+        })
+
+        if (comProfileResult.ok && comProfileResult.data) {
+          comProfileData = summarizeComPreflight(comProfileResult.data as ComRoleProfileData)
+          stageStatus.preflight_com_profile = 'ok'
+        } else {
+          stageStatus.preflight_com_profile = 'failed'
+          warnings.push(
+            `com.role.profile unavailable: ${(comProfileResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+
+        if (comProfileResult.warnings?.length) {
+          warnings.push(...comProfileResult.warnings.map((item) => `com.role.profile: ${item}`))
+        }
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(comProfileResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
+          )
         }
       }
 
@@ -700,6 +985,24 @@ export function createReconstructWorkflowHandler(
         if (rustProfileResult.warnings?.length) {
           warnings.push(...rustProfileResult.warnings.map((item) => `rust_binary.analyze: ${item}`))
         }
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(rustProfileResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
+          )
+        }
+      }
+
+      if (input.include_preflight) {
+        roleStrategy = buildRoleAwareStrategy({
+          runtimeData,
+          binaryProfile: binaryProfileData,
+          dllProfile: dllProfileData,
+          comProfile: comProfileData,
+          rustProfile: rustProfileData ? summarizeRustPreflight(rustProfileData) : null,
+        })
       }
 
       if (
@@ -736,6 +1039,14 @@ export function createReconstructWorkflowHandler(
         if (functionIndexRecoverResult.warnings?.length) {
           warnings.push(
             ...functionIndexRecoverResult.warnings.map((item) => `workflow.function_index_recover: ${item}`)
+          )
+        }
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(functionIndexRecoverResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
           )
         }
       }
@@ -943,6 +1254,14 @@ export function createReconstructWorkflowHandler(
         if (planResult.warnings && planResult.warnings.length > 0) {
           warnings.push(...planResult.warnings.map((item) => `plan: ${item}`))
         }
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(planResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
+          )
+        }
       }
 
       let exportSummary: z.infer<typeof ExportSummarySchema> | null = null
@@ -954,14 +1273,29 @@ export function createReconstructWorkflowHandler(
         ok: true
         warnings: string[]
         artifacts: unknown[]
+        setupGuidance: {
+          setupActions: z.infer<typeof SetupActionSchema>[]
+          requiredUserInputs: z.infer<typeof RequiredUserInputSchema>[]
+        }
         summary: z.infer<typeof ExportSummarySchema>
       }
       type ExportRunFailure = {
         ok: false
         errors: string[]
         warnings: string[]
+        setupGuidance: {
+          setupActions: z.infer<typeof SetupActionSchema>[]
+          requiredUserInputs: z.infer<typeof RequiredUserInputSchema>[]
+        }
       }
       type ExportRunResult = ExportRunSuccess | ExportRunFailure
+      const nativeExportTuning = roleStrategy?.export_tuning || {
+        topk: Math.max(input.topk, 16),
+        module_limit: 8,
+        min_module_size: 1,
+        include_imports: true,
+        include_strings: true,
+      }
 
       const runExport = async (pathToRun: 'native' | 'dotnet'): Promise<ExportRunResult> => {
         if (pathToRun === 'dotnet') {
@@ -979,6 +1313,7 @@ export function createReconstructWorkflowHandler(
               ok: false,
               errors: dotnetResult.errors || ['dotnet.reconstruct.export failed'],
               warnings: dotnetResult.warnings || [],
+              setupGuidance: collectSetupGuidanceFromWorkerResult(dotnetResult),
             }
           }
 
@@ -987,6 +1322,7 @@ export function createReconstructWorkflowHandler(
             ok: true,
             warnings: dotnetResult.warnings || [],
             artifacts: dotnetResult.artifacts || [],
+            setupGuidance: collectSetupGuidanceFromWorkerResult(dotnetResult),
             summary: {
               tool: 'dotnet.reconstruct.export' as const,
               export_root: data.export_root,
@@ -1014,11 +1350,11 @@ export function createReconstructWorkflowHandler(
 
         const nativeResult = await nativeExportHandler({
           sample_id: input.sample_id,
-          topk: input.topk,
-          module_limit: 8,
-          min_module_size: 1,
-          include_imports: true,
-          include_strings: true,
+          topk: Math.max(input.topk, nativeExportTuning.topk),
+          module_limit: nativeExportTuning.module_limit,
+          min_module_size: nativeExportTuning.min_module_size,
+          include_imports: nativeExportTuning.include_imports,
+          include_strings: nativeExportTuning.include_strings,
           export_name: input.export_name,
           validate_build: input.validate_build,
           run_harness: input.run_harness,
@@ -1029,6 +1365,9 @@ export function createReconstructWorkflowHandler(
           evidence_session_tag: input.evidence_session_tag,
           semantic_scope: input.semantic_scope,
           semantic_session_tag: input.semantic_session_tag,
+          role_target: roleStrategy?.target_role,
+          role_focus_areas: roleStrategy?.focus_areas || [],
+          role_priority_order: roleStrategy?.priority_order || [],
           reuse_cached: input.reuse_cached && !functionIndexRecoveryApplied,
         })
 
@@ -1037,6 +1376,7 @@ export function createReconstructWorkflowHandler(
             ok: false,
             errors: nativeResult.errors || ['code.reconstruct.export failed'],
             warnings: nativeResult.warnings || [],
+            setupGuidance: collectSetupGuidanceFromWorkerResult(nativeResult),
           }
         }
 
@@ -1045,6 +1385,7 @@ export function createReconstructWorkflowHandler(
           ok: true,
           warnings: nativeResult.warnings || [],
           artifacts: nativeResult.artifacts || [],
+          setupGuidance: collectSetupGuidanceFromWorkerResult(nativeResult),
           summary: {
             tool: 'code.reconstruct.export' as const,
             export_root: data.export_root,
@@ -1075,6 +1416,11 @@ export function createReconstructWorkflowHandler(
         stageStatus.export_primary = 'ok'
         exportSummary = primaryExportResult.summary
         artifacts = primaryExportResult.artifacts || []
+        setupActions = mergeSetupActions(setupActions, primaryExportResult.setupGuidance.setupActions)
+        requiredUserInputs = mergeRequiredUserInputs(
+          requiredUserInputs,
+          primaryExportResult.setupGuidance.requiredUserInputs
+        )
         if (primaryExportResult.warnings.length > 0) {
           warnings.push(
             ...primaryExportResult.warnings.map((item) =>
@@ -1084,6 +1430,11 @@ export function createReconstructWorkflowHandler(
         }
       } else {
         stageStatus.export_primary = 'failed'
+        setupActions = mergeSetupActions(setupActions, primaryExportResult.setupGuidance.setupActions)
+        requiredUserInputs = mergeRequiredUserInputs(
+          requiredUserInputs,
+          primaryExportResult.setupGuidance.requiredUserInputs
+        )
         warnings.push(
           `primary export(${primaryPath}) failed: ${(primaryExportResult.errors || ['unknown error']).join('; ')}`
         )
@@ -1102,6 +1453,11 @@ export function createReconstructWorkflowHandler(
           stageStatus.export_fallback = 'ok'
           exportSummary = fallbackExportResult.summary
           artifacts = fallbackExportResult.artifacts || []
+          setupActions = mergeSetupActions(setupActions, fallbackExportResult.setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            fallbackExportResult.setupGuidance.requiredUserInputs
+          )
           selectedPath = fallbackPath
           notes.push(`Primary export path failed; switched to fallback path: ${fallbackPath}.`)
           if (fallbackExportResult.warnings.length > 0) {
@@ -1113,6 +1469,11 @@ export function createReconstructWorkflowHandler(
           }
         } else {
           stageStatus.export_fallback = 'failed'
+          setupActions = mergeSetupActions(setupActions, fallbackExportResult.setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            fallbackExportResult.setupGuidance.requiredUserInputs
+          )
           warnings.push(
             `fallback export(${fallbackPath}) failed: ${(fallbackExportResult.errors || ['unknown error']).join('; ')}`
           )
@@ -1135,6 +1496,8 @@ export function createReconstructWorkflowHandler(
           ok: false,
           errors: ['All export paths failed and allow_partial=false.'],
           warnings,
+          setup_actions: setupActions.length > 0 ? setupActions : undefined,
+          required_user_inputs: requiredUserInputs.length > 0 ? requiredUserInputs : undefined,
           metrics: {
             elapsed_ms: Date.now() - startTime,
             tool: TOOL_NAME,
@@ -1158,6 +1521,12 @@ export function createReconstructWorkflowHandler(
           `Binary role preflight suggests dispatch model: ${binaryProfileData.export_dispatch_profile.likely_dispatch_model}.`
         )
       }
+      if (dllProfileData?.dll_entry_hints.length) {
+        notes.push(`DLL/export preflight hints: ${dllProfileData.dll_entry_hints.slice(0, 3).join(' ')}`)
+      }
+      if (comProfileData?.likely_com_server) {
+        notes.push(`COM preflight suggests activation model: ${comProfileData.activation_model}.`)
+      }
       if (binaryProfileData?.host_interaction_profile?.likely_hosted) {
         notes.push('Binary role preflight suggests the sample is likely hosted as a DLL/plugin/service component.')
       }
@@ -1172,6 +1541,14 @@ export function createReconstructWorkflowHandler(
       if (functionIndexRecoveryData?.applied) {
         notes.push(
           `Function index recovery imported ${functionIndexRecoveryData.imported_count} recovered functions before export.`
+        )
+      }
+      if (roleStrategy) {
+        notes.push(
+          `Role-aware strategy selected target role ${roleStrategy.target_role}${roleStrategy.focus_areas.length ? ` with focus on ${roleStrategy.focus_areas.join(', ')}` : ''}.`
+        )
+        notes.push(
+          `Role-aware export tuning: topk=${roleStrategy.export_tuning.topk}, module_limit=${roleStrategy.export_tuning.module_limit}, min_module_size=${roleStrategy.export_tuning.min_module_size}, imports=${roleStrategy.export_tuning.include_imports ? 'on' : 'off'}, strings=${roleStrategy.export_tuning.include_strings ? 'on' : 'off'}.`
         )
       }
       if (exportSummary?.binary_profile?.analysis_priorities?.length) {
@@ -1203,8 +1580,11 @@ export function createReconstructWorkflowHandler(
           input.include_preflight || stageStatus.function_index_recovery !== 'skipped'
             ? {
                 binary_profile: binaryProfileData,
+                dll_profile: dllProfileData,
+                com_profile: comProfileData,
                 rust_profile: rustProfileData ? summarizeRustPreflight(rustProfileData) : null,
                 function_index_recovery: functionIndexRecoveryData,
+                role_strategy: roleStrategy,
               }
             : undefined,
         plan: planSummary,
@@ -1218,6 +1598,8 @@ export function createReconstructWorkflowHandler(
         ok: true,
         data: outputData,
         warnings: warnings.length > 0 ? warnings : undefined,
+        setup_actions: setupActions.length > 0 ? setupActions : undefined,
+        required_user_inputs: requiredUserInputs.length > 0 ? requiredUserInputs : undefined,
         artifacts: artifacts as WorkerResult['artifacts'],
         metrics: {
           elapsed_ms: Date.now() - startTime,
@@ -1228,6 +1610,8 @@ export function createReconstructWorkflowHandler(
       return {
         ok: false,
         errors: [normalizeError(error)],
+        setup_actions: undefined,
+        required_user_inputs: undefined,
         metrics: {
           elapsed_ms: Date.now() - startTime,
           tool: TOOL_NAME,

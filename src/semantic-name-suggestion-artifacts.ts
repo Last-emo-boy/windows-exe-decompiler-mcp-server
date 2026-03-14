@@ -11,6 +11,9 @@ export const SEMANTIC_NAME_PREPARE_BUNDLE_ARTIFACT_TYPE = 'semantic_name_prepare
 export const SEMANTIC_EXPLANATION_PREPARE_BUNDLE_ARTIFACT_TYPE =
   'semantic_explanation_prepare_bundle'
 export const SEMANTIC_FUNCTION_EXPLANATIONS_ARTIFACT_TYPE = 'semantic_function_explanations'
+export const SEMANTIC_MODULE_REVIEW_PREPARE_BUNDLE_ARTIFACT_TYPE =
+  'semantic_module_review_prepare_bundle'
+export const SEMANTIC_MODULE_REVIEWS_ARTIFACT_TYPE = 'semantic_module_reviews'
 
 export interface SemanticNameSuggestionEntry {
   address?: string | null
@@ -119,6 +122,59 @@ export interface SemanticFunctionExplanationIndex {
   scope_note: string
 }
 
+export interface SemanticModuleReviewEntry {
+  module_name: string
+  refined_name?: string | null
+  summary: string
+  role_hint?: string | null
+  confidence: number
+  assumptions?: string[]
+  evidence_used?: string[]
+  rewrite_guidance?: string[]
+  focus_areas?: string[]
+  priority_functions?: string[]
+}
+
+export interface SemanticModuleReviewArtifactPayload {
+  schema_version: 1
+  sample_id: string
+  created_at: string
+  session_tag?: string | null
+  client_name?: string | null
+  model_name?: string | null
+  prepare_artifact_id?: string | null
+  reviews: SemanticModuleReviewEntry[]
+}
+
+export interface LoadedSemanticModuleReview {
+  module_name: string
+  refined_name: string | null
+  summary: string
+  role_hint: string | null
+  confidence: number
+  assumptions: string[]
+  evidence_used: string[]
+  rewrite_guidance: string[]
+  focus_areas: string[]
+  priority_functions: string[]
+  artifact_id: string
+  created_at: string
+  client_name: string | null
+  model_name: string | null
+  session_tag: string | null
+  prepare_artifact_id: string | null
+}
+
+export interface SemanticModuleReviewIndex {
+  byModule: Map<string, LoadedSemanticModuleReview>
+  marker: string
+  artifact_ids: string[]
+  session_tags: string[]
+  earliest_created_at: string | null
+  latest_created_at: string | null
+  scope_note: string
+}
+
 const LATEST_SEMANTIC_ARTIFACT_WINDOW_MS = 10 * 1000
 
 function sanitizePathSegment(value: string | undefined, fallback: string): string {
@@ -166,6 +222,11 @@ export function sanitizeSemanticName(value: string | null | undefined): string |
   }
 
   return collapsed
+}
+
+export function normalizeModuleKey(value: string | null | undefined): string | null {
+  const normalized = sanitizeSemanticName(value)
+  return normalized && normalized.length > 0 ? normalized : null
 }
 
 async function persistSemanticNamingJsonArtifact(
@@ -258,6 +319,40 @@ export async function persistSemanticFunctionExplanationsArtifact(
     payload.sample_id,
     SEMANTIC_FUNCTION_EXPLANATIONS_ARTIFACT_TYPE,
     'semantic_function_explanations',
+    payload,
+    payload.session_tag
+  )
+}
+
+export async function persistSemanticModuleReviewPrepareBundleArtifact(
+  workspaceManager: WorkspaceManager,
+  database: DatabaseManager,
+  sampleId: string,
+  payload: unknown,
+  sessionTag?: string | null
+): Promise<ArtifactRef> {
+  return persistSemanticNamingJsonArtifact(
+    workspaceManager,
+    database,
+    sampleId,
+    SEMANTIC_MODULE_REVIEW_PREPARE_BUNDLE_ARTIFACT_TYPE,
+    'module_review_bundle',
+    payload,
+    sessionTag
+  )
+}
+
+export async function persistSemanticModuleReviewsArtifact(
+  workspaceManager: WorkspaceManager,
+  database: DatabaseManager,
+  payload: SemanticModuleReviewArtifactPayload
+): Promise<ArtifactRef> {
+  return persistSemanticNamingJsonArtifact(
+    workspaceManager,
+    database,
+    payload.sample_id,
+    SEMANTIC_MODULE_REVIEWS_ARTIFACT_TYPE,
+    'semantic_module_reviews',
     payload,
     payload.session_tag
   )
@@ -555,7 +650,101 @@ export async function loadSemanticFunctionExplanationIndex(
         ? `Semantic explanation artifacts are limited to session selector "${options.sessionTag.trim()}".`
         : options.scope === 'latest'
           ? 'Semantic explanation artifacts are limited to the latest artifact window.'
-          : 'Semantic explanation artifacts reflect the selected artifact scope.',
+        : 'Semantic explanation artifacts reflect the selected artifact scope.',
+  }
+}
+
+export async function loadSemanticModuleReviewIndex(
+  workspaceManager: WorkspaceManager,
+  database: DatabaseManager,
+  sampleId: string,
+  options: LoadSemanticArtifactOptions = {}
+): Promise<SemanticModuleReviewIndex> {
+  const byModule = new Map<string, LoadedSemanticModuleReview>()
+  const artifacts = database.findArtifactsByType(sampleId, SEMANTIC_MODULE_REVIEWS_ARTIFACT_TYPE)
+  const loadedArtifacts: Array<{
+    artifact: (typeof artifacts)[number]
+    payload: SemanticModuleReviewArtifactPayload | null
+  }> = []
+
+  for (const artifact of artifacts) {
+    const payload = (await readArtifactJson(
+      workspaceManager,
+      database,
+      sampleId,
+      artifact.id
+    )) as SemanticModuleReviewArtifactPayload | null
+    loadedArtifacts.push({ artifact, payload })
+  }
+
+  const filteredArtifacts = filterSemanticArtifactsByScope(loadedArtifacts, options)
+
+  for (const { artifact, payload } of filteredArtifacts) {
+    if (!payload || !Array.isArray(payload.reviews)) {
+      continue
+    }
+
+    for (const review of payload.reviews) {
+      const moduleKey = normalizeModuleKey(review.module_name)
+      if (!moduleKey || byModule.has(moduleKey)) {
+        continue
+      }
+      byModule.set(moduleKey, {
+        module_name: review.module_name,
+        refined_name: review.refined_name || null,
+        summary: review.summary,
+        role_hint: review.role_hint || null,
+        confidence: review.confidence,
+        assumptions: review.assumptions || [],
+        evidence_used: review.evidence_used || [],
+        rewrite_guidance: review.rewrite_guidance || [],
+        focus_areas: review.focus_areas || [],
+        priority_functions: review.priority_functions || [],
+        artifact_id: artifact.id,
+        created_at: artifact.created_at,
+        client_name: payload.client_name || null,
+        model_name: payload.model_name || null,
+        session_tag: payload.session_tag || null,
+        prepare_artifact_id: payload.prepare_artifact_id || null,
+      })
+    }
+  }
+
+  return {
+    byModule,
+    marker:
+      filteredArtifacts.length > 0
+        ? filteredArtifacts.map(({ artifact }) => `${artifact.id}:${artifact.sha256}`).join('|')
+        : 'none',
+    artifact_ids: filteredArtifacts.map(({ artifact }) => artifact.id),
+    session_tags: Array.from(
+      new Set(
+        filteredArtifacts.flatMap(({ artifact, payload }) =>
+          collectSemanticArtifactSessionTags(artifact.path, payload?.session_tag)
+        )
+      )
+    ),
+    earliest_created_at:
+      filteredArtifacts.length > 0
+        ? filteredArtifacts
+            .map(({ artifact }) => artifact.created_at)
+            .filter((item) => typeof item === 'string' && item.length > 0)
+            .sort()[0] || null
+        : null,
+    latest_created_at:
+      filteredArtifacts.length > 0
+        ? filteredArtifacts
+            .map(({ artifact }) => artifact.created_at)
+            .filter((item) => typeof item === 'string' && item.length > 0)
+            .sort()
+            .slice(-1)[0] || null
+        : null,
+    scope_note:
+      options.scope === 'session' && options.sessionTag?.trim()
+        ? `Semantic module review artifacts are limited to session selector "${options.sessionTag.trim()}".`
+        : options.scope === 'latest'
+          ? 'Semantic module review artifacts are limited to the latest artifact window.'
+          : 'Semantic module review artifacts reflect the selected artifact scope.',
   }
 }
 
@@ -598,6 +787,22 @@ export function findSemanticFunctionExplanation(
   const functionKey = normalizeFunctionKey(funcName)
   if (functionKey && index.byFunction.has(functionKey)) {
     return index.byFunction.get(functionKey) || null
+  }
+
+  return null
+}
+
+export function findSemanticModuleReview(
+  index: SemanticModuleReviewIndex | null | undefined,
+  moduleName: string | null | undefined
+): LoadedSemanticModuleReview | null {
+  if (!index) {
+    return null
+  }
+
+  const moduleKey = normalizeModuleKey(moduleName)
+  if (moduleKey && index.byModule.has(moduleKey)) {
+    return index.byModule.get(moduleKey) || null
   }
 
   return null

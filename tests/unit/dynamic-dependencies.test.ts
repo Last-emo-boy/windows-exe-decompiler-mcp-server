@@ -40,10 +40,14 @@ describe('dynamic.dependencies tool', () => {
         }
       }
       recommendations: string[]
+      setup_actions: Array<{ id: string; kind: string; command?: string | null }>
+      required_user_inputs: Array<unknown>
     }
 
     expect(['ready', 'partial', 'bootstrap_required']).toContain(data.status)
     expect(Array.isArray(data.recommendations)).toBe(true)
+    expect(Array.isArray(data.setup_actions)).toBe(true)
+    expect(Array.isArray(data.required_user_inputs)).toBe(true)
 
     const speakeasy = data.components.speakeasy || {}
     if (speakeasy.available) {
@@ -80,11 +84,14 @@ describe('dynamic.dependencies tool', () => {
         }
       }
       recommendations: string[]
+      setup_actions: Array<{ id: string; command?: string | null }>
     }
 
     expect(data.status).toBe('bootstrap_required')
     expect(data.components.worker?.available).toBe(false)
     expect(data.components.worker?.error).toContain('Python worker exited with code 1')
     expect(data.recommendations.join(' ')).toContain('pip install -r requirements.txt')
+    expect(data.setup_actions.map((item) => item.id)).toContain('install_python_requirements')
+    expect(data.setup_actions.map((item) => item.id)).toContain('install_speakeasy_emulator')
   })
 })

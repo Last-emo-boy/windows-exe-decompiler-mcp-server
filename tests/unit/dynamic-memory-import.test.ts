@@ -61,15 +61,20 @@ describe('dynamic.memory.import tool', () => {
     })
 
     const dumpPath = path.join(testDumpRoot, 'remote_ops.dmp')
+    const embeddedImage = Buffer.alloc(0x200, 0)
+    embeddedImage.write('MZ', 0x80, 'ascii')
+    embeddedImage.writeUInt32LE(0x40, 0x80 + 0x3c)
+    embeddedImage.write('PE\0\0', 0x80 + 0x40, 'ascii')
     const dumpBytes = Buffer.concat([
       Buffer.from('MDMP', 'ascii'),
       Buffer.alloc(96, 0),
       Buffer.from(
-        'GetProcAddress LoadLibraryA OpenProcess WriteProcessMemory ResumeThread SetThreadContext',
+        'GetProcAddress LoadLibraryA OpenProcess WriteProcessMemory ResumeThread SetThreadContext akasha.exe kernel32.dll',
         'utf-8'
       ),
       Buffer.alloc(64, 0),
       Buffer.from('NtQueryInformationProcess CreateFileW RegOpenKeyExW', 'utf-8'),
+      embeddedImage,
     ])
     fs.writeFileSync(dumpPath, dumpBytes)
 
@@ -96,6 +101,15 @@ describe('dynamic.memory.import tool', () => {
     expect(data.summary.stages).toContain('prepare_remote_process_access')
     expect(data.summary.stages).toContain('resolve_dynamic_apis')
     expect(data.summary.source_formats).toContain('minidump')
+    expect(data.summary.region_types).toContain('minidump_header')
+    expect(data.summary.region_types).toContain('mapped_pe_image')
+    expect(data.summary.protections).toContain('file_container')
+    expect(data.summary.protections).toContain('r-x_image')
+    expect(data.summary.address_ranges.some((item: string) => item.startsWith('0x0-'))).toBe(true)
+    expect(data.summary.region_owners).toContain('akasha.exe')
+    expect(data.summary.observed_modules).toContain('akasha.exe')
+    expect(data.summary.segment_names).toContain('header')
+    expect(data.summary.segment_names).toContain('.image')
     expect(data.raw_artifact.type).toBe('raw_dump')
     expect(data.trace_artifact.type).toBe('dynamic_trace_json')
 
@@ -123,7 +137,7 @@ describe('dynamic.memory.import tool', () => {
     const dumpPath = path.join(testDumpRoot, 'snapshot.mem')
     const dumpBytes = Buffer.concat([
       Buffer.alloc(32, 0),
-      Buffer.from('CreateFileW ReadFile WriteFile RegOpenKeyExW RegSetValueExW', 'utf-8'),
+      Buffer.from('CreateFileW ReadFile WriteFile RegOpenKeyExW RegSetValueExW advapi32.dll', 'utf-8'),
       Buffer.alloc(48, 0),
       Buffer.from('InternetOpenA InternetConnectA HttpSendRequestA', 'utf-8'),
     ])
@@ -143,8 +157,9 @@ describe('dynamic.memory.import tool', () => {
     expect(data.summary.stages).toContain('file_operations')
     expect(data.summary.stages).toContain('registry_operations')
     expect(data.summary.source_formats).toContain('process_memory')
+    expect(data.summary.protections).toContain('read_write_plan')
     expect(data.context_window_count).toBeGreaterThan(0)
     expect(data.summary.api_count).toBeGreaterThan(0)
+    expect(data.summary.observed_modules).toContain('advapi32.dll')
   })
 })
-

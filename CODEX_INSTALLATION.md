@@ -75,6 +75,13 @@ Then ask Codex to call one of these tools:
 - `sample.ingest`
 - `workflow.triage`
 
+If Codex reports missing Python packages, dynamic-analysis extras, or Ghidra
+configuration, ask it to call:
+
+- `system.setup.guide`
+- `system.health`
+- `ghidra.health`
+
 ## Troubleshooting
 
 - `dist/index.js was not found`

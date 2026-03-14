@@ -258,7 +258,11 @@ describe('code.functions.reconstruct tool', () => {
           high_signal_apis: ['CreateProcessW', 'WriteProcessMemory'],
           memory_regions: ['process_operation_plan'],
           region_types: ['process_operation_plan', 'api_resolution_table'],
+          protections: ['read_write_plan', 'r-x_image'],
+          address_ranges: ['0x1000-0x1200'],
+          region_owners: ['akasha.exe', 'kernel32.dll'],
           observed_modules: ['process_ops'],
+          segment_names: ['.text', '.pdata'],
           observed_strings: ['Akasha Auto Recon'],
           stages: ['prepare_remote_process_access', 'resolve_dynamic_apis'],
           risk_hints: [],
@@ -305,6 +309,7 @@ describe('code.functions.reconstruct tool', () => {
     expect(data.functions[0].source_like_snippet).toContain('xrefs=')
     expect(data.functions[0].source_like_snippet).toContain('relationship_hints=')
     expect(data.functions[0].source_like_snippet).toContain('parameter_roles=')
+    expect(data.functions[0].source_like_snippet).toContain('return_role=')
     expect(data.functions[0].source_like_snippet).toContain('state_roles=')
     expect(data.functions[0].source_like_snippet).toContain('struct_inference=')
     expect(data.functions[0].source_like_snippet).toContain('runtime_evidence=')
@@ -314,6 +319,10 @@ describe('code.functions.reconstruct tool', () => {
     expect(data.functions[0].source_like_snippet).toContain('layers:executed_trace(1)')
     expect(data.functions[0].source_like_snippet).toContain('latest:2026-03-11T00:00:00.000Z')
     expect(data.functions[0].source_like_snippet).toContain('modules:process_ops')
+    expect(data.functions[0].source_like_snippet).toContain('protections:read_write_plan')
+    expect(data.functions[0].source_like_snippet).toContain('owners:akasha.exe, kernel32.dll')
+    expect(data.functions[0].source_like_snippet).toContain('segments:.text')
+    expect(data.functions[0].source_like_snippet).toContain('ranges:0x1000-0x1200')
     expect(data.functions[0].source_like_snippet).toContain(
       'runtime_scope=Runtime evidence currently reflects a single registered artifact.'
     )
@@ -323,6 +332,8 @@ describe('code.functions.reconstruct tool', () => {
     expect(data.functions[0].semantic_summary).toContain('runtime corroborates')
     expect(data.functions[0].semantic_summary).toContain('executed runtime trace')
     expect(data.functions[0].semantic_summary).toContain('runtime layers=executed_trace(1)')
+    expect(data.functions[0].semantic_summary).toContain('protections include read_write_plan')
+    expect(data.functions[0].semantic_summary).toContain('region owners include akasha.exe')
     expect(data.functions[0].xref_signals[0].api).toBe('CreateProcessW')
     expect(
       data.functions[0].xref_signals.some((signal: any) => signal.api === 'GetProcAddress')
@@ -335,11 +346,17 @@ describe('code.functions.reconstruct tool', () => {
     expect(data.functions[0].state_roles.some((item: any) => item.state_key === 'dynamic_api_table')).toBe(true)
     expect(data.functions[0].struct_inference.some((item: any) => item.semantic_name === 'remote_process_request')).toBe(true)
     expect(data.functions[0].semantic_evidence.parameter_roles.some((item: any) => item.role === 'target_process_selector')).toBe(true)
+    expect(data.functions[0].return_role.role).toBe('resolved_symbol_pointer')
+    expect(data.functions[0].semantic_evidence.return_role.role).toBe('resolved_symbol_pointer')
     expect(data.functions[0].semantic_evidence.state_roles.some((item: any) => item.state_key === 'dynamic_api_table')).toBe(true)
     expect(data.functions[0].semantic_evidence.struct_inference.some((item: any) => item.semantic_name === 'remote_process_request')).toBe(true)
     expect(data.functions[0].runtime_context.executed).toBe(true)
     expect(data.functions[0].runtime_context.evidence_sources).toContain('sandbox_trace:trace')
     expect(data.functions[0].runtime_context.matched_memory_regions).toContain('process_operation_plan')
+    expect(data.functions[0].runtime_context.matched_protections).toContain('read_write_plan')
+    expect(data.functions[0].runtime_context.matched_region_owners).toContain('akasha.exe')
+    expect(data.functions[0].runtime_context.matched_segment_names).toContain('.text')
+    expect(data.functions[0].runtime_context.matched_address_ranges).toContain('0x1000-0x1200')
     expect(data.functions[0].runtime_context.suggested_modules).toContain('process_ops')
     expect(data.functions[0].runtime_context.provenance_layers).toContain('executed_trace(1)')
     expect(data.functions[0].runtime_context.latest_artifact_at).toBe('2026-03-11T00:00:00.000Z')
@@ -513,6 +530,7 @@ describe('code.functions.reconstruct tool', () => {
     expect(func.behavior_tags).toContain('dll_lifecycle')
     expect(func.behavior_tags).toContain('export_dispatch')
     expect(func.parameter_roles.some((item: any) => item.role === 'remote_host_or_url')).toBe(true)
+    expect(func.return_role.role).toBe('network_operation_status')
     expect(func.parameter_roles.some((item: any) => item.role === 'service_name')).toBe(true)
     expect(func.parameter_roles.some((item: any) => item.role === 'class_or_interface_identifier')).toBe(true)
     expect(func.parameter_roles.some((item: any) => item.role === 'module_instance')).toBe(true)

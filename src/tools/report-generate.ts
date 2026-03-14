@@ -237,6 +237,9 @@ function generateMarkdownReport(
   }
 
   if (binaryProfile) {
+    const lifecycleSurface = binaryProfile.lifecycle_surface || [];
+    const classFactorySurface = binaryProfile.com_profile.class_factory_surface || [];
+    const callbackSurface = binaryProfile.host_interaction_profile.callback_surface || [];
     lines.push('## Binary Role Profile');
     lines.push('');
     lines.push(`- **Binary Role:** ${binaryProfile.binary_role}`);
@@ -258,8 +261,32 @@ function generateMarkdownReport(
     if (binaryProfile.export_dispatch_profile.registration_exports.length > 0) {
       lines.push(`- **Registration Exports:** ${binaryProfile.export_dispatch_profile.registration_exports.join(', ')}`);
     }
+    if (lifecycleSurface.length > 0) {
+      lines.push(`- **DLL Lifecycle Surface:** ${lifecycleSurface.join(', ')}`);
+    }
     if (binaryProfile.com_profile.class_factory_exports.length > 0) {
       lines.push(`- **Class Factory Exports:** ${binaryProfile.com_profile.class_factory_exports.join(', ')}`);
+    }
+    if (classFactorySurface.length > 0) {
+      lines.push(`- **Class Factory Surface:** ${classFactorySurface.join(', ')}`);
+    }
+    if (binaryProfile.com_profile.interface_hints.length > 0) {
+      lines.push(`- **COM Interface Hints:** ${binaryProfile.com_profile.interface_hints.join(', ')}`);
+    }
+    if (binaryProfile.com_profile.registration_strings.length > 0) {
+      lines.push(`- **COM Registration Strings:** ${binaryProfile.com_profile.registration_strings.join(', ')}`);
+    }
+    if (binaryProfile.host_interaction_profile.callback_exports.length > 0) {
+      lines.push(`- **Callback Exports:** ${binaryProfile.host_interaction_profile.callback_exports.join(', ')}`);
+    }
+    if (callbackSurface.length > 0) {
+      lines.push(`- **Callback Surface:** ${callbackSurface.join(', ')}`);
+    }
+    if (binaryProfile.host_interaction_profile.callback_strings.length > 0) {
+      lines.push(`- **Callback Strings:** ${binaryProfile.host_interaction_profile.callback_strings.join(', ')}`);
+    }
+    if (binaryProfile.host_interaction_profile.service_hooks.length > 0) {
+      lines.push(`- **Service Hooks:** ${binaryProfile.host_interaction_profile.service_hooks.join(', ')}`);
     }
     if (binaryProfile.host_interaction_profile.host_hints.length > 0) {
       lines.push(`- **Host Hints:** ${binaryProfile.host_interaction_profile.host_hints.join(', ')}`);
@@ -307,6 +334,21 @@ function generateMarkdownReport(
     lines.push(`- **Stages:** ${dynamicEvidence.stages.join(', ') || 'none'}`);
     lines.push(`- **Source Formats:** ${(dynamicEvidence.source_formats || []).join(', ') || 'none'}`);
     lines.push(`- **Source Names:** ${(dynamicEvidence.source_names || []).join(', ') || 'none'}`);
+    if ((dynamicEvidence.protections || []).length > 0) {
+      lines.push(`- **Protections:** ${(dynamicEvidence.protections || []).join(', ')}`);
+    }
+    if ((dynamicEvidence.address_ranges || []).length > 0) {
+      lines.push(`- **Address Ranges:** ${(dynamicEvidence.address_ranges || []).join(', ')}`);
+    }
+    if ((dynamicEvidence.region_owners || []).length > 0) {
+      lines.push(`- **Region Owners:** ${(dynamicEvidence.region_owners || []).join(', ')}`);
+    }
+    if ((dynamicEvidence.observed_modules || []).length > 0) {
+      lines.push(`- **Observed Modules:** ${(dynamicEvidence.observed_modules || []).join(', ')}`);
+    }
+    if ((dynamicEvidence.segment_names || []).length > 0) {
+      lines.push(`- **Segment Names:** ${(dynamicEvidence.segment_names || []).join(', ')}`);
+    }
 
     if ((dynamicEvidence.confidence_layers || []).length > 0) {
       lines.push('');

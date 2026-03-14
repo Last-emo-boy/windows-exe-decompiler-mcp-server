@@ -74,8 +74,21 @@ describe('report.generate tool', () => {
               sources: ['unit-test'],
             },
           ],
-          memory_regions: [],
-          modules: ['kernel32.dll'],
+          memory_regions: [
+            {
+              region_type: 'dispatch_table',
+              purpose: 'process_operation_plan',
+              source: 'unit-test',
+              confidence: 0.9,
+              base_address: '0x1000',
+              size: 512,
+              protection: 'read_write_plan',
+              module_name: 'akasha.exe',
+              segment_name: '.text',
+              indicators: [api],
+            },
+          ],
+          modules: ['kernel32.dll', 'akasha.exe'],
           strings: [sourceName],
           stages: ['prepare_remote_process_access'],
           risk_hints: [],
@@ -229,6 +242,9 @@ describe('report.generate tool', () => {
     expect(reportContent.dynamic_evidence.observed_apis).toContain('WriteProcessMemory')
     expect(reportContent.dynamic_evidence.observed_apis).not.toContain('CreateRemoteThread')
     expect(reportContent.dynamic_evidence.session_selector).toBe('alpha-session')
+    expect(reportContent.dynamic_evidence.protections).toContain('read_write_plan')
+    expect(reportContent.dynamic_evidence.region_owners).toContain('akasha.exe')
+    expect(reportContent.dynamic_evidence.segment_names).toContain('.text')
     expect(reportContent.provenance.runtime.scope).toBe('session')
     expect(reportContent.provenance.runtime.artifact_count).toBe(1)
     expect(reportContent.provenance.runtime.session_tags).toContain('alpha-session')
@@ -299,18 +315,21 @@ describe('report.generate tool', () => {
             likely_dispatch_model: 'com_registration_and_class_factory',
             confidence: 0.74,
           },
+          lifecycle_surface: ['DllMain', 'DLL_PROCESS_ATTACH'],
           com_profile: {
             clsid_strings: [],
             progid_strings: ['Acme.Plugin'],
             interface_hints: ['IClassFactory'],
             registration_strings: ['InprocServer32'],
             class_factory_exports: ['DllRegisterServer'],
+            class_factory_surface: ['DllGetClassObject', 'IClassFactory::CreateInstance'],
             confidence: 0.8,
           },
           host_interaction_profile: {
             likely_hosted: true,
             host_hints: ['Plugin host extension'],
             callback_exports: [],
+            callback_surface: ['InitializePlugin'],
             callback_strings: [],
             service_hooks: [],
             confidence: 0.61,
@@ -332,6 +351,11 @@ describe('report.generate tool', () => {
     expect(reportContent).toContain('**Binary Role:** dll')
     expect(reportContent).toContain('DllRegisterServer')
     expect(reportContent).toContain('**Likely Dispatch Model:** com_registration_and_class_factory')
+    expect(reportContent).toContain('**DLL Lifecycle Surface:** DllMain, DLL_PROCESS_ATTACH')
+    expect(reportContent).toContain('**Class Factory Surface:** DllGetClassObject, IClassFactory::CreateInstance')
+    expect(reportContent).toContain('**COM Interface Hints:** IClassFactory')
+    expect(reportContent).toContain('**Callback Surface:** InitializePlugin')
+    expect(reportContent).toContain('**COM Registration Strings:** InprocServer32')
     expect(reportContent).toContain('trace_export_surface_first')
   })
 

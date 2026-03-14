@@ -34,9 +34,12 @@ import {
 } from '../runtime-correlation.js'
 import {
   findSemanticFunctionExplanation,
+  findSemanticModuleReview,
   loadSemanticFunctionExplanationIndex,
+  loadSemanticModuleReviewIndex,
   loadSemanticNameSuggestionIndex,
   type SemanticFunctionExplanationIndex,
+  type SemanticModuleReviewIndex,
   SEMANTIC_FUNCTION_EXPLANATIONS_ARTIFACT_TYPE,
   SEMANTIC_NAME_SUGGESTIONS_ARTIFACT_TYPE,
 } from '../semantic-name-suggestion-artifacts.js'
@@ -47,7 +50,7 @@ import {
 } from '../analysis-provenance.js'
 
 const TOOL_NAME = 'code.reconstruct.export'
-const TOOL_VERSION = '0.2.13'
+const TOOL_VERSION = '0.2.15'
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 export const CodeReconstructExportInputSchema = z.object({
@@ -131,6 +134,22 @@ export const CodeReconstructExportInputSchema = z.object({
     .string()
     .optional()
     .describe('Optional semantic review session selector used when semantic_scope=session or to narrow all/latest results'),
+  role_target: z
+    .string()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe('Optional high-level binary role hint from workflow preflight, such as native_rust_executable, dll_library, or com_server'),
+  role_focus_areas: z
+    .array(z.string().min(1).max(96))
+    .max(16)
+    .default([])
+    .describe('Optional role-aware focus areas that bias module grouping and rewrite prioritization'),
+  role_priority_order: z
+    .array(z.string().min(1).max(96))
+    .max(24)
+    .default([])
+    .describe('Optional priority-order hints from role-aware planning that influence module ordering and preservation'),
   reuse_cached: z
     .boolean()
     .default(true)
@@ -168,6 +187,11 @@ const ModuleSchema = z.object({
   name: z.string(),
   confidence: z.number().min(0).max(1),
   function_count: z.number().int().nonnegative(),
+  role_hint: z.string().nullable().optional(),
+  focus_matches: z.array(z.string()).optional(),
+  refined_name: z.string().nullable().optional(),
+  review_summary: z.string().nullable().optional(),
+  review_confidence: z.number().min(0).max(1).nullable().optional(),
   import_hints: z.array(z.string()),
   string_hints: z.array(z.string()),
   runtime_apis: z.array(z.string()),
@@ -252,7 +276,11 @@ export const CodeReconstructExportOutputSchema = z.object({
           stage_count: z.number().int().nonnegative(),
           observed_apis: z.array(z.string()),
           region_types: z.array(z.string()).optional(),
+          protections: z.array(z.string()).optional(),
+          address_ranges: z.array(z.string()).optional(),
+          region_owners: z.array(z.string()).optional(),
           observed_modules: z.array(z.string()).optional(),
+          segment_names: z.array(z.string()).optional(),
           observed_strings: z.array(z.string()).optional(),
           stages: z.array(z.string()),
           summary: z.string(),
@@ -334,6 +362,11 @@ interface ReconstructedFunction {
     artifact_count?: number
     executed_artifact_count?: number
     matched_memory_regions?: string[]
+    matched_protections?: string[]
+    matched_address_ranges?: string[]
+    matched_region_owners?: string[]
+    matched_observed_modules?: string[]
+    matched_segment_names?: string[]
     suggested_modules?: string[]
     matched_by?: string[]
   }
@@ -344,6 +377,12 @@ interface ReconstructedFunction {
     confidence: number
     evidence: string[]
   }>
+  return_role?: {
+    role: string
+    inferred_type: string
+    confidence: number
+    evidence: string[]
+  } | null
   state_roles?: Array<{
     state_key: string
     role: string
@@ -372,6 +411,12 @@ interface ReconstructedFunction {
       confidence: number
       evidence: string[]
     }>
+    return_role?: {
+      role: string
+      inferred_type: string
+      confidence: number
+      evidence: string[]
+    } | null
     state_roles?: Array<{
       state_key: string
       role: string
@@ -428,6 +473,20 @@ interface ReconstructFunctionsData {
 interface ModuleBucket {
   name: string
   functions: ReconstructedFunction[]
+  roleHint: string | null
+  focusMatches: Set<string>
+  reviewResolution?: {
+    refined_name?: string | null
+    summary?: string | null
+    role_hint?: string | null
+    confidence?: number | null
+    assumptions?: string[]
+    evidence_used?: string[]
+    rewrite_guidance?: string[]
+    focus_areas?: string[]
+    priority_functions?: string[]
+    source?: 'llm' | 'unknown'
+  }
   importHints: Set<string>
   stringHints: Set<string>
   runtimeApis: Set<string>
@@ -558,6 +617,80 @@ interface CodeReconstructExportDependencies {
   }) => Promise<HarnessValidationResult>
 }
 
+interface RoleAwareModuleOptions {
+  targetRole: string | null
+  focusAreas: string[]
+  priorityOrder: string[]
+  preferredModules: Set<string>
+  stickyModules: Set<string>
+  moduleOrder: Map<string, number>
+}
+
+function collectRoleFocusMatchesForModule(
+  moduleName: string,
+  roleOptions?: RoleAwareModuleOptions
+): string[] {
+  if (!roleOptions) {
+    return []
+  }
+
+  const normalized = sanitizeModuleName(moduleName)
+  const matches = new Set<string>()
+  if (
+    roleOptions.targetRole &&
+    mapRoleSignalToModules(roleOptions.targetRole).some(
+      (item) => sanitizeModuleName(item) === normalized
+    )
+  ) {
+    matches.add(`target:${roleOptions.targetRole}`)
+  }
+  for (const focus of roleOptions.focusAreas) {
+    if (mapRoleSignalToModules(focus).some((item) => sanitizeModuleName(item) === normalized)) {
+      matches.add(`focus:${focus}`)
+    }
+  }
+  for (const priority of roleOptions.priorityOrder) {
+    if (
+      mapRoleSignalToModules(priority).some((item) => sanitizeModuleName(item) === normalized)
+    ) {
+      matches.add(`priority:${priority}`)
+    }
+  }
+  return Array.from(matches)
+}
+
+function inferRoleHintForModule(
+  moduleName: string,
+  roleOptions?: RoleAwareModuleOptions
+): string | null {
+  const normalized = sanitizeModuleName(moduleName)
+  const focusMatches = collectRoleFocusMatchesForModule(normalized, roleOptions)
+  if (focusMatches.length === 0) {
+    return null
+  }
+
+  if (normalized === 'dll_lifecycle') {
+    return 'Role-aware focus on DLL entry, attach/detach, and lifecycle side effects.'
+  }
+  if (normalized === 'com_activation') {
+    return 'Role-aware focus on COM activation, registration, and class factory flow.'
+  }
+  if (normalized === 'export_dispatch') {
+    return 'Role-aware focus on exported command dispatch and externally reachable entrypoints.'
+  }
+  if (normalized === 'callback_surface') {
+    return 'Role-aware focus on callback, plugin, and host interaction surfaces.'
+  }
+  if (normalized === 'service_ops') {
+    return 'Role-aware focus on service control, hook, and hosted callback paths.'
+  }
+  if (normalized === 'process_ops') {
+    return 'Role-aware focus on runtime wrappers, process manipulation, and execution-transfer paths.'
+  }
+
+  return `Role-aware focus derived from ${focusMatches.join(', ')}.`
+}
+
 const BEHAVIOR_TO_MODULE: Record<string, string> = {
   process_injection: 'process_ops',
   process_spawn: 'process_ops',
@@ -567,6 +700,10 @@ const BEHAVIOR_TO_MODULE: Record<string, string> = {
   crypto: 'crypto_ops',
   anti_debug: 'anti_analysis',
   service_control: 'service_ops',
+  dll_lifecycle: 'dll_lifecycle',
+  export_dispatch: 'export_dispatch',
+  com_activation: 'com_activation',
+  callback_surface: 'callback_surface',
 }
 
 const IMPORT_TO_MODULE_HINT: Array<{ module: string; matcher: RegExp }> = [
@@ -604,6 +741,26 @@ const API_TO_MODULE_HINT: Array<{ module: string; matcher: RegExp }> = [
   {
     module: 'service_ops',
     matcher: /\b(OpenSCManager|CreateService|StartService|ControlService|DeleteService)\b/i,
+  },
+  {
+    module: 'dll_lifecycle',
+    matcher:
+      /\b(DllMain|DisableThreadLibraryCalls|LdrRegisterDllNotification|DLL_(PROCESS|THREAD)_(ATTACH|DETACH)|ProcessAttach|ThreadAttach|ProcessDetach|ThreadDetach)\b/i,
+  },
+  {
+    module: 'com_activation',
+    matcher:
+      /\b(DllGetClassObject|DllCanUnloadNow|CoCreateInstance|CLSIDFromProgID|ProgIDFromCLSID|IClassFactory|IUnknown|IDispatch)\b/i,
+  },
+  {
+    module: 'export_dispatch',
+    matcher:
+      /\b(InvokeCommand|Dispatch(Command|Export)?|HandleCommand|ExecuteCommand|RunCommand|DispatchTable|ForwardedExport)\b/i,
+  },
+  {
+    module: 'callback_surface',
+    matcher:
+      /\b(InitializePlugin|RegisterCallback|SetCallback|Notify|OnEvent|EventSink|HookProc|Observer|Callback)\b/i,
   },
   {
     module: 'anti_analysis',
@@ -668,6 +825,110 @@ function sanitizeModuleName(name: string): string {
   return cleaned.length > 0 ? cleaned : 'core'
 }
 
+function dedupeLower(values: string[]): string[] {
+  return Array.from(new Set(values.map((item) => item.trim()).filter((item) => item.length > 0)))
+}
+
+function addRoleModules(target: Set<string>, values: string[]) {
+  for (const value of values) {
+    target.add(sanitizeModuleName(value))
+  }
+}
+
+function mapRoleSignalToModules(signal: string): string[] {
+  const lowered = signal.toLowerCase()
+
+  if (
+    /class_factory|registration|com_activation|com_server|dllgetclassobject|dllcanunloadnow|inprocserver32|localserver32/.test(
+      lowered
+    )
+  ) {
+    return ['com_activation', 'export_dispatch', 'dll_lifecycle']
+  }
+  if (/dllmain|attach_detach|dll_entry|dllmain_and_export_surface|lifecycle/.test(lowered)) {
+    return ['dll_lifecycle']
+  }
+  if (/export_dispatch|dispatch_model|review_exported_command_dispatch_surface/.test(lowered)) {
+    return ['export_dispatch']
+  }
+  if (/host_callback|plugin|extension_contract|callback/.test(lowered)) {
+    return ['callback_surface']
+  }
+  if (/service/.test(lowered)) {
+    return ['service_ops', 'callback_surface']
+  }
+  if (/runtime_wrappers|process_manipulation/.test(lowered)) {
+    return ['process_ops']
+  }
+  if (/network/.test(lowered)) {
+    return ['network_ops']
+  }
+  return []
+}
+
+function buildRoleAwareModuleOptions(input: CodeReconstructExportInput): RoleAwareModuleOptions {
+  const preferredModules = new Set<string>()
+  const stickyModules = new Set<string>()
+  const moduleOrder = new Map<string, number>()
+  const targetRole = input.role_target?.trim() || null
+  const focusAreas = dedupeLower(input.role_focus_areas || [])
+  const priorityOrder = dedupeLower(input.role_priority_order || [])
+
+  if (targetRole) {
+    addRoleModules(preferredModules, mapRoleSignalToModules(targetRole))
+  }
+  for (const focus of focusAreas) {
+    addRoleModules(preferredModules, mapRoleSignalToModules(focus))
+    if (/class_factory|registration|com_activation|dllmain|lifecycle|host_callback|plugin|callback/.test(focus)) {
+      addRoleModules(stickyModules, mapRoleSignalToModules(focus))
+    }
+  }
+  for (const priority of priorityOrder) {
+    addRoleModules(preferredModules, mapRoleSignalToModules(priority))
+    if (
+      /trace_com_activation|review_dllmain|identify_host_callbacks|extension_contract|exported_command_dispatch_surface/.test(
+        priority
+      )
+    ) {
+      addRoleModules(stickyModules, mapRoleSignalToModules(priority))
+    }
+  }
+
+  if (targetRole === 'com_server') {
+    addRoleModules(stickyModules, ['com_activation', 'dll_lifecycle', 'export_dispatch'])
+  } else if (targetRole === 'export_dispatch_dll') {
+    addRoleModules(stickyModules, ['export_dispatch', 'dll_lifecycle'])
+  } else if (targetRole === 'hosted_plugin_or_service_dll') {
+    addRoleModules(stickyModules, ['callback_surface', 'dll_lifecycle', 'service_ops'])
+  } else if (targetRole === 'dll_library') {
+    addRoleModules(stickyModules, ['dll_lifecycle'])
+  }
+
+  let order = 0
+  for (const priority of priorityOrder) {
+    for (const moduleName of mapRoleSignalToModules(priority)) {
+      const normalized = sanitizeModuleName(moduleName)
+      if (!moduleOrder.has(normalized)) {
+        moduleOrder.set(normalized, order++)
+      }
+    }
+  }
+  for (const moduleName of preferredModules) {
+    if (!moduleOrder.has(moduleName)) {
+      moduleOrder.set(moduleName, order++)
+    }
+  }
+
+  return {
+    targetRole,
+    focusAreas,
+    priorityOrder,
+    preferredModules,
+    stickyModules,
+    moduleOrder,
+  }
+}
+
 function sanitizeSymbolForHeader(symbol: string): string {
   const cleaned = symbol.replace(/[^a-zA-Z0-9_]/g, '_')
   if (cleaned.length === 0) {
@@ -719,6 +980,46 @@ async function attachFunctionExplanations(
   return explanationIndex
 }
 
+async function attachModuleReviews(
+  workspaceManager: WorkspaceManager,
+  database: DatabaseManager,
+  sampleId: string,
+  modules: ModuleBucket[],
+  options?: { scope?: 'all' | 'latest' | 'session'; sessionTag?: string }
+): Promise<SemanticModuleReviewIndex> {
+  const reviewIndex = await loadSemanticModuleReviewIndex(workspaceManager, database, sampleId, {
+    scope: options?.scope,
+    sessionTag: options?.sessionTag,
+  })
+
+  for (const module of modules) {
+    const review = findSemanticModuleReview(reviewIndex, module.name)
+    if (!review) {
+      continue
+    }
+    module.reviewResolution = {
+      refined_name: review.refined_name,
+      summary: review.summary,
+      role_hint: review.role_hint,
+      confidence: review.confidence,
+      assumptions: review.assumptions,
+      evidence_used: review.evidence_used,
+      rewrite_guidance: review.rewrite_guidance,
+      focus_areas: review.focus_areas,
+      priority_functions: review.priority_functions,
+      source: 'llm',
+    }
+    if (review.role_hint && (!module.roleHint || module.roleHint.trim().length === 0)) {
+      module.roleHint = review.role_hint || module.roleHint
+    }
+    for (const focus of review.focus_areas || []) {
+      module.focusMatches.add(`review:${focus}`)
+    }
+  }
+
+  return reviewIndex
+}
+
 function addHint(hints: Map<string, string[]>, module: string, value: string) {
   const normalized = normalizeReadableHint(value)
   if (!isReadableTextCandidate(normalized)) {
@@ -731,7 +1032,11 @@ function addHint(hints: Map<string, string[]>, module: string, value: string) {
   }
 }
 
-function inferModulesFromText(text: string, categories: string[] = []): string[] {
+function inferModulesFromText(
+  text: string,
+  categories: string[] = [],
+  roleOptions?: RoleAwareModuleOptions
+): string[] {
   const modules = new Set<string>()
   const lowered = text.toLowerCase()
 
@@ -763,11 +1068,57 @@ function inferModulesFromText(text: string, categories: string[] = []): string[]
   if (/\b(pack(er)? detection|protection|entropy|section|signature)\b/i.test(lowered)) {
     modules.add('packer_analysis')
   }
+  if (
+    /\b(dllmain|disablethreadlibrarycalls|dll_process_attach|dll_thread_attach|processattach|threadattach|processdetach|threaddetach|attach\/detach)\b/i.test(
+      lowered
+    )
+  ) {
+    modules.add('dll_lifecycle')
+  }
+  if (
+    /\b(dllgetclassobject|dllcanunloadnow|iclassfactory|cocreateinstance|clsid|progid|inprocserver32|localserver32|class factory)\b/i.test(
+      lowered
+    )
+  ) {
+    modules.add('com_activation')
+  }
+  if (
+    /\b(export dispatch|dispatch table|invokecommand|handlecommand|executecommand|runcommand|forwarded export|ordinal export|export surface)\b/i.test(
+      lowered
+    )
+  ) {
+    modules.add('export_dispatch')
+  }
+  if (
+    /\b(callback|event sink|observer|notify|plugin|addin|extension point|initializeplugin|registercallback|setcallback|hook proc)\b/i.test(
+      lowered
+    )
+  ) {
+    modules.add('callback_surface')
+  }
+
+  if (roleOptions) {
+    if (roleOptions.preferredModules.has('dll_lifecycle') && /\b(dll|attach|detach|module handle|dllmain)\b/i.test(lowered)) {
+      modules.add('dll_lifecycle')
+    }
+    if (roleOptions.preferredModules.has('com_activation') && /\b(class factory|registerserver|clsid|progid|activation)\b/i.test(lowered)) {
+      modules.add('com_activation')
+    }
+    if (roleOptions.preferredModules.has('export_dispatch') && /\b(dispatch|export|command|invoke)\b/i.test(lowered)) {
+      modules.add('export_dispatch')
+    }
+    if (roleOptions.preferredModules.has('callback_surface') && /\b(callback|plugin|notify|hook|host)\b/i.test(lowered)) {
+      modules.add('callback_surface')
+    }
+  }
 
   return Array.from(modules)
 }
 
-function detectModuleByNameOrReasons(func: ReconstructedFunction): string {
+function detectModuleByNameOrReasons(
+  func: ReconstructedFunction,
+  roleOptions?: RoleAwareModuleOptions
+): string {
   const xrefApis = (func.xref_signals || []).map((item) => item.api).join(' ')
   const callContext = [
     ...(func.call_context?.callers || []),
@@ -783,6 +1134,30 @@ function detectModuleByNameOrReasons(func: ReconstructedFunction): string {
   ].join(' ')
   const lowered = corpus.toLowerCase()
 
+  if (
+    /dllmain|disablethreadlibrarycalls|dll_process_attach|dll_thread_attach|processattach|threadattach|processdetach|threaddetach/.test(
+      lowered
+    )
+  ) {
+    return 'dll_lifecycle'
+  }
+  if (
+    /dllgetclassobject|dllcanunloadnow|iclassfactory|cocreateinstance|clsid|progid|inprocserver32|localserver32/.test(
+      lowered
+    )
+  ) {
+    return 'com_activation'
+  }
+  if (
+    /initializeplugin|registercallback|setcallback|event sink|notify|hook proc|observer|plugin host/.test(
+      lowered
+    )
+  ) {
+    return 'callback_surface'
+  }
+  if (/export dispatch|dispatch table|invokecommand|handlecommand|executecommand|runcommand|forwarded export/.test(lowered)) {
+    return 'export_dispatch'
+  }
   if (/socket|http|internet|dns|connect|send|recv/.test(lowered)) {
     return 'network_ops'
   }
@@ -806,6 +1181,19 @@ function detectModuleByNameOrReasons(func: ReconstructedFunction): string {
   }
   if (/packer|entropy|section|signature|goblin|iced-x86|recon|analysis/.test(lowered)) {
     return 'packer_analysis'
+  }
+
+  if (roleOptions?.preferredModules.has('dll_lifecycle') && /\bdll\b/.test(lowered)) {
+    return 'dll_lifecycle'
+  }
+  if (roleOptions?.preferredModules.has('com_activation') && /\b(class factory|registration|activation)\b/.test(lowered)) {
+    return 'com_activation'
+  }
+  if (roleOptions?.preferredModules.has('export_dispatch') && /\b(dispatch|export|command)\b/.test(lowered)) {
+    return 'export_dispatch'
+  }
+  if (roleOptions?.preferredModules.has('callback_surface') && /\b(callback|plugin|host)\b/.test(lowered)) {
+    return 'callback_surface'
   }
 
   return 'core'
@@ -1074,6 +1462,26 @@ function enrichFunctionsWithRuntimeContext(
           ...(func.runtime_context.matched_memory_regions || []),
           ...(runtimeContext.matched_memory_regions || []),
         ]).slice(0, 6),
+        matched_protections: dedupe([
+          ...(func.runtime_context.matched_protections || []),
+          ...(runtimeContext.matched_protections || []),
+        ]).slice(0, 6),
+        matched_address_ranges: dedupe([
+          ...(func.runtime_context.matched_address_ranges || []),
+          ...(runtimeContext.matched_address_ranges || []),
+        ]).slice(0, 6),
+        matched_region_owners: dedupe([
+          ...(func.runtime_context.matched_region_owners || []),
+          ...(runtimeContext.matched_region_owners || []),
+        ]).slice(0, 6),
+        matched_observed_modules: dedupe([
+          ...(func.runtime_context.matched_observed_modules || []),
+          ...(runtimeContext.matched_observed_modules || []),
+        ]).slice(0, 6),
+        matched_segment_names: dedupe([
+          ...(func.runtime_context.matched_segment_names || []),
+          ...(runtimeContext.matched_segment_names || []),
+        ]).slice(0, 6),
         suggested_modules: dedupe([
           ...(func.runtime_context.suggested_modules || []),
           ...(runtimeContext.suggested_modules || []),
@@ -1089,7 +1497,8 @@ function enrichFunctionsWithRuntimeContext(
 
 function chooseModuleForFunctionWithScoring(
   func: ReconstructedFunction,
-  functionStringHints: Map<string, FunctionStringSearchHint>
+  functionStringHints: Map<string, FunctionStringSearchHint>,
+  roleOptions?: RoleAwareModuleOptions
 ): {
   moduleName: string
   importHints: string[]
@@ -1128,7 +1537,7 @@ function chooseModuleForFunctionWithScoring(
     ...((func.call_context?.callees || []).slice(0, 5)),
   ].join(' ')
 
-  for (const module of inferModulesFromText(textCorpus)) {
+  for (const module of inferModulesFromText(textCorpus, [], roleOptions)) {
     addScore(module, 3)
   }
 
@@ -1201,11 +1610,87 @@ function chooseModuleForFunctionWithScoring(
         addScore('network_ops', 3, region, stringHints)
       }
     }
+    for (const protection of runtimeContext.matched_protections || []) {
+      if (/read_write|write|execute|rwx/i.test(protection)) {
+        addScore('process_ops', 2, protection, stringHints)
+      }
+      if (/file|container/i.test(protection)) {
+        addScore('file_ops', 1, protection, stringHints)
+      }
+      if (/image|r-x|read/i.test(protection) && roleOptions?.preferredModules.has('export_dispatch')) {
+        addScore('export_dispatch', 2, protection, stringHints)
+      }
+      if (/image|r-x|read/i.test(protection) && roleOptions?.preferredModules.has('dll_lifecycle')) {
+        addScore('dll_lifecycle', 2, protection, stringHints)
+      }
+    }
+    for (const owner of [
+      ...(runtimeContext.matched_region_owners || []),
+      ...(runtimeContext.matched_observed_modules || []),
+    ]) {
+      if (/ole32|oleaut32|combase|rpcrt4/i.test(owner)) {
+        addScore('com_activation', 4, owner, stringHints)
+      }
+      if (/plugin|host|extension|addin/i.test(owner)) {
+        addScore('callback_surface', 3, owner, stringHints)
+      }
+      if (/\.dll$|\.ocx$|\.cpl$/i.test(owner) && roleOptions?.preferredModules.has('dll_lifecycle')) {
+        addScore('dll_lifecycle', 2, owner, stringHints)
+      }
+    }
+    for (const segment of runtimeContext.matched_segment_names || []) {
+      if (/\.edata|export|dispatch/i.test(segment)) {
+        addScore('export_dispatch', 4, segment, stringHints)
+      }
+      if (/\.tls|\.crt|init/i.test(segment)) {
+        addScore('dll_lifecycle', 4, segment, stringHints)
+      }
+      if (/class|factory|\.idata/i.test(segment)) {
+        addScore('com_activation', 3, segment, stringHints)
+      }
+      if (/callback|hook|event|notify/i.test(segment)) {
+        addScore('callback_surface', 3, segment, stringHints)
+      }
+    }
+  }
+
+  if (roleOptions) {
+    for (const module of roleOptions.preferredModules) {
+      if (scores.has(module)) {
+        addScore(module, roleOptions.stickyModules.has(module) ? 4 : 2)
+      }
+    }
+    if (
+      roleOptions.preferredModules.has('export_dispatch') &&
+      /\b(export|dispatch|invoke|command)\b/i.test(textCorpus)
+    ) {
+      addScore('export_dispatch', 3)
+    }
+    if (
+      roleOptions.preferredModules.has('com_activation') &&
+      /\b(class factory|dllgetclassobject|registerserver|activation|clsid|progid)\b/i.test(textCorpus)
+    ) {
+      addScore('com_activation', 4)
+    }
+    if (
+      roleOptions.preferredModules.has('dll_lifecycle') &&
+      /\b(dllmain|attach|detach|disablethreadlibrarycalls|module handle)\b/i.test(textCorpus)
+    ) {
+      addScore('dll_lifecycle', 4)
+    }
+    if (
+      roleOptions.preferredModules.has('callback_surface') &&
+      /\b(callback|notify|plugin|hook|host)\b/i.test(textCorpus)
+    ) {
+      addScore('callback_surface', 3)
+    }
   }
 
   const top = Array.from(scores.entries()).sort((a, b) => b[1] - a[1])[0]
   const moduleName =
-    top && top[1] >= 3 ? sanitizeModuleName(top[0]) : sanitizeModuleName(detectModuleByNameOrReasons(func))
+    top && top[1] >= 3
+      ? sanitizeModuleName(top[0])
+      : sanitizeModuleName(detectModuleByNameOrReasons(func, roleOptions))
 
   return {
     moduleName,
@@ -1220,19 +1705,26 @@ function regroupModules(
   minModuleSize: number,
   importsData?: ImportsData,
   stringsData?: StringsSummary,
-  functionStringHints?: Map<string, FunctionStringSearchHint>
+  functionStringHints?: Map<string, FunctionStringSearchHint>,
+  roleOptions?: RoleAwareModuleOptions
 ): ModuleBucket[] {
   const moduleMap = new Map<string, ModuleBucket>()
   const importHints = computeImportModuleHints(importsData)
   const stringHints = computeStringModuleHints(stringsData)
 
   for (const func of functions) {
-    const decision = chooseModuleForFunctionWithScoring(func, functionStringHints || new Map())
+    const decision = chooseModuleForFunctionWithScoring(
+      func,
+      functionStringHints || new Map(),
+      roleOptions
+    )
     const moduleName = sanitizeModuleName(decision.moduleName)
     if (!moduleMap.has(moduleName)) {
       moduleMap.set(moduleName, {
         name: moduleName,
         functions: [],
+        roleHint: inferRoleHintForModule(moduleName, roleOptions),
+        focusMatches: new Set(collectRoleFocusMatchesForModule(moduleName, roleOptions)),
         importHints: new Set(importHints.get(moduleName) || []),
         stringHints: new Set((stringHints.get(moduleName) || []).slice(0, 8)),
         runtimeApis: new Set<string>(),
@@ -1259,16 +1751,41 @@ function regroupModules(
     }
   }
 
-  let modules = Array.from(moduleMap.values()).sort(
-    (a, b) => b.functions.length - a.functions.length
-  )
+  const modulePriority = (module: ModuleBucket) => {
+    if (!roleOptions) {
+      return 0
+    }
+    return roleOptions.moduleOrder.has(module.name)
+      ? 100 - (roleOptions.moduleOrder.get(module.name) || 0)
+      : 0
+  }
+
+  let modules = Array.from(moduleMap.values()).sort((a, b) => {
+    const priorityDelta = modulePriority(b) - modulePriority(a)
+    if (priorityDelta !== 0) {
+      return priorityDelta
+    }
+    return b.functions.length - a.functions.length
+  })
 
   if (modules.length > moduleLimit) {
-    const kept = modules.slice(0, moduleLimit - 1)
-    const overflow = modules.slice(moduleLimit - 1)
+    const sticky = roleOptions
+      ? modules.filter((module) => roleOptions.stickyModules.has(module.name))
+      : []
+    const nonSticky = roleOptions
+      ? modules.filter((module) => !roleOptions.stickyModules.has(module.name))
+      : modules
+    const keepCount = Math.max(1, moduleLimit - 1)
+    const stickyKept = sticky.slice(0, Math.max(0, keepCount))
+    const remainingSlots = Math.max(0, keepCount - stickyKept.length)
+    const kept = [...stickyKept, ...nonSticky.slice(0, remainingSlots)]
+    const keptNames = new Set(kept.map((module) => module.name))
+    const overflow = modules.filter((module) => !keptNames.has(module.name))
     const mergedCore: ModuleBucket = {
       name: 'core',
       functions: overflow.flatMap((module) => module.functions),
+      roleHint: inferRoleHintForModule('core', roleOptions),
+      focusMatches: new Set(overflow.flatMap((module) => Array.from(module.focusMatches || []))),
       importHints: new Set(overflow.flatMap((module) => Array.from(module.importHints))),
       stringHints: new Set(overflow.flatMap((module) => Array.from(module.stringHints))),
       runtimeApis: new Set(overflow.flatMap((module) => Array.from(module.runtimeApis))),
@@ -1280,17 +1797,26 @@ function regroupModules(
 
   const small = modules.filter((module) => module.functions.length < minModuleSize)
   if (small.length > 0 && modules.length > 1) {
-    const large = modules.filter((module) => module.functions.length >= minModuleSize)
+    const smallMergeable = roleOptions
+      ? small.filter((module) => !roleOptions.stickyModules.has(module.name))
+      : small
+    const large = modules.filter(
+      (module) =>
+        module.functions.length >= minModuleSize ||
+        Boolean(roleOptions?.stickyModules.has(module.name))
+    )
     const core = large.find((module) => module.name === 'core') || {
       name: 'core',
       functions: [] as ReconstructedFunction[],
+      roleHint: inferRoleHintForModule('core', roleOptions),
+      focusMatches: new Set<string>(),
       importHints: new Set<string>(),
       stringHints: new Set<string>(),
       runtimeApis: new Set<string>(),
       runtimeStages: new Set<string>(),
       runtimeNotes: new Set<string>(),
     }
-    for (const module of small) {
+    for (const module of smallMergeable) {
       core.functions.push(...module.functions)
       for (const hint of module.importHints) {
         core.importHints.add(hint)
@@ -1307,14 +1833,30 @@ function regroupModules(
       for (const note of module.runtimeNotes) {
         core.runtimeNotes.add(note)
       }
+      for (const match of module.focusMatches) {
+        core.focusMatches.add(match)
+      }
+      if (!core.roleHint && module.roleHint) {
+        core.roleHint = module.roleHint
+      }
     }
-    modules = large.filter((module) => module.functions.length >= minModuleSize)
+    modules = large.filter(
+      (module) =>
+        module.functions.length >= minModuleSize ||
+        Boolean(roleOptions?.stickyModules.has(module.name))
+    )
     if (!modules.find((module) => module.name === 'core')) {
       modules.push(core)
     }
   }
 
-  return modules.sort((a, b) => b.functions.length - a.functions.length)
+  return modules.sort((a, b) => {
+    const priorityDelta = modulePriority(b) - modulePriority(a)
+    if (priorityDelta !== 0) {
+      return priorityDelta
+    }
+    return b.functions.length - a.functions.length
+  })
 }
 
 interface RewriteEntryNames {
@@ -1568,6 +2110,30 @@ function humanizeModuleName(value: string): string {
 function deriveSemanticCliDefaults(module: ModuleBucket): SemanticCliDefaults {
   const features = collectModuleFeatureSnapshot(module)
 
+  if (module.name === 'dll_lifecycle') {
+    return {
+      toolName: 'DLL Lifecycle Surface',
+      helpBanner: 'Review DllMain attach/detach behavior, library initialization, and module-lifetime side effects.',
+    }
+  }
+  if (module.name === 'com_activation') {
+    return {
+      toolName: 'COM Activation Surface',
+      helpBanner: 'Trace class-factory exports, registration paths, and COM activation routines.',
+    }
+  }
+  if (module.name === 'export_dispatch') {
+    return {
+      toolName: 'Export Dispatch Surface',
+      helpBanner: 'Recover exported command handlers, dispatch tables, and forwarded-export routing.',
+    }
+  }
+  if (module.name === 'callback_surface') {
+    return {
+      toolName: 'Host Callback Surface',
+      helpBanner: 'Recover host-driven callbacks, plugin entrypoints, and extension notification paths.',
+    }
+  }
   if (module.name === 'packer_analysis' || features.hasPackerScan) {
     return {
       toolName: 'Packer/Protector Detection',
@@ -1677,6 +2243,12 @@ function collectDisplayStringHints(module: ModuleBucket, limit = 8): string[] {
 }
 
 function describeModuleRole(module: ModuleBucket): string {
+  if (module.reviewResolution?.role_hint) {
+    return module.reviewResolution.role_hint
+  }
+  if (module.roleHint) {
+    return module.roleHint
+  }
   const defaults = deriveSemanticCliDefaults(module)
   return defaults.helpBanner
 }
@@ -2287,6 +2859,14 @@ function summarizeRewriteParameterRoles(func: ReconstructedFunction): string {
     .slice(0, 6)
     .map((item) => `${item.slot}=>${item.role}<${item.inferred_type}>`)
     .join('; ')
+}
+
+function summarizeRewriteReturnRole(func: ReconstructedFunction): string {
+  const role = func.return_role || func.semantic_evidence?.return_role || null
+  if (!role) {
+    return 'none'
+  }
+  return `${role.role}<${role.inferred_type}>`
 }
 
 function summarizeRewriteStateRoles(func: ReconstructedFunction): string {
@@ -3212,6 +3792,7 @@ function buildRewriteSteps(func: ReconstructedFunction): string[] {
 
 function buildAnnotatedRewriteContent(module: ModuleBucket): string {
   const lines: string[] = []
+  const orderedFunctions = orderModuleFunctionsForPresentation(module)
   const displayStringHints = collectDisplayStringHints(module)
   lines.push(`/* module: ${module.name} | annotated rewrite */`)
   lines.push(`#include "${sanitizeModuleName(module.name)}.interface.h"`)
@@ -3220,6 +3801,26 @@ function buildAnnotatedRewriteContent(module: ModuleBucket): string {
   lines.push(` * Analyst summary:`)
   lines.push(` * - function_count: ${module.functions.length}`)
   lines.push(` * - recovered_role: ${describeModuleRole(module)}`)
+  lines.push(` * - role_focus: ${Array.from(module.focusMatches).join(', ') || 'none'}`)
+  if (module.reviewResolution?.refined_name) {
+    lines.push(` * - module_review_name: ${module.reviewResolution.refined_name}`)
+  }
+  if (module.reviewResolution?.summary) {
+    lines.push(
+      ` * - module_review_summary: ${normalizeExplanationText(module.reviewResolution.summary) || 'none'}`
+    )
+  }
+  if (typeof module.reviewResolution?.confidence === 'number') {
+    lines.push(
+      ` * - module_review_confidence: ${Number(module.reviewResolution.confidence).toFixed(2)}`
+    )
+  }
+  lines.push(
+    ` * - prioritized_functions: ${orderedFunctions
+      .slice(0, 3)
+      .map((func) => getValidatedSemanticName(func) || func.function)
+      .join(', ') || 'none'}`
+  )
   lines.push(
     ` * - import_hints: ${Array.from(module.importHints).slice(0, 8).join(', ') || 'none'}`
   )
@@ -3233,12 +3834,17 @@ function buildAnnotatedRewriteContent(module: ModuleBucket): string {
   lines.push(
     ` * - runtime_notes: ${Array.from(module.runtimeNotes).slice(0, 4).join(' | ') || 'none'}`
   )
+  if ((module.reviewResolution?.rewrite_guidance || []).length > 0) {
+    lines.push(
+      ` * - module_rewrite_guidance: ${(module.reviewResolution?.rewrite_guidance || []).join(' | ')}`
+    )
+  }
   lines.push(' * - This file is a human-readable rewrite scaffold, not original source.')
   lines.push(' */')
   lines.push('')
   lines.push(...buildModuleRewritePrelude(module))
 
-  for (const func of module.functions) {
+  for (const func of orderedFunctions) {
     const names = deriveRewriteEntryNames(func, module)
     const validatedSemanticName = getValidatedSemanticName(func)
     lines.push(
@@ -3301,15 +3907,20 @@ function buildAnnotatedRewriteContent(module: ModuleBucket): string {
       `  /* relation_hints: callers=${summarizeRelationshipEntries(func.call_relationships?.callers)} callees=${summarizeRelationshipEntries(func.call_relationships?.callees)} */`
     )
     lines.push(`  /* parameter_roles: ${summarizeRewriteParameterRoles(func)} */`)
+    lines.push(`  /* return_role: ${summarizeRewriteReturnRole(func)} */`)
     lines.push(`  /* state_roles: ${summarizeRewriteStateRoles(func)} */`)
     lines.push(`  /* struct_inference: ${summarizeRewriteStructInference(func)} */`)
     if (
       (func.runtime_context?.corroborated_apis || []).length > 0 ||
       (func.runtime_context?.corroborated_stages || []).length > 0 ||
-      (func.runtime_context?.matched_memory_regions || []).length > 0
+      (func.runtime_context?.matched_memory_regions || []).length > 0 ||
+      (func.runtime_context?.matched_protections || []).length > 0 ||
+      (func.runtime_context?.matched_region_owners || []).length > 0 ||
+      (func.runtime_context?.matched_observed_modules || []).length > 0 ||
+      (func.runtime_context?.matched_segment_names || []).length > 0
     ) {
       lines.push(
-        `  /* runtime_context: apis=${(func.runtime_context?.corroborated_apis || []).join(', ') || 'none'} stages=${(func.runtime_context?.corroborated_stages || []).join(', ') || 'none'} regions=${(func.runtime_context?.matched_memory_regions || []).join(', ') || 'none'} modules=${(func.runtime_context?.suggested_modules || []).join(', ') || 'none'} confidence=${Number(func.runtime_context?.confidence || 0).toFixed(2)} executed=${func.runtime_context?.executed ? 'yes' : 'no'} sources=${(func.runtime_context?.evidence_sources || []).join(', ') || 'unknown'} names=${(func.runtime_context?.source_names || []).join(', ') || 'unknown'} matched_by=${(func.runtime_context?.matched_by || []).join(', ') || 'unknown'} artifacts=${func.runtime_context?.executed_artifact_count || 0}/${func.runtime_context?.artifact_count || 0} */`
+        `  /* runtime_context: apis=${(func.runtime_context?.corroborated_apis || []).join(', ') || 'none'} stages=${(func.runtime_context?.corroborated_stages || []).join(', ') || 'none'} regions=${(func.runtime_context?.matched_memory_regions || []).join(', ') || 'none'} protections=${(func.runtime_context?.matched_protections || []).join(', ') || 'none'} owners=${(func.runtime_context?.matched_region_owners || []).join(', ') || 'none'} observed_modules=${(func.runtime_context?.matched_observed_modules || []).join(', ') || 'none'} segments=${(func.runtime_context?.matched_segment_names || []).join(', ') || 'none'} ranges=${(func.runtime_context?.matched_address_ranges || []).join(', ') || 'none'} modules=${(func.runtime_context?.suggested_modules || []).join(', ') || 'none'} confidence=${Number(func.runtime_context?.confidence || 0).toFixed(2)} executed=${func.runtime_context?.executed ? 'yes' : 'no'} sources=${(func.runtime_context?.evidence_sources || []).join(', ') || 'unknown'} names=${(func.runtime_context?.source_names || []).join(', ') || 'unknown'} matched_by=${(func.runtime_context?.matched_by || []).join(', ') || 'unknown'} artifacts=${func.runtime_context?.executed_artifact_count || 0}/${func.runtime_context?.artifact_count || 0} */`
       )
     }
     if ((func.runtime_context?.notes || []).length > 0) {
@@ -3449,6 +4060,64 @@ function scoreFunctionForDedup(func: ReconstructedFunction): number {
     (func.runtime_context?.matched_memory_regions?.length || 0) * 2 -
     (func.gaps?.length || 0) * 3
   )
+}
+
+function scoreFunctionForRewritePresentation(func: ReconstructedFunction, module: ModuleBucket): number {
+  const corpus = [
+    func.function,
+    func.semantic_summary || '',
+    func.source_like_snippet || '',
+    ...(func.behavior_tags || []),
+    ...(func.rank_reasons || []),
+    ...(func.runtime_context?.corroborated_stages || []),
+    ...(func.runtime_context?.matched_memory_regions || []),
+  ].join(' ')
+  let score =
+    func.confidence * 100 +
+    (func.xref_signals?.length || 0) * 6 +
+    (func.runtime_context?.corroborated_apis?.length || 0) * 5 +
+    (func.runtime_context?.matched_memory_regions?.length || 0) * 4 +
+    (func.parameter_roles?.length || 0) * 2 +
+    (func.struct_inference?.length || 0) * 3
+
+  if (func.name_resolution?.validated_name) {
+    score += 10
+  }
+  if (func.explanation_resolution?.summary) {
+    score += 8
+  }
+
+  const lowered = corpus.toLowerCase()
+  if (module.name === 'com_activation' && /\b(dllgetclassobject|class factory|iclassfactory|cocreateinstance|inprocserver32)\b/.test(lowered)) {
+    score += 30
+  }
+  if (module.name === 'dll_lifecycle' && /\b(dllmain|disablethreadlibrarycalls|attach|detach)\b/.test(lowered)) {
+    score += 30
+  }
+  if (module.name === 'export_dispatch' && /\b(dispatch|invokecommand|handlecommand|runcommand|export)\b/.test(lowered)) {
+    score += 24
+  }
+  if (module.name === 'callback_surface' && /\b(callback|plugin|notify|hook|host)\b/.test(lowered)) {
+    score += 24
+  }
+  if (module.name === 'process_ops' && /\b(writeprocessmemory|openprocess|createprocess|setthreadcontext|resumethread)\b/.test(lowered)) {
+    score += 20
+  }
+  if (module.name === 'packer_analysis' && /\b(packer|protector|entropy|section|signature|layout)\b/.test(lowered)) {
+    score += 20
+  }
+
+  return score
+}
+
+function orderModuleFunctionsForPresentation(module: ModuleBucket): ReconstructedFunction[] {
+  return [...module.functions].sort((left, right) => {
+    const scoreDelta = scoreFunctionForRewritePresentation(right, module) - scoreFunctionForRewritePresentation(left, module)
+    if (scoreDelta !== 0) {
+      return scoreDelta
+    }
+    return left.address.localeCompare(right.address)
+  })
 }
 
 function dedupeReconstructedFunctions(functions: ReconstructedFunction[]): ReconstructedFunction[] {
@@ -3978,6 +4647,8 @@ function buildBinaryProfile(
     modules.map((module) => ({
       name: module.name,
       functions: [],
+      roleHint: module.role_hint || null,
+      focusMatches: new Set(module.focus_matches || []),
       importHints: new Set(module.import_hints || []),
       stringHints: new Set(module.string_hints || []),
       runtimeApis: new Set(module.runtime_apis || []),
@@ -4086,6 +4757,23 @@ function buildReverseNotesMarkdown(
     const moduleBucket = {
       name: module.name,
       functions: [],
+      roleHint: module.role_hint || null,
+      focusMatches: new Set(module.focus_matches || []),
+      reviewResolution:
+        module.review_summary || module.refined_name || module.role_hint
+          ? {
+              refined_name: module.refined_name || null,
+              summary: module.review_summary || null,
+              role_hint: module.role_hint || null,
+              confidence: typeof module.review_confidence === 'number' ? module.review_confidence : null,
+              assumptions: [],
+              evidence_used: [],
+              rewrite_guidance: [],
+              focus_areas: module.focus_matches || [],
+              priority_functions: [],
+              source: 'llm' as const,
+            }
+          : undefined,
       importHints: new Set(module.import_hints || []),
       stringHints: new Set(module.string_hints || []),
       runtimeApis: new Set(module.runtime_apis || []),
@@ -4095,7 +4783,7 @@ function buildReverseNotesMarkdown(
     const displayHints = collectDisplayStringHints(moduleBucket).slice(0, 3)
     const semanticRole = describeModuleRole(moduleBucket)
     lines.push(
-      `- ${module.name}: role=${semanticRole} confidence=${module.confidence.toFixed(2)}, functions=${module.function_count}, strings=${displayHints.join(' | ') || 'none'}, runtime=${module.runtime_stages.slice(0, 2).join(', ') || 'none'}`
+      `- ${module.name}${module.refined_name ? ` [${module.refined_name}]` : ''}: role=${semanticRole} confidence=${module.confidence.toFixed(2)}, focus=${(module.focus_matches || []).join(', ') || 'none'}, functions=${module.function_count}, strings=${displayHints.join(' | ') || 'none'}, runtime=${module.runtime_stages.slice(0, 2).join(', ') || 'none'}${module.review_summary ? `, review=${normalizeExplanationText(module.review_summary)}` : ''}`
     )
   }
   lines.push('')
@@ -4265,6 +4953,9 @@ export function createCodeReconstructExportHandler(
           evidence_session_tag: input.evidence_session_tag || null,
           semantic_scope: input.semantic_scope,
           semantic_session_tag: input.semantic_session_tag || null,
+          role_target: input.role_target || null,
+          role_focus_areas: input.role_focus_areas,
+          role_priority_order: input.role_priority_order,
           analysis_marker: analysisMarker,
           runtime_marker: runtimeMarker,
           semantic_name_marker: semanticNameMarker,
@@ -4486,6 +5177,7 @@ export function createCodeReconstructExportHandler(
           input.semantic_session_tag
         ),
       }
+      const roleAwareModules = buildRoleAwareModuleOptions(input)
 
       const modules = regroupModules(
         normalizedFunctions,
@@ -4493,7 +5185,24 @@ export function createCodeReconstructExportHandler(
         input.min_module_size,
         importsData,
         stringsData,
-        functionStringHints
+        functionStringHints,
+        roleAwareModules
+      )
+      const moduleReviewIndex = await attachModuleReviews(
+        workspaceManager,
+        database,
+        input.sample_id,
+        modules,
+        {
+          scope: input.semantic_scope,
+          sessionTag: input.semantic_session_tag,
+        }
+      )
+      ;(provenance as any).semantic_module_reviews = buildSemanticArtifactProvenance(
+        'semantic module review artifacts',
+        moduleReviewIndex,
+        input.semantic_scope,
+        input.semantic_session_tag
       )
 
       const workspace = await workspaceManager.getWorkspace(input.sample_id)
@@ -4531,6 +5240,14 @@ export function createCodeReconstructExportHandler(
           name: safeName,
           confidence: averageConfidence(module.functions),
           function_count: module.functions.length,
+          role_hint: module.reviewResolution?.role_hint || module.roleHint,
+          focus_matches: Array.from(module.focusMatches),
+          refined_name: module.reviewResolution?.refined_name || null,
+          review_summary: module.reviewResolution?.summary || null,
+          review_confidence:
+            typeof module.reviewResolution?.confidence === 'number'
+              ? module.reviewResolution.confidence
+              : null,
           import_hints: Array.from(module.importHints).slice(0, 10),
           string_hints: Array.from(module.stringHints).slice(0, 10),
           runtime_apis: Array.from(module.runtimeApis).slice(0, 10),
@@ -4733,7 +5450,11 @@ export function createCodeReconstructExportHandler(
               stage_count: dynamicEvidence.stage_count,
               observed_apis: dynamicEvidence.observed_apis.slice(0, 12),
               region_types: (dynamicEvidence.region_types || []).slice(0, 12),
+              protections: (dynamicEvidence.protections || []).slice(0, 12),
+              address_ranges: (dynamicEvidence.address_ranges || []).slice(0, 8),
+              region_owners: (dynamicEvidence.region_owners || []).slice(0, 8),
               observed_modules: (dynamicEvidence.observed_modules || []).slice(0, 8),
+              segment_names: (dynamicEvidence.segment_names || []).slice(0, 8),
               observed_strings: (dynamicEvidence.observed_strings || []).slice(0, 8),
               stages: dynamicEvidence.stages.slice(0, 12),
               summary: dynamicEvidence.summary,
@@ -4744,6 +5465,12 @@ export function createCodeReconstructExportHandler(
           name: module.name,
           confidence: module.confidence,
           function_count: module.function_count,
+          role_hint: module.role_hint || null,
+          focus_matches: module.focus_matches || [],
+          refined_name: module.refined_name || null,
+          review_summary: module.review_summary || null,
+          review_confidence:
+            typeof module.review_confidence === 'number' ? module.review_confidence : null,
           interface_path: module.interface_path,
           pseudocode_path: module.pseudocode_path,
           rewrite_path: module.rewrite_path,
@@ -5058,7 +5785,11 @@ export function createCodeReconstructExportHandler(
               stage_count: dynamicEvidence.stage_count,
               observed_apis: dynamicEvidence.observed_apis.slice(0, 12),
               region_types: (dynamicEvidence.region_types || []).slice(0, 12),
+              protections: (dynamicEvidence.protections || []).slice(0, 12),
+              address_ranges: (dynamicEvidence.address_ranges || []).slice(0, 8),
+              region_owners: (dynamicEvidence.region_owners || []).slice(0, 8),
               observed_modules: (dynamicEvidence.observed_modules || []).slice(0, 8),
+              segment_names: (dynamicEvidence.segment_names || []).slice(0, 8),
               observed_strings: (dynamicEvidence.observed_strings || []).slice(0, 8),
               stages: dynamicEvidence.stages.slice(0, 12),
               summary: dynamicEvidence.summary,

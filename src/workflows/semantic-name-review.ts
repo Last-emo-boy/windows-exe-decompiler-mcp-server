@@ -15,6 +15,13 @@ import { createReconstructWorkflowHandler } from './reconstruct.js'
 import { AnalysisProvenanceSchema } from '../analysis-provenance.js'
 import { AnalysisSelectionDiffSchema } from '../selection-diff.js'
 import { BinaryRoleProfileDataSchema } from '../tools/binary-role-profile.js'
+import {
+  RequiredUserInputSchema,
+  SetupActionSchema,
+  collectSetupGuidanceFromWorkerResult,
+  mergeRequiredUserInputs,
+  mergeSetupActions,
+} from '../setup-guidance.js'
 
 const TOOL_NAME = 'workflow.semantic_name_review'
 
@@ -336,6 +343,8 @@ export const semanticNameReviewWorkflowOutputSchema = z.object({
     .optional(),
   warnings: z.array(z.string()).optional(),
   errors: z.array(z.string()).optional(),
+  setup_actions: z.array(SetupActionSchema).optional(),
+  required_user_inputs: z.array(RequiredUserInputSchema).optional(),
   artifacts: z.array(z.any()).optional(),
   metrics: z
     .object({
@@ -383,6 +392,8 @@ export function createSemanticNameReviewWorkflowHandler(
     const warnings: string[] = []
     const errors: string[] = []
     const artifacts: any[] = []
+    let setupActions = [] as z.infer<typeof SetupActionSchema>[]
+    let requiredUserInputs = [] as z.infer<typeof RequiredUserInputSchema>[]
 
     try {
       const input = semanticNameReviewWorkflowInputSchema.parse(args)
@@ -462,12 +473,22 @@ export function createSemanticNameReviewWorkflowHandler(
 
       warnings.push(...(reviewResult.warnings || []))
       artifacts.push(...(reviewResult.artifacts || []))
+      {
+        const setupGuidance = collectSetupGuidanceFromWorkerResult(reviewResult)
+        setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+        requiredUserInputs = mergeRequiredUserInputs(
+          requiredUserInputs,
+          setupGuidance.requiredUserInputs
+        )
+      }
 
       if (!reviewResult.ok) {
         return {
           ok: false,
           errors: reviewResult.errors || ['code.function.rename.review failed'],
           warnings: warnings.length > 0 ? warnings : undefined,
+          setup_actions: setupActions.length > 0 ? setupActions : undefined,
+          required_user_inputs: requiredUserInputs.length > 0 ? requiredUserInputs : undefined,
           artifacts: artifacts.length > 0 ? artifacts : undefined,
           metrics: {
             elapsed_ms: Date.now() - startTime,
@@ -547,6 +568,14 @@ export function createSemanticNameReviewWorkflowHandler(
 
         warnings.push(...(exportResult.warnings || []))
         artifacts.push(...(exportResult.artifacts || []))
+        {
+          const setupGuidance = collectSetupGuidanceFromWorkerResult(exportResult)
+          setupActions = mergeSetupActions(setupActions, setupGuidance.setupActions)
+          requiredUserInputs = mergeRequiredUserInputs(
+            requiredUserInputs,
+            setupGuidance.requiredUserInputs
+          )
+        }
 
         if (!exportResult.ok) {
           errors.push(...(exportResult.errors || ['workflow.reconstruct failed during export refresh']))
@@ -656,6 +685,8 @@ export function createSemanticNameReviewWorkflowHandler(
         },
         warnings: warnings.length > 0 ? warnings : undefined,
         errors: errors.length > 0 ? errors : undefined,
+        setup_actions: setupActions.length > 0 ? setupActions : undefined,
+        required_user_inputs: requiredUserInputs.length > 0 ? requiredUserInputs : undefined,
         artifacts: artifacts.length > 0 ? artifacts : undefined,
         metrics: {
           elapsed_ms: Date.now() - startTime,
@@ -666,6 +697,8 @@ export function createSemanticNameReviewWorkflowHandler(
       return {
         ok: false,
         errors: [error instanceof Error ? error.message : String(error)],
+        setup_actions: setupActions.length > 0 ? setupActions : undefined,
+        required_user_inputs: requiredUserInputs.length > 0 ? requiredUserInputs : undefined,
         metrics: {
           elapsed_ms: Date.now() - startTime,
           tool: TOOL_NAME,

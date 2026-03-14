@@ -49,7 +49,7 @@ import {
 } from '../analysis-provenance.js'
 
 const TOOL_NAME = 'code.functions.reconstruct'
-const TOOL_VERSION = '0.2.13'
+const TOOL_VERSION = '0.2.14'
 const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000 // 7 days
 
 export const CodeFunctionsReconstructInputSchema = z.object({
@@ -149,6 +149,11 @@ const FunctionRuntimeContextSchema = z
     artifact_count: z.number().int().nonnegative().optional(),
     executed_artifact_count: z.number().int().nonnegative().optional(),
     matched_memory_regions: z.array(z.string()).optional(),
+    matched_protections: z.array(z.string()).optional(),
+    matched_address_ranges: z.array(z.string()).optional(),
+    matched_region_owners: z.array(z.string()).optional(),
+    matched_observed_modules: z.array(z.string()).optional(),
+    matched_segment_names: z.array(z.string()).optional(),
     suggested_modules: z.array(z.string()).optional(),
     matched_by: z.array(z.string()).optional(),
     provenance_layers: z.array(z.string()).optional(),
@@ -169,6 +174,13 @@ const FunctionCFGShapeSchema = z.object({
 
 const FunctionParameterRoleSchema = z.object({
   slot: z.string(),
+  role: z.string(),
+  inferred_type: z.string(),
+  confidence: z.number().min(0).max(1),
+  evidence: z.array(z.string()),
+})
+
+const FunctionReturnRoleSchema = z.object({
   role: z.string(),
   inferred_type: z.string(),
   confidence: z.number().min(0).max(1),
@@ -209,6 +221,7 @@ const FunctionSemanticEvidenceSchema = z.object({
   pseudocode_excerpt: z.string(),
   cfg_shape: FunctionCFGShapeSchema,
   parameter_roles: z.array(FunctionParameterRoleSchema),
+  return_role: FunctionReturnRoleSchema.nullable().optional(),
   state_roles: z.array(FunctionStateRoleSchema),
   struct_inference: z.array(FunctionStructInferenceSchema),
 })
@@ -247,6 +260,7 @@ const ReconstructedFunctionSchema = z.object({
   }),
   runtime_context: FunctionRuntimeContextSchema,
   parameter_roles: z.array(FunctionParameterRoleSchema).optional(),
+  return_role: FunctionReturnRoleSchema.nullable().optional(),
   state_roles: z.array(FunctionStateRoleSchema).optional(),
   struct_inference: z.array(FunctionStructInferenceSchema).optional(),
   semantic_evidence: FunctionSemanticEvidenceSchema.optional(),
@@ -408,6 +422,14 @@ interface SemanticEvidencePack {
     confidence: number
     evidence: string[]
   }>
+  return_role?:
+    | {
+        role: string
+        inferred_type: string
+        confidence: number
+        evidence: string[]
+      }
+    | null
   state_roles: Array<{
     state_key: string
     role: string
@@ -2120,6 +2142,87 @@ function inferStructInference(
   return structs
 }
 
+function inferReturnRole(
+  behaviorTags: string[],
+  xrefSignals: FunctionXrefSummary[],
+  runtimeContext: ReturnType<typeof correlateFunctionWithRuntimeEvidence> | undefined,
+  stringHints: string[],
+  semanticSummary: string,
+  sourceLikeSnippet: string
+): z.infer<typeof FunctionReturnRoleSchema> | null {
+  const corpus = [
+    semanticSummary,
+    sourceLikeSnippet,
+    ...stringHints,
+    ...xrefSignals.map((item) => `${item.api} ${item.provenance}`),
+    ...(runtimeContext?.corroborated_apis || []),
+    ...(runtimeContext?.corroborated_stages || []),
+    ...behaviorTags,
+  ]
+    .join('\n')
+    .toLowerCase()
+
+  const buildRole = (
+    role: string,
+    inferredType: string,
+    confidence: number,
+    evidence: string[]
+  ): z.infer<typeof FunctionReturnRoleSchema> => ({
+    role,
+    inferred_type: inferredType,
+    confidence: clamp(confidence, 0, 1),
+    evidence: dedupe(evidence),
+  })
+
+  if (/\b(getprocaddress|loadlibrary|loadlibraryex|resolved api|dynamic api)\b/i.test(corpus)) {
+    return buildRole('resolved_symbol_pointer', 'void *', 0.78, [
+      'api:GetProcAddress/LoadLibrary*',
+      'summary:dynamic_resolution',
+    ])
+  }
+  if (/\b(writeprocessmemory|readprocessmemory|setthreadcontext|resumethread|createremotethread|virtualallocex|createprocess[a-z]*)\b/i.test(corpus)) {
+    return buildRole('execution_transfer_status', 'int', 0.74, [
+      'api:WriteProcessMemory/SetThreadContext/ResumeThread/CreateProcess*',
+      'runtime_stage:prepare_remote_process_access',
+    ])
+  }
+  if (/\b(createfile[a-z]*|readfile|writefile|deletefile[a-z]*|copyfile[a-z]*|findfirstfile[a-z]*|findnextfile[a-z]*)\b/i.test(corpus)) {
+    return buildRole('io_status_or_bytes', 'int', 0.69, ['api:CreateFile*/ReadFile/WriteFile'])
+  }
+  if (/\b(regopenkey(?:ex)?[a-z]*|regsetvalue(?:ex)?[a-z]*|regqueryvalue(?:ex)?[a-z]*|regcreatekey(?:ex)?[a-z]*)\b/i.test(corpus)) {
+    return buildRole('registry_operation_status', 'int', 0.67, ['api:RegOpenKey*/RegSetValue*'])
+  }
+  if (/\b(internetopen[a-z]*|internetconnect[a-z]*|httpsendrequest[a-z]*|winhttp[a-z]*|socket|connect|send|recv)\b/i.test(corpus)) {
+    return buildRole('network_operation_status', 'int', 0.7, [
+      'api:InternetConnect*/HttpSendRequest*/socket',
+    ])
+  }
+  if (/\b(createservice[a-z]*|startservice[a-z]*|openscmanager[a-z]*|controlservice|registerservicectrlhandler(?:ex)?[a-z]*)\b/i.test(corpus)) {
+    return buildRole('service_control_status', 'int', 0.68, [
+      'api:CreateService/OpenSCManager/ControlService',
+    ])
+  }
+  if (/\b(cocreateinstance|queryinterface|dllgetclassobject|class factory|hresult)\b/i.test(corpus)) {
+    return buildRole('activation_status_or_hresult', 'HRESULT', 0.72, [
+      'api:CoCreateInstance/QueryInterface/DllGetClassObject',
+    ])
+  }
+  if (/\b(dllmain|dllregisterserver|dllunregisterserver|dllinstall|dllcanunloadnow|dll_process_attach)\b/i.test(corpus)) {
+    return buildRole('dll_entry_decision', 'BOOL', 0.71, ['summary:dll_lifecycle'])
+  }
+  if (/\b(export|ordinal|forwarder|dispatch exported|host-facing command)\b/i.test(corpus)) {
+    return buildRole('dispatch_status_or_result', 'int', 0.61, ['summary:export_dispatch'])
+  }
+  if (/\b(packer|protector|upx|vmprotect|themida|entry point in non-first section)\b/i.test(corpus)) {
+    return buildRole('heuristic_match_score', 'int', 0.66, ['strings:packer/protector'])
+  }
+  if (/\breturn 0\b|\breturn 1\b|\breturn true\b|\breturn false\b/i.test(corpus)) {
+    return buildRole('status_code', 'int', 0.45, ['pseudocode:return_literal'])
+  }
+
+  return null
+}
+
 function summarizeParameterRoles(
   parameterRoles: z.infer<typeof FunctionParameterRoleSchema>[]
 ): string {
@@ -2130,6 +2233,15 @@ function summarizeParameterRoles(
     .slice(0, 6)
     .map((item) => `${item.slot}=>${item.role}<${item.inferred_type}>`)
     .join('; ')
+}
+
+function summarizeReturnRole(
+  returnRole: z.infer<typeof FunctionReturnRoleSchema> | null | undefined
+): string {
+  if (!returnRole) {
+    return 'none'
+  }
+  return `${returnRole.role}<${returnRole.inferred_type}>`
 }
 
 function summarizeStateRoles(stateRoles: z.infer<typeof FunctionStateRoleSchema>[]): string {
@@ -2325,6 +2437,7 @@ async function finalizeLayeredNameResolution(
         entry_block_type: null,
       },
     parameter_roles: func.parameter_roles || func.semantic_evidence?.parameter_roles || [],
+    return_role: func.return_role || func.semantic_evidence?.return_role || null,
     state_roles: func.state_roles || func.semantic_evidence?.state_roles || [],
     struct_inference: func.struct_inference || func.semantic_evidence?.struct_inference || [],
   }
@@ -2716,6 +2829,7 @@ function buildSemanticSummary(
   gaps: string[],
   rankReasons: string[],
   parameterRoles: z.infer<typeof FunctionParameterRoleSchema>[],
+  returnRole: z.infer<typeof FunctionReturnRoleSchema> | null | undefined,
   stateRoles: z.infer<typeof FunctionStateRoleSchema>[],
   structInference: z.infer<typeof FunctionStructInferenceSchema>[],
   runtimeContext?: {
@@ -2729,6 +2843,11 @@ function buildSemanticSummary(
     artifact_count?: number
     executed_artifact_count?: number
     matched_memory_regions?: string[]
+    matched_protections?: string[]
+    matched_address_ranges?: string[]
+    matched_region_owners?: string[]
+    matched_observed_modules?: string[]
+    matched_segment_names?: string[]
     suggested_modules?: string[]
     matched_by?: string[]
     provenance_layers?: string[]
@@ -2790,6 +2909,10 @@ function buildSemanticSummary(
     )
   }
 
+  if (returnRole) {
+    phrases.push(`likely returns ${returnRole.role}`)
+  }
+
   if (stateRoles.length > 0) {
     phrases.push(
       `likely maintains ${stateRoles
@@ -2808,7 +2931,18 @@ function buildSemanticSummary(
     )
   }
 
-  if (runtimeContext && (runtimeContext.corroborated_apis.length > 0 || runtimeContext.corroborated_stages.length > 0)) {
+  if (
+    runtimeContext &&
+    (
+      runtimeContext.corroborated_apis.length > 0 ||
+      runtimeContext.corroborated_stages.length > 0 ||
+      (runtimeContext.matched_memory_regions || []).length > 0 ||
+      (runtimeContext.matched_protections || []).length > 0 ||
+      (runtimeContext.matched_region_owners || []).length > 0 ||
+      (runtimeContext.matched_observed_modules || []).length > 0 ||
+      (runtimeContext.matched_segment_names || []).length > 0
+    )
+  ) {
     const runtimePhrases: string[] = []
     if (runtimeContext.corroborated_apis.length > 0) {
       runtimePhrases.push(`runtime corroborates ${runtimeContext.corroborated_apis.slice(0, 3).join(', ')}`)
@@ -2833,6 +2967,31 @@ function buildSemanticSummary(
     if ((runtimeContext.matched_memory_regions || []).length > 0) {
       runtimePhrases.push(
         `memory regions include ${(runtimeContext.matched_memory_regions || []).slice(0, 2).join(', ')}`
+      )
+    }
+    if ((runtimeContext.matched_protections || []).length > 0) {
+      runtimePhrases.push(
+        `protections include ${(runtimeContext.matched_protections || []).slice(0, 2).join(', ')}`
+      )
+    }
+    if ((runtimeContext.matched_region_owners || []).length > 0) {
+      runtimePhrases.push(
+        `region owners include ${(runtimeContext.matched_region_owners || []).slice(0, 2).join(', ')}`
+      )
+    }
+    if ((runtimeContext.matched_observed_modules || []).length > 0) {
+      runtimePhrases.push(
+        `observed modules include ${(runtimeContext.matched_observed_modules || []).slice(0, 2).join(', ')}`
+      )
+    }
+    if ((runtimeContext.matched_segment_names || []).length > 0) {
+      runtimePhrases.push(
+        `segments include ${(runtimeContext.matched_segment_names || []).slice(0, 2).join(', ')}`
+      )
+    }
+    if ((runtimeContext.matched_address_ranges || []).length > 0) {
+      runtimePhrases.push(
+        `address ranges include ${(runtimeContext.matched_address_ranges || []).slice(0, 2).join(', ')}`
       )
     }
     if (runtimeContext.scope_note) {
@@ -2928,6 +3087,7 @@ function buildSourceLikeSnippet(
   relationshipContext: RelationshipContext,
   rankReasons: string[],
   parameterRoles: z.infer<typeof FunctionParameterRoleSchema>[],
+  returnRole: z.infer<typeof FunctionReturnRoleSchema> | null | undefined,
   stateRoles: z.infer<typeof FunctionStateRoleSchema>[],
   structInference: z.infer<typeof FunctionStructInferenceSchema>[],
   runtimeContext?: {
@@ -2941,6 +3101,11 @@ function buildSourceLikeSnippet(
     artifact_count?: number
     executed_artifact_count?: number
     matched_memory_regions?: string[]
+    matched_protections?: string[]
+    matched_address_ranges?: string[]
+    matched_region_owners?: string[]
+    matched_observed_modules?: string[]
+    matched_segment_names?: string[]
     suggested_modules?: string[]
     matched_by?: string[]
     provenance_layers?: string[]
@@ -2984,6 +3149,10 @@ function buildSourceLikeSnippet(
     commentLines.push(`// parameter_roles=${summarizeParameterRoles(parameterRoles)}`)
   }
 
+  if (returnRole) {
+    commentLines.push(`// return_role=${summarizeReturnRole(returnRole)}`)
+  }
+
   if (stateRoles.length > 0) {
     commentLines.push(`// state_roles=${summarizeStateRoles(stateRoles)}`)
   }
@@ -2996,10 +3165,14 @@ function buildSourceLikeSnippet(
     runtimeContext &&
     (runtimeContext.corroborated_apis.length > 0 ||
       runtimeContext.corroborated_stages.length > 0 ||
-      (runtimeContext.matched_memory_regions || []).length > 0)
+      (runtimeContext.matched_memory_regions || []).length > 0 ||
+      (runtimeContext.matched_protections || []).length > 0 ||
+      (runtimeContext.matched_region_owners || []).length > 0 ||
+      (runtimeContext.matched_observed_modules || []).length > 0 ||
+      (runtimeContext.matched_segment_names || []).length > 0)
   ) {
     commentLines.push(
-      `// runtime_evidence=apis:${runtimeContext.corroborated_apis.join(', ') || 'none'} | stages:${runtimeContext.corroborated_stages.join(', ') || 'none'} | regions:${(runtimeContext.matched_memory_regions || []).join(', ') || 'none'} | modules:${(runtimeContext.suggested_modules || []).join(', ') || 'none'} | confidence:${runtimeContext.confidence.toFixed(2)} | executed:${runtimeContext.executed ? 'yes' : 'no'} | sources:${(runtimeContext.evidence_sources || []).join(', ') || 'unknown'} | names:${(runtimeContext.source_names || []).join(', ') || 'unknown'} | layers:${(runtimeContext.provenance_layers || []).join(', ') || 'unknown'} | latest:${runtimeContext.latest_artifact_at || 'unknown'} | matched_by:${(runtimeContext.matched_by || []).join(', ') || 'unknown'} | artifacts:${runtimeContext.executed_artifact_count || 0}/${runtimeContext.artifact_count || 0}`
+      `// runtime_evidence=apis:${runtimeContext.corroborated_apis.join(', ') || 'none'} | stages:${runtimeContext.corroborated_stages.join(', ') || 'none'} | regions:${(runtimeContext.matched_memory_regions || []).join(', ') || 'none'} | protections:${(runtimeContext.matched_protections || []).join(', ') || 'none'} | owners:${(runtimeContext.matched_region_owners || []).join(', ') || 'none'} | observed_modules:${(runtimeContext.matched_observed_modules || []).join(', ') || 'none'} | segments:${(runtimeContext.matched_segment_names || []).join(', ') || 'none'} | ranges:${(runtimeContext.matched_address_ranges || []).join(', ') || 'none'} | modules:${(runtimeContext.suggested_modules || []).join(', ') || 'none'} | confidence:${runtimeContext.confidence.toFixed(2)} | executed:${runtimeContext.executed ? 'yes' : 'no'} | sources:${(runtimeContext.evidence_sources || []).join(', ') || 'unknown'} | names:${(runtimeContext.source_names || []).join(', ') || 'unknown'} | layers:${(runtimeContext.provenance_layers || []).join(', ') || 'unknown'} | latest:${runtimeContext.latest_artifact_at || 'unknown'} | matched_by:${(runtimeContext.matched_by || []).join(', ') || 'unknown'} | artifacts:${runtimeContext.executed_artifact_count || 0}/${runtimeContext.artifact_count || 0}`
     )
     if (runtimeContext.notes.length > 0) {
       commentLines.push(`// runtime_notes=${runtimeContext.notes.join(' || ')}`)
@@ -3553,6 +3726,7 @@ export function createCodeFunctionsReconstructHandler(
           gaps,
           target.rankReasons,
           [],
+          null,
           [],
           [],
           runtimeContext
@@ -3589,6 +3763,7 @@ export function createCodeFunctionsReconstructHandler(
           relationshipContext,
           target.rankReasons,
           [],
+          null,
           [],
           [],
           runtimeContext
@@ -3619,6 +3794,14 @@ export function createCodeFunctionsReconstructHandler(
           draftSourceLikeSnippet
         )
         const structInference = inferStructInference(parameterRoles, stateRoles)
+        const returnRole = inferReturnRole(
+          behaviorTags,
+          xrefSignals,
+          runtimeContext,
+          functionStringHints,
+          draftSemanticSummary,
+          draftSourceLikeSnippet
+        )
         const semanticSummary = buildSemanticSummary(
           functionName,
           behaviorTags,
@@ -3628,6 +3811,7 @@ export function createCodeFunctionsReconstructHandler(
           gaps,
           target.rankReasons,
           parameterRoles,
+          returnRole,
           stateRoles,
           structInference,
           runtimeContext
@@ -3644,6 +3828,7 @@ export function createCodeFunctionsReconstructHandler(
           relationshipContext,
           target.rankReasons,
           parameterRoles,
+          returnRole,
           stateRoles,
           structInference,
           runtimeContext
@@ -3657,6 +3842,7 @@ export function createCodeFunctionsReconstructHandler(
           pseudocode_excerpt: buildPseudocodeExcerpt(sourceLikeSnippet),
           cfg_shape: cfgShape,
           parameter_roles: parameterRoles,
+          return_role: returnRole || null,
           state_roles: stateRoles,
           struct_inference: structInference,
         }
@@ -3683,6 +3869,7 @@ export function createCodeFunctionsReconstructHandler(
           call_relationships: relationshipContext,
           runtime_context: runtimeContext,
           parameter_roles: parameterRoles,
+          return_role: returnRole,
           state_roles: stateRoles,
           struct_inference: structInference,
           semantic_evidence: semanticEvidence,

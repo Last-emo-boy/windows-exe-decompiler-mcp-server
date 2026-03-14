@@ -255,4 +255,63 @@ describe('tool.help tool', () => {
     const defineFromField = workflowData.tools[0].input.fields.find((item: any) => item.path === 'define_from')
     expect(defineFromField.help_hint).toContain('auto prefers pe.symbols.recover')
   })
+
+  test('should explain DLL and COM profiling entrypoints', async () => {
+    const definitions: ToolDefinition[] = [
+      {
+        name: 'dll.export.profile',
+        description: 'Profile DLL export surfaces',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          max_exports: z.number().optional(),
+        }),
+      },
+      {
+        name: 'com.role.profile',
+        description: 'Profile COM-oriented PE samples',
+        inputSchema: z.object({
+          sample_id: z.string(),
+          max_strings: z.number().optional(),
+        }),
+      },
+    ]
+
+    const handler = createToolHelpHandler(() => definitions)
+
+    const dllResult = await handler({ tool_name: 'dll.export.profile' })
+    const dllData = dllResult.data as any
+    expect(dllData.tools[0].usage_notes.some((item: string) => item.includes('DllMain'))).toBe(true)
+    const dllSampleField = dllData.tools[0].input.fields.find((item: any) => item.path === 'sample_id')
+    expect(dllSampleField.help_hint).toContain('DLL-first view')
+
+    const comResult = await handler({ tool_name: 'com.role.profile' })
+    const comData = comResult.data as any
+    expect(comData.tools[0].usage_notes.some((item: string) => item.includes('COM'))).toBe(true)
+    const maxStringsField = comData.tools[0].input.fields.find((item: any) => item.path === 'max_strings')
+    expect(maxStringsField.help_hint).toContain('CLSID')
+  })
+
+  test('should explain explicit setup guidance fields', async () => {
+    const definitions: ToolDefinition[] = [
+      {
+        name: 'system.setup.guide',
+        description: 'Explain bootstrap commands and required environment variables',
+        inputSchema: z.object({
+          focus: z.enum(['all', 'python', 'dynamic', 'ghidra']).default('all'),
+          include_optional: z.boolean().default(true),
+        }),
+      },
+    ]
+
+    const handler = createToolHelpHandler(() => definitions)
+    const result = await handler({ tool_name: 'system.setup.guide' })
+    const data = result.data as any
+
+    expect(data.tools[0].usage_notes.some((item: string) => item.includes('pip install commands'))).toBe(true)
+    const focusField = data.tools[0].input.fields.find((item: any) => item.path === 'focus')
+    const includeOptionalField = data.tools[0].input.fields.find((item: any) => item.path === 'include_optional')
+
+    expect(focusField.help_hint).toContain('first-run bootstrap guide')
+    expect(includeOptionalField.help_hint).toContain('only required setup steps')
+  })
 })

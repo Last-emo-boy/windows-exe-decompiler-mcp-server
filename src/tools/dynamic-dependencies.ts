@@ -11,6 +11,13 @@ import type { ToolDefinition, ToolArgs, WorkerResult, ArtifactRef } from '../typ
 import type { WorkspaceManager } from '../workspace-manager.js'
 import type { DatabaseManager } from '../database.js'
 import { resolvePackagePath } from '../runtime-paths.js'
+import {
+  RequiredUserInputSchema,
+  SetupActionSchema,
+  buildBaselinePythonSetupActions,
+  buildDynamicDependencySetupActions,
+  mergeSetupActions,
+} from '../setup-guidance.js'
 
 const TOOL_NAME = 'dynamic.dependencies'
 const TOOL_VERSION = '0.1.0'
@@ -30,6 +37,8 @@ export const DynamicDependenciesOutputSchema = z.object({
       available_components: z.array(z.string()),
       components: z.record(z.any()),
       recommendations: z.array(z.string()),
+      setup_actions: z.array(SetupActionSchema).optional(),
+      required_user_inputs: z.array(RequiredUserInputSchema).optional(),
       checked_at: z.string(),
     })
     .optional(),
@@ -120,6 +129,11 @@ function buildBootstrapFallback(startTime: number, errorMessage: string): Worker
         'Install frida for runtime API tracing: pip install frida',
         'Install psutil for process telemetry collection: pip install psutil',
       ],
+      setup_actions: mergeSetupActions(
+        buildBaselinePythonSetupActions(),
+        buildDynamicDependencySetupActions()
+      ),
+      required_user_inputs: [],
       checked_at: new Date().toISOString(),
     },
     warnings: [`dynamic.dependencies probe degraded: ${errorMessage}`],
@@ -251,9 +265,24 @@ export function createDynamicDependenciesHandler(
         )
       }
 
+      const rawData = (workerResponse.data || {}) as Record<string, unknown>
+      const status = String(rawData.status || 'partial')
+      const recommendations = Array.isArray(rawData.recommendations)
+        ? [...new Set(rawData.recommendations.map((item) => String(item)))]
+        : []
+      const shouldAddSetupActions = status !== 'ready'
+      const setupActions = shouldAddSetupActions
+        ? mergeSetupActions(buildBaselinePythonSetupActions(), buildDynamicDependencySetupActions())
+        : []
+
       return {
         ok: true,
-        data: workerResponse.data,
+        data: {
+          ...rawData,
+          recommendations,
+          setup_actions: setupActions,
+          required_user_inputs: [],
+        },
         warnings: workerResponse.warnings,
         errors: workerResponse.errors,
         artifacts: workerResponse.artifacts as ArtifactRef[],

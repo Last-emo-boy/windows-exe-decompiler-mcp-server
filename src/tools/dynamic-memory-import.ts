@@ -85,6 +85,12 @@ const DynamicMemoryImportOutputSchema = z.object({
         observed_apis: z.array(z.string()),
         high_signal_apis: z.array(z.string()),
         memory_regions: z.array(z.string()),
+        region_types: z.array(z.string()).optional(),
+        protections: z.array(z.string()).optional(),
+        address_ranges: z.array(z.string()).optional(),
+        region_owners: z.array(z.string()).optional(),
+        observed_modules: z.array(z.string()).optional(),
+        segment_names: z.array(z.string()).optional(),
         stages: z.array(z.string()),
         risk_hints: z.array(z.string()),
         source_formats: z.array(z.string()).optional(),
@@ -129,6 +135,39 @@ interface ApiAggregate {
   count: number
   confidence: number
   sources: string[]
+}
+
+interface MemoryRegionHint {
+  region_type: string
+  purpose: string
+  source: string
+  confidence: number
+  base_address: string
+  size: number
+  indicators: string[]
+  protection?: string
+  module_name?: string
+  segment_name?: string
+}
+
+function inferWindowProtection(regionType: string, indicators: string[]): string {
+  const corpus = `${regionType} ${indicators.join(' ')}`.toLowerCase()
+  if (/api_resolution|dispatch/.test(corpus)) {
+    return 'read_only_data'
+  }
+  if (/process_operation|thread|virtualalloc|writeprocessmemory|setthreadcontext|resumethread/.test(corpus)) {
+    return 'read_write_control'
+  }
+  if (/file_operation|registry_operation/.test(corpus)) {
+    return 'read_write_plan'
+  }
+  if (/network_operation|http|socket|connect|send|recv/.test(corpus)) {
+    return 'read_write_buffer'
+  }
+  if (/environment_probe|anti_analysis/.test(corpus)) {
+    return 'read_only_probe'
+  }
+  return 'read_only_snapshot'
 }
 
 const API_CANDIDATES = [
@@ -196,6 +235,43 @@ function isPrintableAscii(byte: number): boolean {
 function dedupeStrings(values: string[], limit?: number): string[] {
   const unique = Array.from(new Set(values.map((item) => item.trim()).filter((item) => item.length > 0)))
   return typeof limit === 'number' ? unique.slice(0, limit) : unique
+}
+
+function inferModuleNameFromStrings(values: string[]): string | undefined {
+  for (const value of values) {
+    const match = value.match(/\b([A-Za-z0-9_.-]+\.(?:dll|exe|sys))\b/i)
+    if (match?.[1]) {
+      return match[1]
+    }
+  }
+  return undefined
+}
+
+function detectEmbeddedPeOffsets(data: Buffer, maxOffsets = 6): number[] {
+  const offsets: number[] = []
+  for (let index = 0; index <= data.length - 0x40; index += 1) {
+    if (data[index] !== 0x4d || data[index + 1] !== 0x5a) {
+      continue
+    }
+    const peOffset = data.readUInt32LE(index + 0x3c)
+    const signatureOffset = index + peOffset
+    if (signatureOffset + 4 > data.length) {
+      continue
+    }
+    if (
+      data[signatureOffset] === 0x50 &&
+      data[signatureOffset + 1] === 0x45 &&
+      data[signatureOffset + 2] === 0x00 &&
+      data[signatureOffset + 3] === 0x00
+    ) {
+      offsets.push(index)
+      if (offsets.length >= maxOffsets) {
+        break
+      }
+      index += 1
+    }
+  }
+  return offsets
 }
 
 function detectMemoryFormat(filePath: string, data: Buffer, hint: DynamicMemoryImportInput['format']): DynamicTraceSourceFormat {
@@ -394,15 +470,7 @@ function classifyWindow(apis: string[]): { regionType: string; purpose: string }
 function buildContextRegions(
   strings: ExtractedString[],
   contextWindowBytes: number
-): Array<{
-  region_type: string
-  purpose: string
-  source: string
-  confidence: number
-  base_address: string
-  size: number
-  indicators: string[]
-}> {
+): MemoryRegionHint[] {
   if (strings.length === 0) {
     return []
   }
@@ -428,6 +496,7 @@ function buildContextRegions(
         [...apis, ...windowEntries.slice(0, 4).map((entry) => entry.value)],
         10
       )
+      const moduleName = inferModuleNameFromStrings(indicators)
       const classification = classifyWindow(apis)
       const start = windowEntries[0].offset
       const end = windowEntries[windowEntries.length - 1].offset
@@ -441,10 +510,59 @@ function buildContextRegions(
         base_address: `0x${start.toString(16)}`,
         size: Math.max(1, end - start),
         indicators,
+        protection: inferWindowProtection(classification.regionType, indicators),
+        module_name: moduleName,
+        segment_name: moduleName ? 'string_window' : undefined,
       }
     })
     .filter((item) => item.indicators.length > 0)
     .slice(0, 16)
+}
+
+function buildSyntheticSegments(
+  data: Buffer,
+  strings: ExtractedString[],
+  effectiveFormat: DynamicTraceSourceFormat
+): MemoryRegionHint[] {
+  const segments: MemoryRegionHint[] = []
+  const globalModuleHint = inferModuleNameFromStrings(strings.map((item) => item.value))
+
+  if (effectiveFormat === 'minidump' && data.length >= 4 && data.subarray(0, 4).toString('ascii') === 'MDMP') {
+    segments.push({
+      region_type: 'minidump_header',
+      purpose: 'minidump_container',
+      source: 'memory_snapshot_header',
+      confidence: 0.98,
+      base_address: '0x0',
+      size: Math.min(data.length, 256),
+      indicators: ['MDMP', 'minidump'],
+      protection: 'file_container',
+      module_name: globalModuleHint,
+      segment_name: 'header',
+    })
+  }
+
+  const peOffsets = detectEmbeddedPeOffsets(data)
+  for (const offset of peOffsets) {
+    const nearbyStrings = strings
+      .filter((item) => Math.abs(item.offset - offset) <= 0x2000)
+      .map((item) => item.value)
+    const moduleName = inferModuleNameFromStrings(nearbyStrings) || globalModuleHint
+    segments.push({
+      region_type: 'mapped_pe_image',
+      purpose: 'embedded_module_image',
+      source: 'memory_snapshot_scan',
+      confidence: 0.88,
+      base_address: `0x${offset.toString(16)}`,
+      size: Math.min(Math.max(0x400, data.length - offset), 0x4000),
+      indicators: dedupeStrings(['MZ', 'PE', ...(moduleName ? [moduleName] : [])], 6),
+      protection: 'r-x_image',
+      module_name: moduleName,
+      segment_name: '.image',
+    })
+  }
+
+  return segments
 }
 
 function buildRiskHints(format: DynamicTraceSourceFormat, apis: ApiAggregate[]): string[] {
@@ -475,15 +593,8 @@ function buildNormalizedMemoryTrace(
   effectiveFormat: DynamicTraceSourceFormat,
   strings: ExtractedString[],
   apiAggregates: ApiAggregate[],
-  memoryRegions: Array<{
-    region_type: string
-    purpose: string
-    source: string
-    confidence: number
-    base_address: string
-    size: number
-    indicators: string[]
-  }>
+  memoryRegions: MemoryRegionHint[],
+  segments: MemoryRegionHint[]
 ) {
   const rawRecord = {
     executed: false,
@@ -494,6 +605,11 @@ function buildNormalizedMemoryTrace(
       sources: item.sources,
     })),
     memory_regions: memoryRegions,
+    segments,
+    modules: dedupeStrings(
+      [...memoryRegions.map((item) => item.module_name || ''), ...segments.map((item) => item.module_name || '')],
+      24
+    ),
     strings: strings.slice(0, 120).map((item) => item.value),
     risk_hints: buildRiskHints(effectiveFormat, apiAggregates),
     notes: [
@@ -535,12 +651,14 @@ export function createDynamicMemoryImportHandler(
       const strings = extractStrings(rawData, input.min_string_length, input.max_strings)
       const apiAggregates = aggregateApiStrings(strings)
       const memoryRegions = buildContextRegions(strings, input.context_window_bytes)
+      const segments = buildSyntheticSegments(rawData, strings, effectiveFormat)
       const normalizedTrace = buildNormalizedMemoryTrace(
         input,
         effectiveFormat,
         strings,
         apiAggregates,
-        memoryRegions
+        memoryRegions,
+        segments
       )
       const summary = summarizeDynamicTrace(normalizedTrace)
 
@@ -676,4 +794,3 @@ export function createDynamicMemoryImportHandler(
     }
   }
 }
-
