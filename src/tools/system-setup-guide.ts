@@ -6,6 +6,8 @@ import {
   buildAllSetupActions,
   buildBaselinePythonSetupActions,
   buildDynamicDependencySetupActions,
+  buildJavaRequiredUserInputs,
+  buildJavaSetupActions,
   buildGhidraRequiredUserInputs,
   buildGhidraSetupActions,
   buildPyGhidraSetupActions,
@@ -17,7 +19,7 @@ const TOOL_NAME = 'system.setup.guide'
 
 export const systemSetupGuideInputSchema = z.object({
   focus: z
-    .enum(['all', 'python', 'dynamic', 'ghidra'])
+    .enum(['all', 'python', 'dynamic', 'java', 'ghidra'])
     .default('all')
     .describe('Which setup area to describe. Use all for a first-run bootstrap guide.'),
   include_optional: z
@@ -29,7 +31,7 @@ export const systemSetupGuideInputSchema = z.object({
 export const systemSetupGuideOutputSchema = z.object({
   ok: z.boolean(),
   data: z.object({
-    focus: z.enum(['all', 'python', 'dynamic', 'ghidra']),
+    focus: z.enum(['all', 'python', 'dynamic', 'java', 'ghidra']),
     setup_actions: z.array(SetupActionSchema),
     required_user_inputs: z.array(RequiredUserInputSchema),
     notes: z.array(z.string()),
@@ -50,9 +52,13 @@ export function createSystemSetupGuideHandler() {
     const input = systemSetupGuideInputSchema.parse(args)
 
     let setupActions = buildAllSetupActions(input.include_optional)
-    let requiredUserInputs = buildGhidraRequiredUserInputs()
+    let requiredUserInputs = mergeRequiredUserInputs(
+      buildGhidraRequiredUserInputs(),
+      buildJavaRequiredUserInputs()
+    )
     const notes = [
       'Prefer absolute paths when providing tool locations such as the Ghidra installation directory.',
+      'When Ghidra launch fails, verify JAVA_HOME points to Java 21 or newer before retrying.',
       'If your MCP client can read the local filesystem, prefer sample.ingest(path=...) over bytes_b64.',
     ]
 
@@ -65,12 +71,19 @@ export function createSystemSetupGuideHandler() {
         input.include_optional ? buildDynamicDependencySetupActions() : []
       )
       requiredUserInputs = []
+    } else if (input.focus === 'java') {
+      setupActions = mergeSetupActions(buildJavaSetupActions())
+      requiredUserInputs = mergeRequiredUserInputs(buildJavaRequiredUserInputs())
     } else if (input.focus === 'ghidra') {
       setupActions = mergeSetupActions(
+        buildJavaSetupActions(),
         buildGhidraSetupActions(),
         input.include_optional ? buildPyGhidraSetupActions() : []
       )
-      requiredUserInputs = mergeRequiredUserInputs(buildGhidraRequiredUserInputs())
+      requiredUserInputs = mergeRequiredUserInputs(
+        buildJavaRequiredUserInputs(),
+        buildGhidraRequiredUserInputs()
+      )
     }
 
     return {

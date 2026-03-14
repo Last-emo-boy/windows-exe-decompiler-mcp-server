@@ -26,6 +26,8 @@ function buildGhidraStatus(ok: boolean): GhidraHealthStatus {
     install_dir: ok ? 'C:\\ghidra' : '',
     analyze_headless_path: ok ? 'C:\\ghidra\\support\\analyzeHeadless.bat' : '',
     scripts_dir: path.join(process.cwd(), 'ghidra_scripts'),
+    project_root: path.join(process.cwd(), 'ghidra-projects'),
+    log_root: path.join(process.cwd(), 'ghidra-logs'),
     version: ok ? '11.2' : undefined,
     checks: {
       install_dir_exists: ok,
@@ -33,12 +35,23 @@ function buildGhidraStatus(ok: boolean): GhidraHealthStatus {
       scripts_dir_exists: true,
       launch_ok: ok,
       pyghidra_available: ok,
+      java_available: ok,
+      java_version_ok: ok,
     },
     pyghidra_probe: {
       command: process.platform === 'win32' ? 'python' : 'python3',
       available: ok,
       version: ok ? '1.0.0' : undefined,
       error: ok ? undefined : 'pyghidra missing',
+    },
+    java_probe: {
+      command: 'java',
+      available: ok,
+      source: ok ? 'PATH' : 'none',
+      version: ok ? 'openjdk version "21.0.2"' : undefined,
+      major_version: ok ? 21 : undefined,
+      version_ok: ok,
+      error: ok ? undefined : 'java missing',
     },
     errors: ok ? [] : ['install dir not found'],
     warnings: [],
@@ -143,7 +156,9 @@ describe('system.health tool', () => {
     expect(data.components.ghidra.status).toBe('degraded')
     expect(Array.isArray(data.recommendations)).toBe(true)
     expect(data.recommendations.length).toBeGreaterThan(0)
+    expect(data.setup_actions.map((item: any) => item.id)).toContain('set_java_home')
     expect(data.setup_actions.map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect(data.required_user_inputs.map((item: any) => item.key)).toContain('java_home')
     expect(data.required_user_inputs.map((item: any) => item.key)).toContain('ghidra_install_dir')
   })
 

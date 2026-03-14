@@ -22,6 +22,8 @@ import { DecompilerWorker } from '../decompiler-worker.js'
 import {
   RequiredUserInputSchema,
   SetupActionSchema,
+  buildJavaRequiredUserInputs,
+  buildJavaSetupActions,
   buildGhidraRequiredUserInputs,
   buildGhidraSetupActions,
   buildPyGhidraSetupActions,
@@ -158,10 +160,18 @@ export function createGhidraHealthHandler(
       let requiredUserInputs = [] as z.infer<typeof RequiredUserInputSchema>[]
 
       if (!result.ok) {
-        setupActions = mergeSetupActions(setupActions, buildGhidraSetupActions())
+        setupActions = mergeSetupActions(setupActions, buildJavaSetupActions(), buildGhidraSetupActions())
         requiredUserInputs = mergeRequiredUserInputs(
           requiredUserInputs,
+          buildJavaRequiredUserInputs(),
           buildGhidraRequiredUserInputs()
+        )
+      }
+      if (result.checks?.java_available === false || result.checks?.java_version_ok === false) {
+        setupActions = mergeSetupActions(setupActions, buildJavaSetupActions())
+        requiredUserInputs = mergeRequiredUserInputs(
+          requiredUserInputs,
+          buildJavaRequiredUserInputs()
         )
       }
       if (result.checks?.pyghidra_available === false) {

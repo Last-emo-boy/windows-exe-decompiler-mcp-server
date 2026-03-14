@@ -38,6 +38,15 @@ It also pins:
 - `DB_PATH`
 - `CACHE_ROOT`
 - `AUDIT_LOG_PATH`
+- `GHIDRA_PROJECT_ROOT`
+- `GHIDRA_LOG_ROOT`
+
+The server's bundled `ghidra_scripts/` directory is resolved from the installed
+package or repository root, not from the shell's current working directory. You
+do not need to manually point Claude at `ExtractFunctions.py`.
+
+For Ghidra 12.0.4, keep Java 21+ available. If Java is installed outside the
+system default location, also set `JAVA_HOME`.
 
 ## Pass Ghidra Explicitly
 
@@ -46,6 +55,11 @@ It also pins:
 ```
 
 The script writes both `GHIDRA_PATH` and `GHIDRA_INSTALL_DIR`.
+
+If you want to pin Ghidra project/log roots explicitly, set:
+
+- `GHIDRA_PROJECT_ROOT`
+- `GHIDRA_LOG_ROOT`
 
 If you want a different persistent workspace root:
 

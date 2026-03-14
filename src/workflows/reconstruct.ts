@@ -47,6 +47,10 @@ import {
   buildSemanticArtifactProvenance,
 } from '../analysis-provenance.js'
 import {
+  GhidraExecutionSummarySchema,
+  buildGhidraExecutionSummary,
+} from '../ghidra-execution-summary.js'
+import {
   AnalysisSelectionDiffSchema,
   buildArtifactSelectionDiff,
 } from '../selection-diff.js'
@@ -57,6 +61,7 @@ import {
   mergeRequiredUserInputs,
   mergeSetupActions,
 } from '../setup-guidance.js'
+import { PollingGuidanceSchema, buildPollingGuidance } from '../polling-guidance.js'
 
 const TOOL_NAME = 'workflow.reconstruct'
 const TOOL_VERSION = '0.1.5'
@@ -350,6 +355,7 @@ const ReconstructQueuedDataSchema = z.object({
   sample_id: z.string(),
   requested_path: z.enum(['auto', 'native', 'dotnet']),
   progress: z.number().int().min(0).max(100),
+  polling_guidance: PollingGuidanceSchema.nullable(),
 })
 
 const ReconstructCompletedDataSchema = z.object({
@@ -369,6 +375,7 @@ const ReconstructCompletedDataSchema = z.object({
   }),
   provenance: AnalysisProvenanceSchema,
   selection_diffs: AnalysisSelectionDiffSchema.optional(),
+  ghidra_execution: GhidraExecutionSummarySchema.nullable().optional(),
   runtime: RuntimeSummarySchema,
   preflight: PreflightSummarySchema.optional(),
   plan: PlanSummarySchema.nullable(),
@@ -785,6 +792,12 @@ export function createReconstructWorkflowHandler(
             sample_id: input.sample_id,
             requested_path: input.path,
             progress: 0,
+            polling_guidance: buildPollingGuidance({
+              tool: TOOL_NAME,
+              status: 'queued',
+              progress: 0,
+              timeout_ms: jobTimeoutMs,
+            }),
           },
           metrics: {
             elapsed_ms: Date.now() - startTime,
@@ -1157,6 +1170,7 @@ export function createReconstructWorkflowHandler(
         analyses,
         (analysis) => analysis.stage === 'function_definition'
       )
+      const ghidraExecution = buildGhidraExecutionSummary(analyses)
       const analysisMarker = JSON.stringify({
         ghidra_function_index: completedGhidraAnalysis
           ? {
@@ -1575,6 +1589,7 @@ export function createReconstructWorkflowHandler(
         stage_status: stageStatus,
         provenance,
         selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
+        ghidra_execution: ghidraExecution,
         runtime: summarizeRuntime(runtimeData),
         preflight:
           input.include_preflight || stageStatus.function_index_recovery !== 'skipped'

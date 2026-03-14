@@ -18,6 +18,7 @@ import {
   detectGhidraInstallation,
   ghidraConfig,
 } from '../../src/ghidra-config.js'
+import { resolvePackagePath } from '../../src/runtime-paths.js'
 
 describe('Ghidra Configuration', () => {
   const testScriptsDir = path.join(process.cwd(), 'test-ghidra-scripts')
@@ -248,6 +249,21 @@ describe('Ghidra Configuration', () => {
       const result = ensureScriptsDirectory(testScriptsDir)
 
       expect(path.isAbsolute(result)).toBe(true)
+    })
+
+    it('should default to the packaged ghidra_scripts directory instead of cwd-relative lookup', () => {
+      const originalCwd = process.cwd()
+      const tempCwd = fs.mkdtempSync(path.join(process.cwd(), 'tmp-ghidra-cwd-'))
+
+      try {
+        process.chdir(tempCwd)
+        const result = ensureScriptsDirectory()
+        expect(result).toBe(path.resolve(resolvePackagePath('ghidra_scripts')))
+        expect(fs.existsSync(path.join(tempCwd, 'ghidra_scripts'))).toBe(false)
+      } finally {
+        process.chdir(originalCwd)
+        fs.rmSync(tempCwd, { recursive: true, force: true })
+      }
     })
   })
 

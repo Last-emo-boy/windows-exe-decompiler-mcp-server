@@ -18,6 +18,7 @@ import {
   parseGhidraAnalysisMetadata,
 } from '../ghidra-analysis-status.js';
 import { logger } from '../logger.js';
+import { PollingGuidanceSchema, buildPollingGuidance } from '../polling-guidance.js';
 
 /**
  * Input schema for ghidra.analyze tool
@@ -51,6 +52,7 @@ export interface GhidraAnalyzeOutput {
     function_count: number;
     project_path: string;
     status: string;
+    polling_guidance?: z.infer<typeof PollingGuidanceSchema> | null;
     capabilities?: {
       function_index: unknown;
       decompile: unknown;
@@ -207,7 +209,13 @@ export function createGhidraAnalyzeHandler(
             backend: 'ghidra',
             function_count: 0,
             project_path: '',
-            status: 'queued'
+            status: 'queued',
+            polling_guidance: buildPollingGuidance({
+              tool: 'ghidra.analyze',
+              status: 'queued',
+              progress: 0,
+              timeout_ms: timeoutMs,
+            }),
           }
         };
 

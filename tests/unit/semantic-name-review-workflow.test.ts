@@ -149,6 +149,8 @@ describe('workflow.semantic_name_review tool', () => {
     expect(data.tool).toBe('workflow.semantic_name_review')
     expect(data.sample_id).toBe(sampleId)
     expect(data.job_id).toBeTruthy()
+    expect(data.polling_guidance.prefer_sleep).toBe(true)
+    expect(data.polling_guidance.recommended_wait_seconds).toBeGreaterThan(0)
     expect(queue.getStatus(data.job_id)?.status).toBe('queued')
   })
 
@@ -374,6 +376,17 @@ describe('workflow.semantic_name_review tool', () => {
             build_validation_status: 'passed',
             harness_validation_status: 'passed',
           },
+          ghidra_execution: {
+            analysis_id: 'analysis-semantic-refresh',
+            selected_source: 'best_ready',
+            backend: 'ghidra',
+            status: 'completed',
+            function_count: 128,
+            command_log_paths: ['logs/semantic_cmd.log'],
+            runtime_log_paths: ['logs/semantic_run.log'],
+            progress_stages: [{ stage: 'completed', at: '2026-03-14T10:00:00.000Z' }],
+            warnings: [],
+          },
           notes: ['Native build validation: passed'],
         },
       })
@@ -416,6 +429,8 @@ describe('workflow.semantic_name_review tool', () => {
     expect(data.export.manifest_path).toContain('manifest.json')
     expect(data.export.build_validation_status).toBe('passed')
     expect(data.export.preflight.function_index_recovery.imported_count).toBe(100)
+    expect(data.export.ghidra_execution.analysis_id).toBe('analysis-semantic-refresh')
+    expect(data.export.ghidra_execution.runtime_log_paths[0]).toContain('semantic_run.log')
     expect(data.export.provenance.runtime.session_selector).toBe('runtime-alpha')
     expect(data.export.selection_diffs.runtime.summary).toBe('runtime diff')
     expect(data.next_steps.join(' ')).toContain('Native build validation: passed')
@@ -504,6 +519,17 @@ describe('workflow.semantic_name_review tool', () => {
             manifest_path: 'reports/reconstruct/reviewed/manifest.json',
             build_validation_status: 'skipped',
             harness_validation_status: 'skipped',
+          },
+          ghidra_execution: {
+            analysis_id: 'analysis-semantic-session-default',
+            selected_source: 'best_ready',
+            backend: 'ghidra',
+            status: 'completed',
+            function_count: 24,
+            command_log_paths: ['logs/default_cmd.log'],
+            runtime_log_paths: ['logs/default_run.log'],
+            progress_stages: [{ stage: 'completed', at: '2026-03-14T12:00:00.000Z' }],
+            warnings: [],
           },
           notes: [],
         },

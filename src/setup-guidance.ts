@@ -31,6 +31,11 @@ const WINDOWS_GHIDRA_EXAMPLES = [
   'D:\\tools\\ghidra_12.0.4_PUBLIC',
 ]
 
+const WINDOWS_JAVA_EXAMPLES = [
+  'C:\\Program Files\\Eclipse Adoptium\\jdk-21',
+  'C:\\Program Files\\Java\\jdk-21',
+]
+
 export function mergeSetupActions(...groups: SetupAction[][]): SetupAction[] {
   const merged = new Map<string, SetupAction>()
 
@@ -117,6 +122,59 @@ export function buildDynamicDependencySetupActions(): SetupAction[] {
   ]
 }
 
+export function buildJavaRequiredUserInputs(): RequiredUserInput[] {
+  return [
+    {
+      key: 'java_home',
+      label: 'Java 21+ install root',
+      summary:
+        'Provide the absolute path to a Java 21 or newer installation root so Ghidra can launch reliably.',
+      required: true,
+      env_vars: ['JAVA_HOME'],
+      examples: WINDOWS_JAVA_EXAMPLES,
+    },
+  ]
+}
+
+export function buildJavaSetupActions(): SetupAction[] {
+  return [
+    {
+      id: 'install_java_21',
+      required: true,
+      kind: 'provide_path',
+      title: 'Install Java 21 or newer',
+      summary:
+        'Install a Java 21+ runtime or JDK before using Ghidra 12.x features that depend on a supported JVM.',
+      value_hint: 'Path to the Java 21+ installation root',
+      examples: WINDOWS_JAVA_EXAMPLES,
+      applies_to: ['ghidra.health', 'ghidra.analyze', 'system.health'],
+    },
+    {
+      id: 'set_java_home',
+      required: true,
+      kind: 'set_env',
+      title: 'Set JAVA_HOME',
+      summary:
+        'Set JAVA_HOME to the Java 21+ installation root so Ghidra launchers can resolve the correct JVM.',
+      env_var: 'JAVA_HOME',
+      value_hint: 'Absolute path to the Java 21+ installation root',
+      examples: WINDOWS_JAVA_EXAMPLES.map((example) => `$env:JAVA_HOME = "${example}"`),
+      applies_to: ['ghidra.health', 'ghidra.analyze', 'system.health'],
+    },
+    {
+      id: 'verify_java_version',
+      required: true,
+      kind: 'verify_install',
+      title: 'Verify Java runtime version',
+      summary:
+        'Confirm that java -version resolves to Java 21 or newer before retrying Ghidra analysis.',
+      command: 'java -version',
+      examples: ['java -version'],
+      applies_to: ['ghidra.health', 'ghidra.analyze', 'system.health'],
+    },
+  ]
+}
+
 export function buildPyGhidraSetupActions(): SetupAction[] {
   return [
     {
@@ -143,6 +201,15 @@ export function buildGhidraRequiredUserInputs(): RequiredUserInput[] {
       required: true,
       env_vars: ['GHIDRA_PATH', 'GHIDRA_INSTALL_DIR'],
       examples: WINDOWS_GHIDRA_EXAMPLES,
+    },
+    {
+      key: 'ghidra_project_root',
+      label: 'Ghidra project root',
+      summary:
+        'Optional writable directory where Ghidra projects should be created and reused. If omitted, the server uses its default user-level project root.',
+      required: false,
+      env_vars: ['GHIDRA_PROJECT_ROOT'],
+      examples: ['C:\\Temp\\GhidraProjects', 'D:\\Analysis\\GhidraProjects'],
     },
   ]
 }
@@ -189,6 +256,36 @@ export function buildGhidraSetupActions(): SetupAction[] {
       ),
       applies_to: ['ghidra.health', 'ghidra.analyze'],
     },
+    {
+      id: 'set_ghidra_project_root',
+      required: false,
+      kind: 'set_env',
+      title: 'Set GHIDRA_PROJECT_ROOT',
+      summary:
+        'Optionally set GHIDRA_PROJECT_ROOT to a stable writable directory where Ghidra projects and reuse state should be stored.',
+      env_var: 'GHIDRA_PROJECT_ROOT',
+      value_hint: 'Absolute path to a writable Ghidra project root directory',
+      examples: [
+        '$env:GHIDRA_PROJECT_ROOT = "C:\\Temp\\GhidraProjects"',
+        '$env:GHIDRA_PROJECT_ROOT = "D:\\Analysis\\GhidraProjects"',
+      ],
+      applies_to: ['ghidra.health', 'ghidra.analyze', 'system.health'],
+    },
+    {
+      id: 'set_ghidra_log_root',
+      required: false,
+      kind: 'set_env',
+      title: 'Set GHIDRA_LOG_ROOT',
+      summary:
+        'Optionally set GHIDRA_LOG_ROOT to control where analyzeHeadless command logs are persisted for troubleshooting.',
+      env_var: 'GHIDRA_LOG_ROOT',
+      value_hint: 'Absolute path to a writable Ghidra log directory',
+      examples: [
+        '$env:GHIDRA_LOG_ROOT = "C:\\Temp\\GhidraLogs"',
+        '$env:GHIDRA_LOG_ROOT = "D:\\Analysis\\GhidraLogs"',
+      ],
+      applies_to: ['ghidra.health', 'ghidra.analyze', 'system.health'],
+    },
   ]
 }
 
@@ -196,6 +293,7 @@ export function buildAllSetupActions(includeOptional = true): SetupAction[] {
   return mergeSetupActions(
     buildBaselinePythonSetupActions(),
     buildDynamicDependencySetupActions(),
+    buildJavaSetupActions(),
     buildGhidraSetupActions(),
     includeOptional ? buildPyGhidraSetupActions() : []
   )
@@ -209,6 +307,10 @@ function inferSetupGuidanceFromMessages(messages: string[]) {
   if (/ghidra|analyzeheadless|project_.*ghidra|support\\analyzeHeadless/i.test(combined)) {
     setupActions = mergeSetupActions(setupActions, buildGhidraSetupActions())
     requiredUserInputs = mergeRequiredUserInputs(requiredUserInputs, buildGhidraRequiredUserInputs())
+  }
+  if (/JAVA_HOME|UnsupportedClassVersionError|class file version|java runtime|java version|java 21/i.test(combined)) {
+    setupActions = mergeSetupActions(setupActions, buildJavaSetupActions())
+    requiredUserInputs = mergeRequiredUserInputs(requiredUserInputs, buildJavaRequiredUserInputs())
   }
   if (/pyghidra/i.test(combined)) {
     setupActions = mergeSetupActions(setupActions, buildPyGhidraSetupActions())

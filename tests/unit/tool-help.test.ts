@@ -145,6 +145,34 @@ describe('tool.help tool', () => {
     expect(filenameField.help_hint).toContain('bytes_b64')
   })
 
+  test('should explain polling_guidance for long-running job tools', async () => {
+    const definitions: ToolDefinition[] = [
+      {
+        name: 'task.status',
+        description: 'Query queued and running jobs',
+        inputSchema: z.object({
+          job_id: z.string().optional(),
+        }),
+      },
+      {
+        name: 'workflow.reconstruct',
+        description: 'Queued reconstruct workflow',
+        inputSchema: z.object({
+          sample_id: z.string(),
+        }),
+      },
+    ]
+
+    const handler = createToolHelpHandler(() => definitions)
+    const taskStatusResult = await handler({ tool_name: 'task.status' })
+    const taskStatusData = taskStatusResult.data as any
+    expect(taskStatusData.tools[0].usage_notes.some((item: string) => item.includes('polling_guidance'))).toBe(true)
+
+    const workflowResult = await handler({ tool_name: 'workflow.reconstruct' })
+    const workflowData = workflowResult.data as any
+    expect(workflowData.tools[0].usage_notes.some((item: string) => item.includes('sleep or wait'))).toBe(true)
+  })
+
   test('should explain Rust recovery paths for ghidra.analyze and pdata-based tools', async () => {
     const definitions: ToolDefinition[] = [
       {

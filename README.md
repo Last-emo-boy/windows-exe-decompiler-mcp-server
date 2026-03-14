@@ -4,6 +4,36 @@ Chinese version: [`README_zh.md`](./README_zh.md)
 
 An MCP server for Windows reverse engineering. It exposes PE triage, Ghidra-backed inspection, DLL/COM profiling, runtime evidence ingestion, Rust/.NET recovery, source-like reconstruction, and LLM-assisted review as reusable MCP tools for any tool-calling LLM.
 
+## Feature highlights
+
+- Universal Windows PE coverage: EXE, DLL, COM-oriented libraries, Rust-native samples, and .NET assemblies all have dedicated profiling or recovery paths.
+- Recover-first design: when Ghidra function extraction is empty or degraded, the server can continue with `.pdata` parsing, boundary recovery, symbol recovery, and imported function definitions.
+- Observable Ghidra runs: command logs, runtime logs, staged progress, project/log roots, and parsed Java exception summaries are surfaced through high-level outputs.
+- Runtime-aware reconstruction: static evidence, trace imports, memory snapshots, and semantic review artifacts can all be correlated back into reconstruct and report workflows.
+- LLM-assisted review layers: function naming, function explanation, and module reconstruction review are exposed as structured MCP flows instead of ad hoc prompts.
+- Queue-friendly orchestration: long-running workflows return `job_id`, progress, and `polling_guidance` so MCP clients can wait efficiently instead of burning tokens on tight polling loops.
+
+## Typical analysis flows
+
+### Quick triage
+
+1. `sample.ingest`
+2. `workflow.triage`
+3. `report.summarize`
+
+### Hard native recovery
+
+1. `ghidra.analyze`
+2. `workflow.function_index_recover`
+3. `workflow.reconstruct`
+
+### LLM-assisted refinement
+
+1. `workflow.reconstruct`
+2. `workflow.semantic_name_review`
+3. `workflow.function_explanation_review`
+4. `workflow.module_reconstruction_review`
+
 ## What this server is for
 
 This project is meant to be a reusable reverse-engineering tool surface, not a pile of one-off local scripts.
@@ -14,6 +44,8 @@ It is designed to help MCP clients:
 - inspect imports, exports, strings, packers, runtime hints, and binary role
 - use Ghidra when available for decompile, CFG, search, and reconstruction
 - recover usable function indexes when Ghidra function extraction fails
+- surface actionable setup guidance when Java, Python extras, or Ghidra are missing
+- expose richer Ghidra diagnostics, command logs, and stage/progress metadata when analysis fails
 - correlate static evidence, runtime traces, memory snapshots, and semantic review artifacts
 - export source-like reconstruction output with optional build and harness validation
 
@@ -117,6 +149,8 @@ It can:
 - export native or .NET reconstruction output
 - optionally validate build and run the generated harness
 - tune export strategy based on role-aware preflight for native Rust, DLL, and COM-oriented samples
+- return structured setup guidance when Java, Ghidra, or optional dependencies are not ready
+- expose stage-oriented progress metadata for queued and foreground runs
 - carry runtime and semantic provenance through the result
 
 ### `workflow.function_index_recover`
@@ -131,15 +165,15 @@ Use this when Ghidra analysis exists but function extraction is empty or degrade
 
 ### `workflow.semantic_name_review`
 
-High-level semantic naming review workflow for external LLM clients. It can prepare evidence, request model review through MCP sampling when available, apply accepted names, and optionally refresh reconstruct/export output.
+High-level semantic naming review workflow for external LLM clients. It can prepare evidence, request model review through MCP sampling when available, apply accepted names, and optionally refresh reconstruct/export output. When export refresh runs, the workflow now carries the same `ghidra_execution` summary used by `workflow.reconstruct`, including project root, log root, command/runtime log paths, progress stages, and parsed Java exception context.
 
 ### `workflow.function_explanation_review`
 
-High-level explanation workflow for external LLM clients. It can prepare evidence, request structured explanations, apply them, and optionally rerun reconstruct/export.
+High-level explanation workflow for external LLM clients. It can prepare evidence, request structured explanations, apply them, and optionally rerun reconstruct/export. Export refresh results also surface `ghidra_execution` so explanation-heavy review chains still expose Ghidra project/log context and progress metadata.
 
 ### `workflow.module_reconstruction_review`
 
-High-level module review workflow for external LLM clients. It can prepare reconstructed modules for review, request structured module refinements through MCP sampling when available, apply accepted module summaries and guidance, and optionally refresh reconstruct/export output.
+High-level module review workflow for external LLM clients. It can prepare reconstructed modules for review, request structured module refinements through MCP sampling when available, apply accepted module summaries and guidance, and optionally refresh reconstruct/export output. When export refresh runs, the workflow also carries `ghidra_execution` so module-level review chains expose Ghidra project/log context and progress metadata just like reconstruct and function-level review workflows.
 
 ## Universal recovery model
 
@@ -212,6 +246,11 @@ Use these with:
 - `task.cancel`
 - `task.sweep`
 
+Queued workflow responses and `task.status` now include `polling_guidance`.
+When a long-running Ghidra or reconstruct job is still queued/running, MCP
+clients should prefer one client-side sleep/wait using that recommendation
+instead of repeated immediate polling.
+
 ## Environment bootstrap and setup guidance
 
 If a client starts using the server before Python, dynamic-analysis extras, or Ghidra are configured, use:
@@ -224,8 +263,46 @@ If a client starts using the server before Python, dynamic-analysis extras, or G
 These return structured setup actions and required user inputs so an MCP client can explicitly ask for:
 
 - `python -m pip install ...`
+- `JAVA_HOME`
 - `GHIDRA_PATH` / `GHIDRA_INSTALL_DIR`
+- `GHIDRA_PROJECT_ROOT` / `GHIDRA_LOG_ROOT`
 - optional dynamic-analysis extras such as Speakeasy/Frida dependencies
+
+For Ghidra 12.0.4, the server expects Java 21+ and will report explicit Java compatibility hints through:
+
+- `ghidra.health`
+- `system.health`
+- `system.setup.guide`
+
+When Ghidra commands fail, the server now persists command logs and, when available, Ghidra runtime logs. Normalized diagnostics include Java exception summaries and remediation hints instead of only returning `exit code 1`.
+
+The bundled `ghidra_scripts/` directory is resolved from the installed package
+or repository root, not from the current working directory. This prevents
+`ExtractFunctions.py` / `ExtractFunctions.java` lookup failures when the server
+is launched from a different folder.
+
+## Ghidra execution visibility
+
+High-level outputs now expose a structured `ghidra_execution` block instead of hiding Ghidra details behind generic success/failure states.
+
+You can now see:
+
+- which analysis record was selected
+- whether the result came from the best ready analysis or only the latest attempt
+- project path, project root, and log root
+- persisted command logs and runtime logs
+- function extraction status and script name
+- staged progress metadata
+- parsed Java exception summaries when Ghidra fails
+
+This summary is surfaced through:
+
+- `workflow.reconstruct`
+- `workflow.semantic_name_review` when export refresh runs
+- `workflow.function_explanation_review` when export refresh runs
+- `workflow.module_reconstruction_review` when export refresh runs
+- `report.summarize`
+- `report.generate`
 
 ## Project layout
 
@@ -333,10 +410,19 @@ By default, runtime state is stored under the user profile instead of the curren
 - SQLite database: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/data/database.db`
 - File cache: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/cache`
 - Audit log: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/audit.log`
+- Ghidra project root: `%ProgramData%/.windows-exe-decompiler-mcp-server/ghidra-projects`
+- Ghidra log root: `%ProgramData%/.windows-exe-decompiler-mcp-server/ghidra-logs`
+- Bundled Ghidra scripts: resolved from the installed package root
 
 You can override these with environment variables or the user config file:
 
 - `%USERPROFILE%/.windows-exe-decompiler-mcp-server/config.json`
+- `WORKSPACE_ROOT`
+- `DB_PATH`
+- `CACHE_ROOT`
+- `AUDIT_LOG_PATH`
+- `GHIDRA_PROJECT_ROOT`
+- `GHIDRA_LOG_ROOT`
 
 ## Sample ingest note
 

@@ -30,6 +30,8 @@ describe('task tools', () => {
     expect(payload.data.total_jobs).toBe(1)
     expect(payload.data.jobs.length).toBe(1)
     expect(payload.data.jobs[0].status).toBe('queued')
+    expect(payload.data.jobs[0].polling_guidance.recommended_wait_seconds).toBeGreaterThan(0)
+    expect(payload.data.polling_guidance.prefer_sleep).toBe(true)
   })
 
   test('task.cancel should cancel queued job', async () => {
@@ -55,6 +57,7 @@ describe('task tools', () => {
     const statusPayload = parseToolText(statusResult)
     expect(statusPayload.data.job.status).toBe('cancelled')
     expect(statusPayload.data.job.error).toContain('Cancelled')
+    expect(statusPayload.data.job.polling_guidance).toBeNull()
   })
 
   test('task.sweep should clear old finished records', async () => {

@@ -180,6 +180,9 @@ export class AnalysisTaskRunner {
           cspec: options.cspec,
           scriptPaths: options.script_paths,
           abortSignal,
+          onProgress: (progress) => {
+            this.jobQueue.updateProgress(job.id, progress)
+          },
         })
         return this.decompilerWorker.createJobResult(analysisResult, 0)
       } catch (error) {

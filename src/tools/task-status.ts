@@ -6,6 +6,7 @@
 import { z } from 'zod'
 import type { ToolDefinition, ToolHandler, ToolResult } from '../types.js'
 import type { JobQueue, JobStatusType } from '../job-queue.js'
+import { buildPollingGuidance } from '../polling-guidance.js'
 
 const TOOL_NAME = 'task.status'
 
@@ -42,9 +43,16 @@ export function createTaskStatusHandler(jobQueue: JobQueue): ToolHandler {
   return async (args: unknown): Promise<ToolResult> => {
     try {
       const input = taskStatusInputSchema.parse(args)
+      const listStatus = (jobQueue as JobQueue & {
+        listStatuses?: (status?: JobStatusType) => unknown[]
+      }).listStatuses
 
       if (input.job_id) {
-        const status = jobQueue.getStatus(input.job_id)
+        const detailedStatuses = listStatus ? listStatus.call(jobQueue) : []
+        const detailedStatus = Array.isArray(detailedStatuses)
+          ? (detailedStatuses as Array<Record<string, unknown>>).find((row) => row.id === input.job_id)
+          : undefined
+        const status = detailedStatus || jobQueue.getStatus(input.job_id)
         if (!status) {
           return {
             content: [
@@ -64,6 +72,13 @@ export function createTaskStatusHandler(jobQueue: JobQueue): ToolHandler {
           }
         }
 
+        const statusRecord = status as Record<string, unknown> & {
+          status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+          progress?: number
+          tool?: string
+          timeout?: number
+        }
+
         return {
           content: [
             {
@@ -72,7 +87,15 @@ export function createTaskStatusHandler(jobQueue: JobQueue): ToolHandler {
                 {
                   ok: true,
                   data: {
-                    job: status,
+                    job: {
+                      ...statusRecord,
+                      polling_guidance: buildPollingGuidance({
+                        tool: typeof statusRecord.tool === 'string' ? statusRecord.tool : null,
+                        status: statusRecord.status,
+                        progress: typeof statusRecord.progress === 'number' ? statusRecord.progress : null,
+                        timeout_ms: typeof statusRecord.timeout === 'number' ? statusRecord.timeout : null,
+                      }),
+                    },
                     result: input.include_result ? jobQueue.getResult(input.job_id) : undefined,
                   },
                 },
@@ -84,13 +107,30 @@ export function createTaskStatusHandler(jobQueue: JobQueue): ToolHandler {
         }
       }
 
-      const listStatus = (jobQueue as JobQueue & {
-        listStatuses?: (status?: JobStatusType) => unknown[]
-      }).listStatuses
       const rows = listStatus
         ? listStatus.call(jobQueue, input.status)
         : jobQueue.getJobsByStatus(input.status || 'queued')
-      const limitedRows = rows.slice(0, input.limit)
+      const limitedRows = rows.slice(0, input.limit).map((row: any) => ({
+        ...row,
+        polling_guidance: buildPollingGuidance({
+          tool: row.tool,
+          status: row.status,
+          progress: row.progress,
+          timeout_ms: row.timeout,
+        }),
+      }))
+      const activeRows = limitedRows.filter(
+        (row: any) => row.status === 'queued' || row.status === 'running'
+      )
+      const summaryGuidance =
+        activeRows.length > 0
+          ? buildPollingGuidance({
+              tool: activeRows[0].tool,
+              status: activeRows[0].status,
+              progress: activeRows[0].progress,
+              timeout_ms: activeRows[0].timeout,
+            })
+          : null
 
       return {
         content: [
@@ -104,6 +144,7 @@ export function createTaskStatusHandler(jobQueue: JobQueue): ToolHandler {
                   total_jobs: jobQueue.getTotalJobs(),
                   count: limitedRows.length,
                   jobs: limitedRows,
+                  polling_guidance: summaryGuidance,
                 },
               },
               null,
@@ -133,4 +174,3 @@ export function createTaskStatusHandler(jobQueue: JobQueue): ToolHandler {
     }
   }
 }
-

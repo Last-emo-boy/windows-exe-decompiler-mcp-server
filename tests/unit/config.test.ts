@@ -17,6 +17,8 @@ import {
   getDefaultCacheRoot,
   getDefaultWorkspaceRoot,
   getDefaultAuditLogPath,
+  getDefaultGhidraProjectRoot,
+  getDefaultGhidraLogRoot,
 } from '../../src/config.js'
 
 describe('Configuration Loading', () => {
@@ -53,6 +55,12 @@ describe('Configuration Loading', () => {
     delete process.env.CACHE_ROOT
     delete process.env.CONFIG_PATH
     delete process.env.GHIDRA_PATH
+    delete process.env.GHIDRA_INSTALL_DIR
+    delete process.env.GHIDRA_PROJECT_ROOT
+    delete process.env.GHIDRA_LOG_ROOT
+    delete process.env.GHIDRA_CLEANUP_AFTER_ANALYSIS
+    delete process.env.GHIDRA_LOG_RETENTION_DAYS
+    delete process.env.GHIDRA_MIN_JAVA_VERSION
     delete process.env.LOG_LEVEL
     delete process.env.AUDIT_LOG_PATH
   })
@@ -130,11 +138,21 @@ describe('Configuration Loading', () => {
 
     test('should enable Ghidra worker when GHIDRA_PATH is set', () => {
       process.env.GHIDRA_PATH = '/opt/ghidra'
+      process.env.GHIDRA_PROJECT_ROOT = '/var/ghidra-projects'
+      process.env.GHIDRA_LOG_ROOT = '/var/ghidra-logs'
+      process.env.GHIDRA_CLEANUP_AFTER_ANALYSIS = 'true'
+      process.env.GHIDRA_LOG_RETENTION_DAYS = '14'
+      process.env.GHIDRA_MIN_JAVA_VERSION = '21'
 
       const result = loadConfigFromEnv()
 
       expect(result.workers?.ghidra?.path).toBe('/opt/ghidra')
       expect(result.workers?.ghidra?.enabled).toBe(true)
+      expect(result.workers?.ghidra?.projectRoot).toBe('/var/ghidra-projects')
+      expect(result.workers?.ghidra?.logRoot).toBe('/var/ghidra-logs')
+      expect(result.workers?.ghidra?.cleanupAfterAnalysis).toBe(true)
+      expect(result.workers?.ghidra?.logRetentionDays).toBe(14)
+      expect(result.workers?.ghidra?.minJavaVersion).toBe(21)
     })
 
     test('should load logging configuration from environment variables', () => {
@@ -157,6 +175,7 @@ describe('Configuration Loading', () => {
       delete process.env.CACHE_ROOT
       delete process.env.MAX_SAMPLE_SIZE
       delete process.env.GHIDRA_PATH
+      delete process.env.GHIDRA_INSTALL_DIR
       delete process.env.PYTHON_PATH
       delete process.env.LOG_LEVEL
       delete process.env.AUDIT_LOG_PATH
@@ -220,6 +239,11 @@ describe('Configuration Loading', () => {
       expect(config.database.path).toBe(getDefaultDatabasePath())
       expect(config.workspace.root).toBe(getDefaultWorkspaceRoot())
       expect(config.workers.static.enabled).toBe(true)
+      expect(config.workers.ghidra.projectRoot).toBe(getDefaultGhidraProjectRoot())
+      expect(config.workers.ghidra.logRoot).toBe(getDefaultGhidraLogRoot())
+      expect(config.workers.ghidra.cleanupAfterAnalysis).toBe(false)
+      expect(config.workers.ghidra.logRetentionDays).toBe(30)
+      expect(config.workers.ghidra.minJavaVersion).toBe(21)
       expect(config.cache.enabled).toBe(true)
       expect(config.cache.root).toBe(getDefaultCacheRoot())
       expect(config.logging.auditPath).toBe(getDefaultAuditLogPath())
@@ -319,6 +343,9 @@ describe('Configuration Loading', () => {
       expect(config.database.type).toBe('sqlite')
       expect(config.workspace.maxSampleSize).toBe(500 * 1024 * 1024)
       expect(config.workers.ghidra.maxConcurrent).toBe(4)
+      expect(config.workers.ghidra.projectRoot).toBe(getDefaultGhidraProjectRoot())
+      expect(config.workers.ghidra.logRoot).toBe(getDefaultGhidraLogRoot())
+      expect(config.workers.ghidra.minJavaVersion).toBe(21)
       expect(config.database.path).toBe(getDefaultDatabasePath())
       expect(config.cache.root).toBe(getDefaultCacheRoot())
       expect(config.cache.ttl).toBe(30 * 24 * 60 * 60)

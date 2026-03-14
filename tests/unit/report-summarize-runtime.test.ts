@@ -152,6 +152,41 @@ describe('report.summarize runtime evidence integration', () => {
       created_at: new Date().toISOString(),
       source: 'unit-test',
     })
+    database.insertAnalysis({
+      id: 'analysis-ghidra-runtime',
+      sample_id: sampleId,
+      stage: 'ghidra',
+      backend: 'ghidra',
+      status: 'done',
+      started_at: new Date().toISOString(),
+      finished_at: new Date().toISOString(),
+      output_json: JSON.stringify({
+        function_count: 12,
+        project_path: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects/runtime/project_demo',
+        project_key: 'project_demo',
+        readiness: {
+          function_index: { available: true, status: 'ready' },
+          decompile: { available: true, status: 'ready' },
+          cfg: { available: true, status: 'ready' },
+        },
+        function_extraction: {
+          status: 'success',
+          script_used: 'ExtractFunctions.java',
+          warnings: [],
+        },
+        ghidra_execution: {
+          project_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects',
+          log_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs',
+          command_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/runtime_cmd.log'],
+          runtime_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/runtime_run.log'],
+          progress_stages: [
+            { progress: 10, stage: 'sample_loaded', detail: 'Sample metadata loaded', recorded_at: new Date().toISOString() },
+            { progress: 100, stage: 'completed', detail: 'done', recorded_at: new Date().toISOString() },
+          ],
+        },
+      }),
+      metrics_json: JSON.stringify({ elapsed_ms: 1000 }),
+    })
     await seedRuntimeArtifact(sampleId)
 
     const triageHandler = async (_args: ToolArgs): Promise<WorkerResult> => ({
@@ -208,6 +243,9 @@ describe('report.summarize runtime evidence integration', () => {
     expect(data.evidence_lineage.scope_note).toContain('single registered artifact')
     expect(data.provenance.runtime.artifact_count).toBe(1)
     expect(data.provenance.runtime.artifact_ids).toHaveLength(1)
+    expect(data.ghidra_execution.analysis_id).toBe('analysis-ghidra-runtime')
+    expect(data.ghidra_execution.command_log_paths[0]).toContain('runtime_cmd.log')
+    expect(data.ghidra_execution.progress_stages.some((item: any) => item.stage === 'completed')).toBe(true)
     expect(data.evidence_weights.runtime).toBeGreaterThan(0.7)
     expect(data.inference.classification).toBe('suspicious')
     expect(data.confidence_semantics.assessment.score_kind).toBe('report_assessment')

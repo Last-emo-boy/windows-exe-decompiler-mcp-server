@@ -20,6 +20,8 @@ import {
   RequiredUserInputSchema,
   SetupActionSchema,
   buildBaselinePythonSetupActions,
+  buildJavaRequiredUserInputs,
+  buildJavaSetupActions,
   buildGhidraRequiredUserInputs,
   buildGhidraSetupActions,
   buildPyGhidraSetupActions,
@@ -337,11 +339,22 @@ export function createSystemHealthHandler(
             )
             setupActions = mergeSetupActions(setupActions, buildPyGhidraSetupActions())
           }
-          if (!ghidraStatus.ok) {
-            recommendations.push('Fix Ghidra install path or launch check before decompiler workloads.')
-            setupActions = mergeSetupActions(setupActions, buildGhidraSetupActions())
+          if (ghidraStatus.checks?.java_available === false || ghidraStatus.checks?.java_version_ok === false) {
+            recommendations.push(
+              'Install/configure Java 21+ and set JAVA_HOME before retrying Ghidra workloads.'
+            )
+            setupActions = mergeSetupActions(setupActions, buildJavaSetupActions())
             requiredUserInputs = mergeRequiredUserInputs(
               requiredUserInputs,
+              buildJavaRequiredUserInputs()
+            )
+          }
+          if (!ghidraStatus.ok) {
+            recommendations.push('Fix Ghidra install path or launch check before decompiler workloads.')
+            setupActions = mergeSetupActions(setupActions, buildJavaSetupActions(), buildGhidraSetupActions())
+            requiredUserInputs = mergeRequiredUserInputs(
+              requiredUserInputs,
+              buildJavaRequiredUserInputs(),
               buildGhidraRequiredUserInputs()
             )
           }
@@ -354,11 +367,13 @@ export function createSystemHealthHandler(
           recommendations.push('Investigate ghidra.health probe failure.')
           setupActions = mergeSetupActions(
             setupActions,
+            buildJavaSetupActions(),
             buildGhidraSetupActions(),
             buildPyGhidraSetupActions()
           )
           requiredUserInputs = mergeRequiredUserInputs(
             requiredUserInputs,
+            buildJavaRequiredUserInputs(),
             buildGhidraRequiredUserInputs()
           )
         }

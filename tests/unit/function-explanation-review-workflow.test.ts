@@ -137,6 +137,8 @@ describe('workflow.function_explanation_review tool', () => {
     expect(data.tool).toBe('workflow.function_explanation_review')
     expect(data.sample_id).toBe(sampleId)
     expect(data.job_id).toBeTruthy()
+    expect(data.polling_guidance.prefer_sleep).toBe(true)
+    expect(data.polling_guidance.recommended_wait_seconds).toBeGreaterThan(0)
     expect(queue.getStatus(data.job_id)?.status).toBe('queued')
   })
 
@@ -346,6 +348,17 @@ describe('workflow.function_explanation_review tool', () => {
             build_validation_status: 'passed',
             harness_validation_status: 'passed',
           },
+          ghidra_execution: {
+            analysis_id: 'analysis-explain-refresh',
+            selected_source: 'best_ready',
+            backend: 'ghidra',
+            status: 'completed',
+            function_count: 96,
+            command_log_paths: ['logs/explain_cmd.log'],
+            runtime_log_paths: ['logs/explain_run.log'],
+            progress_stages: [{ stage: 'completed', at: '2026-03-14T11:00:00.000Z' }],
+            warnings: [],
+          },
           notes: ['Native build validation: passed'],
         },
       })
@@ -385,6 +398,8 @@ describe('workflow.function_explanation_review tool', () => {
     expect(data.export.export_tool).toBe('code.reconstruct.export')
     expect(data.export.manifest_path).toContain('manifest.json')
     expect(data.export.preflight.function_index_recovery.imported_count).toBe(80)
+    expect(data.export.ghidra_execution.analysis_id).toBe('analysis-explain-refresh')
+    expect(data.export.ghidra_execution.runtime_log_paths[0]).toContain('explain_run.log')
     expect(data.export.provenance.runtime.session_selector).toBe('runtime-alpha')
     expect(data.export.selection_diffs.runtime.summary).toBe('runtime diff')
     expect(data.next_steps.join(' ')).toContain('Native build validation: passed')

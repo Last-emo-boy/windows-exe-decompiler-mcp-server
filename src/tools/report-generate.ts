@@ -34,6 +34,10 @@ import {
 import {
   buildArtifactSelectionDiff,
 } from '../selection-diff.js';
+import {
+  GhidraExecutionSummarySchema,
+  buildGhidraExecutionSummary,
+} from '../ghidra-execution-summary.js';
 
 /**
  * Input schema for report.generate tool
@@ -136,6 +140,7 @@ function generateMarkdownReport(
     runtime: ReturnType<typeof buildRuntimeArtifactProvenance>;
     semantic_explanations: ReturnType<typeof buildSemanticArtifactProvenance>;
   },
+  ghidraExecution?: z.infer<typeof GhidraExecutionSummarySchema> | null,
   selectionDiffs?: {
     runtime?: ReturnType<typeof buildArtifactSelectionDiff>;
     semantic_explanations?: ReturnType<typeof buildArtifactSelectionDiff>;
@@ -381,6 +386,35 @@ function generateMarkdownReport(
     lines.push('');
   }
 
+  if (ghidraExecution) {
+    lines.push('## Ghidra Execution');
+    lines.push('');
+    lines.push(`- **Analysis ID:** ${ghidraExecution.analysis_id}`);
+    lines.push(`- **Selected Source:** ${ghidraExecution.selected_source}`);
+    lines.push(`- **Status:** ${ghidraExecution.status}`);
+    lines.push(`- **Function Count:** ${ghidraExecution.function_count}`);
+    lines.push(`- **Project Path:** ${ghidraExecution.project_path || 'N/A'}`);
+    lines.push(`- **Project Root:** ${ghidraExecution.project_root || 'N/A'}`);
+    lines.push(`- **Log Root:** ${ghidraExecution.log_root || 'N/A'}`);
+    lines.push(`- **Command Logs:** ${ghidraExecution.command_log_paths.join(', ') || 'none'}`);
+    lines.push(`- **Runtime Logs:** ${ghidraExecution.runtime_log_paths.join(', ') || 'none'}`);
+    lines.push(
+      `- **Function Extraction:** ${ghidraExecution.function_extraction_status || 'unknown'}${ghidraExecution.function_extraction_script ? ` via ${ghidraExecution.function_extraction_script}` : ''}`
+    );
+    if (ghidraExecution.java_exception) {
+      lines.push(
+        `- **Java Exception:** ${ghidraExecution.java_exception.exception_class}: ${ghidraExecution.java_exception.message}`
+      );
+    }
+    if (ghidraExecution.progress_stages.length > 0) {
+      lines.push('- **Progress Stages:**');
+      for (const stage of ghidraExecution.progress_stages) {
+        lines.push(`  - ${stage.progress}% ${stage.stage}${stage.detail ? ` (${stage.detail})` : ''}`);
+      }
+    }
+    lines.push('');
+  }
+
   if (selectionDiffs && (selectionDiffs.runtime || selectionDiffs.semantic_explanations)) {
     lines.push('## Selection Diffs');
     lines.push('');
@@ -564,6 +598,7 @@ export function createReportGenerateHandler(
           input.semantic_session_tag
         ),
       };
+      const ghidraExecution = buildGhidraExecutionSummary(analyses);
       const selectionDiffs: {
         runtime?: ReturnType<typeof buildArtifactSelectionDiff>;
         semantic_explanations?: ReturnType<typeof buildArtifactSelectionDiff>;
@@ -631,6 +666,7 @@ export function createReportGenerateHandler(
             input.semantic_scope,
             input.semantic_session_tag,
             provenance,
+            ghidraExecution,
             selectionDiffs
           );
           reportExtension = 'md';
@@ -658,6 +694,7 @@ export function createReportGenerateHandler(
             semantic_scope: input.semantic_scope,
             semantic_session_tag: input.semantic_session_tag || null,
             provenance,
+            ghidra_execution: ghidraExecution,
             selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
             confidence_semantics: confidenceSemantics,
             generated_at: new Date().toISOString()
@@ -694,6 +731,7 @@ export function createReportGenerateHandler(
   input.semantic_scope,
   input.semantic_session_tag,
   provenance,
+  ghidraExecution,
   selectionDiffs
 )}</pre>
 </body>
@@ -755,6 +793,7 @@ export function createReportGenerateHandler(
               size: reportContent.length,
               sha256: reportSha256,
               provenance,
+              ghidra_execution: ghidraExecution,
               selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined
             }
           }, null, 2)

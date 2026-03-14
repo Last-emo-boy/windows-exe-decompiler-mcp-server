@@ -82,12 +82,24 @@ describe('ghidra.health tool', () => {
         install_dir: 'C:/ghidra',
         analyze_headless_path: 'C:/ghidra/support/analyzeHeadless.bat',
         scripts_dir: path.join(process.cwd(), 'ghidra_scripts'),
+        project_root: path.join(tempDir, 'ghidra-projects'),
+        log_root: path.join(tempDir, 'ghidra-logs'),
         checks: {
           install_dir_exists: true,
           analyze_headless_exists: true,
           scripts_dir_exists: true,
           launch_ok: true,
           pyghidra_available: false,
+          java_available: true,
+          java_version_ok: true,
+        },
+        java_probe: {
+          available: true,
+          source: 'PATH',
+          command: 'java',
+          version: 'openjdk version "21.0.2"',
+          major_version: 21,
+          version_ok: true,
         },
         errors: [],
         warnings: [],
@@ -130,12 +142,23 @@ describe('ghidra.health tool', () => {
         install_dir: '',
         analyze_headless_path: '',
         scripts_dir: path.join(process.cwd(), 'ghidra_scripts'),
+        project_root: path.join(tempDir, 'ghidra-projects'),
+        log_root: path.join(tempDir, 'ghidra-logs'),
         checks: {
           install_dir_exists: false,
           analyze_headless_exists: false,
           scripts_dir_exists: true,
           launch_ok: false,
           pyghidra_available: false,
+          java_available: false,
+          java_version_ok: false,
+        },
+        java_probe: {
+          available: false,
+          source: 'none',
+          command: 'java',
+          version_ok: false,
+          error: 'spawn java ENOENT',
         },
         errors: ['install dir not found'],
         warnings: [],
@@ -145,7 +168,9 @@ describe('ghidra.health tool', () => {
     const payload = parseToolText(await handler({ include_end_to_end: false }))
 
     expect(payload.ok).toBe(false)
+    expect(payload.data.setup_actions.map((item: any) => item.id)).toContain('set_java_home')
     expect(payload.data.setup_actions.map((item: any) => item.id)).toContain('set_ghidra_path')
+    expect(payload.data.required_user_inputs.map((item: any) => item.key)).toContain('java_home')
     expect(payload.data.required_user_inputs.map((item: any) => item.key)).toContain(
       'ghidra_install_dir'
     )

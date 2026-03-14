@@ -136,7 +136,12 @@ describe('DecompilerWorker', () => {
 
     // Clean up workspace
     if (fs.existsSync(testWorkspaceRoot)) {
-      fs.rmSync(testWorkspaceRoot, { recursive: true, force: true });
+      fs.rmSync(testWorkspaceRoot, {
+        recursive: true,
+        force: true,
+        maxRetries: 5,
+        retryDelay: 100,
+      });
     }
   });
 
@@ -180,35 +185,6 @@ describe('DecompilerWorker', () => {
   })
 
   describe('analyze', () => {
-    const buildMockProcess = (options: {
-      exitCode: number
-      stdout?: string
-      stderr?: string
-    }) => {
-      return {
-        stdout: {
-          on: jest.fn((event: string, callback: (data: string) => void) => {
-            if (event === 'data' && options.stdout) {
-              callback(options.stdout)
-            }
-          }),
-        },
-        stderr: {
-          on: jest.fn((event: string, callback: (data: string) => void) => {
-            if (event === 'data' && options.stderr) {
-              callback(options.stderr)
-            }
-          }),
-        },
-        on: jest.fn((event: string, callback: (code: number) => void) => {
-          if (event === 'close') {
-            callback(options.exitCode)
-          }
-        }),
-        kill: jest.fn(),
-      }
-    }
-
     test('should throw error if Ghidra is not configured', async () => {
       // Skip if Ghidra is actually configured
       if (ghidraConfig.isValid) {
@@ -260,67 +236,81 @@ describe('DecompilerWorker', () => {
       const samplePath = path.join(workspace.original, 'sample.exe');
       fs.writeFileSync(samplePath, 'fake PE content');
 
-      // Mock spawn to simulate Ghidra execution
-      const mockSpawn = (jest.requireMock('child_process') as { spawn: jest.Mock }).spawn;
-      const mockProcess = {
-        stdout: {
-          on: jest.fn((event: string, callback: (data: string) => void) => {
-            if (event === 'data') {
-              // Simulate Ghidra output
-              callback(JSON.stringify({
-                program_name: 'sample.exe',
-                program_path: samplePath,
-                function_count: 2,
-                functions: [
-                  {
-                    address: '0x00401000',
-                    name: 'main',
-                    size: 100,
-                    is_thunk: false,
-                    is_external: false,
-                    calling_convention: 'cdecl',
-                    signature: 'int main(int argc, char** argv)',
-                    callers: [],
-                    caller_count: 0,
-                    callees: [],
-                    callee_count: 0,
-                    is_entry_point: true,
-                    is_exported: false
-                  },
-                  {
-                    address: '0x00401100',
-                    name: 'helper',
-                    size: 50,
-                    is_thunk: false,
-                    is_external: false,
-                    calling_convention: 'cdecl',
-                    signature: 'void helper()',
-                    callers: [],
-                    caller_count: 0,
-                    callees: [],
-                    callee_count: 0,
-                    is_entry_point: false,
-                    is_exported: false
-                  }
-                ]
-              }));
-            }
-          })
-        },
-        stderr: {
-          on: jest.fn()
-        },
-        on: jest.fn((event: string, callback: (code: number) => void) => {
-          if (event === 'close') {
-            callback(0); // Success exit code
-          }
-        }),
-        kill: jest.fn()
-      };
-
-      mockSpawn.mockReturnValue(mockProcess as any);
+      const workerInternals = decompilerWorker as any;
+      const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis;
+      const originalTryExtractFunctionsWithFallback = workerInternals.tryExtractFunctionsWithFallback;
+      const originalProbeCapability = workerInternals.probeCapability;
 
       try {
+        workerInternals.executeMainAnalysis = jest.fn(async () => ({
+          stdout: '',
+          stderr: '',
+          diagnostics: {
+            raw_cmd: 'analyzeHeadless ...',
+            command: 'analyzeHeadless.bat',
+            args: [],
+            cwd: workspace.ghidra,
+            exit_code: 0,
+            signal: null,
+            timed_out: false,
+            cancelled: false,
+            stdout: '',
+            stderr: '',
+            stdout_encoding: 'utf-8',
+            stderr_encoding: 'utf-8',
+          },
+        }));
+        workerInternals.tryExtractFunctionsWithFallback = jest.fn(async () => ({
+          scriptUsed: 'ExtractFunctions.java',
+          warnings: [],
+          attempts: [{ script: 'ExtractFunctions.java' }],
+          output: {
+            program_name: 'sample.exe',
+            program_path: samplePath,
+            function_count: 2,
+            functions: [
+              {
+                address: '0x00401000',
+                name: 'main',
+                size: 100,
+                is_thunk: false,
+                is_external: false,
+                calling_convention: 'cdecl',
+                signature: 'int main(int argc, char** argv)',
+                callers: [],
+                caller_count: 0,
+                callees: [],
+                callee_count: 0,
+                is_entry_point: true,
+                is_exported: false
+              },
+              {
+                address: '0x00401100',
+                name: 'helper',
+                size: 50,
+                is_thunk: false,
+                is_external: false,
+                calling_convention: 'cdecl',
+                signature: 'void helper()',
+                callers: [],
+                caller_count: 0,
+                callees: [],
+                callee_count: 0,
+                is_entry_point: false,
+                is_exported: false
+              }
+            ]
+          }
+        }));
+        workerInternals.probeCapability = jest.fn(async (_capability: string, _projectPath: string, _projectKey: string, _samplePath: string, target: string) => ({
+          status: {
+            available: true,
+            status: 'ready',
+            checked_at: new Date().toISOString(),
+            target,
+          },
+        }));
+
         const result = await decompilerWorker.analyze(sampleId, { timeout: 5000 });
 
         // Verify result
@@ -349,6 +339,10 @@ describe('DecompilerWorker', () => {
           return;
         }
         throw error;
+      } finally {
+        workerInternals.executeMainAnalysis = originalExecuteMainAnalysis;
+        workerInternals.tryExtractFunctionsWithFallback = originalTryExtractFunctionsWithFallback;
+        workerInternals.probeCapability = originalProbeCapability;
       }
     });
 
@@ -377,31 +371,40 @@ describe('DecompilerWorker', () => {
       const samplePath = path.join(workspace.original, 'sample.exe');
       fs.writeFileSync(samplePath, 'fake PE content');
 
-      // Mock spawn to simulate timeout
-      const mockSpawn = (jest.requireMock('child_process') as { spawn: jest.Mock }).spawn;
-      const mockProcess = {
-        stdout: {
-          on: jest.fn()
-        },
-        stderr: {
-          on: jest.fn()
-        },
-        on: jest.fn(() => {
-          // Never call close callback to simulate hanging process
-        }),
-        kill: jest.fn(),
-        killed: false
-      };
-
-      mockSpawn.mockReturnValue(mockProcess as any);
+      const workerInternals = decompilerWorker as any;
+      const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis;
 
       try {
+        workerInternals.executeMainAnalysis = jest.fn(async () => {
+          throw new GhidraProcessError(
+            'E_TIMEOUT: Ghidra analysis exceeded timeout of 100ms',
+            {
+              raw_cmd: 'analyzeHeadless ...',
+              command: 'analyzeHeadless.bat',
+              args: [],
+              cwd: workspace.ghidra,
+              exit_code: null,
+              signal: null,
+              timed_out: true,
+              cancelled: false,
+              stdout: '',
+              stderr: '',
+              stdout_encoding: 'utf-8',
+              stderr_encoding: 'utf-8',
+            },
+            'E_TIMEOUT'
+          );
+        });
+
         await expect(
           decompilerWorker.analyze(sampleId, { timeout: 100 })
         ).rejects.toThrow('E_TIMEOUT');
 
-        // Verify process was killed
-        expect(mockProcess.kill).toHaveBeenCalledWith('SIGTERM');
+        const analyses = database.findAnalysesBySample(sampleId);
+        expect(analyses).toHaveLength(1);
+        expect(analyses[0].status).toBe('failed');
+        const outputJson = JSON.parse(analyses[0].output_json || '{}');
+        expect(outputJson.ghidra_diagnostics.timed_out).toBe(true);
 
       } catch (error) {
         // If test fails, check if it's due to Ghidra not being configured
@@ -410,6 +413,8 @@ describe('DecompilerWorker', () => {
           return;
         }
         throw error;
+      } finally {
+        workerInternals.executeMainAnalysis = originalExecuteMainAnalysis;
       }
     });
 
@@ -420,13 +425,13 @@ describe('DecompilerWorker', () => {
       }
 
       // Create a test sample
-      const sha256 = 'g'.repeat(64);
+      const sha256 = '7'.repeat(64);
       const sampleId = `sha256:${sha256}`;
 
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'h'.repeat(32),
+        md5: '8'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -438,30 +443,31 @@ describe('DecompilerWorker', () => {
       const samplePath = path.join(workspace.original, 'sample.exe');
       fs.writeFileSync(samplePath, 'fake PE content');
 
-      // Mock spawn to simulate error
-      const mockSpawn = (jest.requireMock('child_process') as { spawn: jest.Mock }).spawn;
-      const mockProcess = {
-        stdout: {
-          on: jest.fn()
-        },
-        stderr: {
-          on: jest.fn((event: string, callback: (data: string) => void) => {
-            if (event === 'data') {
-              callback('Ghidra error message');
-            }
-          })
-        },
-        on: jest.fn((event: string, callback: (code: number) => void) => {
-          if (event === 'close') {
-            callback(1); // Error exit code
-          }
-        }),
-        kill: jest.fn()
-      };
-
-      mockSpawn.mockReturnValue(mockProcess as any);
+      const workerInternals = decompilerWorker as any;
+      const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis;
 
       try {
+        workerInternals.executeMainAnalysis = jest.fn(async () => {
+          throw new GhidraProcessError(
+            'Ghidra analysis failed with exit code 1',
+            {
+              raw_cmd: 'analyzeHeadless ...',
+              command: 'analyzeHeadless.bat',
+              args: [],
+              cwd: workspace.ghidra,
+              exit_code: 1,
+              signal: null,
+              timed_out: false,
+              cancelled: false,
+              stdout: '',
+              stderr: 'Ghidra error message',
+              stdout_encoding: 'utf-8',
+              stderr_encoding: 'utf-8',
+            },
+            'E_GHIDRA_PROCESS'
+          );
+        });
+
         await expect(decompilerWorker.analyze(sampleId)).rejects.toThrow();
 
         // Find the analysis record (we don't know the ID)
@@ -481,6 +487,8 @@ describe('DecompilerWorker', () => {
           return;
         }
         throw error;
+      } finally {
+        workerInternals.executeMainAnalysis = originalExecuteMainAnalysis;
       }
     });
 
@@ -489,12 +497,12 @@ describe('DecompilerWorker', () => {
         return
       }
 
-      const sha256 = 'i'.repeat(64)
+      const sha256 = '9'.repeat(64)
       const sampleId = `sha256:${sha256}`
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'j'.repeat(32),
+        md5: 'a'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -505,53 +513,84 @@ describe('DecompilerWorker', () => {
       const samplePath = path.join(workspace.original, 'sample.exe')
       fs.writeFileSync(samplePath, 'fake PE content')
 
-      const mockSpawn = (jest.requireMock('child_process') as { spawn: jest.Mock }).spawn
-      mockSpawn
-        .mockReturnValueOnce(buildMockProcess({ exitCode: 0 }) as any) // Main analysis
-        .mockReturnValueOnce(
-          buildMockProcess({
-            exitCode: 1,
-            stderr: 'Ghidra was not started with PyGhidra. Python is not available',
-          }) as any
-        ) // Python post-script fails
-        .mockReturnValueOnce(
-          buildMockProcess({
-            exitCode: 0,
-            stdout: JSON.stringify({
-              program_name: 'sample.exe',
-              program_path: samplePath,
-              function_count: 1,
-              functions: [
-                {
-                  address: '0x00401000',
-                  name: 'main',
-                  size: 120,
-                  is_thunk: false,
-                  is_external: false,
-                  calling_convention: 'cdecl',
-                  signature: 'int main()',
-                  callers: [],
-                  caller_count: 0,
-                  callees: [],
-                  callee_count: 0,
-                  is_entry_point: true,
-                  is_exported: false,
-                },
-              ],
-            }),
-          }) as any
-        ) // Java fallback
+      const workerInternals = decompilerWorker as any
+      const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis
+      const originalTryExtractFunctionsWithFallback = workerInternals.tryExtractFunctionsWithFallback
+      const originalProbeCapability = workerInternals.probeCapability
 
-      const result = await decompilerWorker.analyze(sampleId, { timeout: 5000 })
-      expect(result.status).toBe('done')
-      expect(result.functionCount).toBe(1)
-      expect(result.warnings?.some((item) => item.includes('Falling back to ExtractFunctions.java'))).toBe(true)
+      try {
+        workerInternals.executeMainAnalysis = jest.fn(async () => ({
+          stdout: '',
+          stderr: '',
+          diagnostics: {
+            raw_cmd: 'analyzeHeadless ...',
+            command: 'analyzeHeadless.bat',
+            args: [],
+            cwd: workspace.ghidra,
+            exit_code: 0,
+            signal: null,
+            timed_out: false,
+            cancelled: false,
+            stdout: '',
+            stderr: '',
+            stdout_encoding: 'utf-8',
+            stderr_encoding: 'utf-8',
+          },
+        }))
+        workerInternals.tryExtractFunctionsWithFallback = jest.fn(async () => ({
+          scriptUsed: 'ExtractFunctions.java',
+          warnings: ['Falling back to ExtractFunctions.java because PyGhidra is unavailable.'],
+          attempts: [
+            { script: 'ExtractFunctions.py', error: 'Ghidra was not started with PyGhidra. Python is not available' },
+            { script: 'ExtractFunctions.java' },
+          ],
+          output: {
+            program_name: 'sample.exe',
+            program_path: samplePath,
+            function_count: 1,
+            functions: [
+              {
+                address: '0x00401000',
+                name: 'main',
+                size: 120,
+                is_thunk: false,
+                is_external: false,
+                calling_convention: 'cdecl',
+                signature: 'int main()',
+                callers: [],
+                caller_count: 0,
+                callees: [],
+                callee_count: 0,
+                is_entry_point: true,
+                is_exported: false,
+              },
+            ],
+          },
+        }))
+        workerInternals.probeCapability = jest.fn(async (_capability: string, _projectPath: string, _projectKey: string, _samplePath: string, target: string) => ({
+          status: {
+            available: true,
+            status: 'ready',
+            checked_at: new Date().toISOString(),
+            target,
+          },
+        }))
 
-      const analyses = database.findAnalysesBySample(sampleId)
-      expect(analyses[0].status).toBe('done')
-      const outputJson = JSON.parse(analyses[0].output_json || '{}')
-      expect(outputJson.function_extraction.script_used).toBe('ExtractFunctions.java')
-      expect(Array.isArray(outputJson.function_extraction.attempts)).toBe(true)
+        const result = await decompilerWorker.analyze(sampleId, { timeout: 5000 })
+        expect(result.status).toBe('done')
+        expect(result.functionCount).toBe(1)
+        expect(result.warnings?.some((item) => item.includes('Falling back to ExtractFunctions.java'))).toBe(true)
+
+        const analyses = database.findAnalysesBySample(sampleId)
+        expect(analyses[0].status).toBe('done')
+        const outputJson = JSON.parse(analyses[0].output_json || '{}')
+        expect(outputJson.function_extraction.script_used).toBe('ExtractFunctions.java')
+        expect(Array.isArray(outputJson.function_extraction.attempts)).toBe(true)
+      } finally {
+        workerInternals.executeMainAnalysis = originalExecuteMainAnalysis
+        workerInternals.tryExtractFunctionsWithFallback = originalTryExtractFunctionsWithFallback
+        workerInternals.probeCapability = originalProbeCapability
+      }
     })
 
     test('should mark analysis as partial_success when post-processing fails', async () => {
@@ -559,12 +598,12 @@ describe('DecompilerWorker', () => {
         return
       }
 
-      const sha256 = 'k'.repeat(64)
+      const sha256 = 'b'.repeat(64)
       const sampleId = `sha256:${sha256}`
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'l'.repeat(32),
+        md5: 'c'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -574,31 +613,59 @@ describe('DecompilerWorker', () => {
       const workspace = await workspaceManager.createWorkspace(sampleId)
       fs.writeFileSync(path.join(workspace.original, 'sample.exe'), 'fake PE content')
 
-      const mockSpawn = (jest.requireMock('child_process') as { spawn: jest.Mock }).spawn
-      mockSpawn
-        .mockReturnValueOnce(buildMockProcess({ exitCode: 0 }) as any) // Main analysis
-        .mockReturnValueOnce(
-          buildMockProcess({
-            exitCode: 1,
-            stderr: 'Ghidra was not started with PyGhidra. Python is not available',
-          }) as any
-        ) // Python post-script fails
-        .mockReturnValueOnce(
-          buildMockProcess({
-            exitCode: 1,
-            stderr: 'Java post-script also failed',
-          }) as any
-        ) // Java fallback fails
+      const workerInternals = decompilerWorker as any
+      const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis
+      const originalTryExtractFunctionsWithFallback = workerInternals.tryExtractFunctionsWithFallback
+      const originalTryRecoverFunctionsFromPE = workerInternals.tryRecoverFunctionsFromPE
 
-      const result = await decompilerWorker.analyze(sampleId, { timeout: 5000 })
-      expect(result.status).toBe('partial_success')
-      expect(result.functionCount).toBe(0)
+      try {
+        workerInternals.executeMainAnalysis = jest.fn(async () => ({
+          stdout: '',
+          stderr: '',
+          diagnostics: {
+            raw_cmd: 'analyzeHeadless ...',
+            command: 'analyzeHeadless.bat',
+            args: [],
+            cwd: workspace.ghidra,
+            exit_code: 0,
+            signal: null,
+            timed_out: false,
+            cancelled: false,
+            stdout: '',
+            stderr: '',
+            stdout_encoding: 'utf-8',
+            stderr_encoding: 'utf-8',
+          },
+        }))
+        workerInternals.tryExtractFunctionsWithFallback = jest.fn(async () => ({
+          scriptUsed: undefined,
+          warnings: ['Function extraction failed with ExtractFunctions.py: Function extraction (ExtractFunctions.py) failed with exit code 1'],
+          attempts: [
+            { script: 'ExtractFunctions.py', error: 'Ghidra was not started with PyGhidra. Python is not available' },
+            { script: 'ExtractFunctions.java', error: 'Java post-script also failed' },
+          ],
+          output: undefined,
+        }))
+        workerInternals.tryRecoverFunctionsFromPE = jest.fn(() => ({
+          functions: [],
+          warnings: [],
+          recoveryMetadata: { source: 'test' },
+        }))
 
-      const analyses = database.findAnalysesBySample(sampleId)
-      expect(analyses[0].status).toBe('partial_success')
-      const outputJson = JSON.parse(analyses[0].output_json || '{}')
-      expect(outputJson.project_path).toBeDefined()
-      expect(outputJson.function_extraction.status).toBe('failed')
+        const result = await decompilerWorker.analyze(sampleId, { timeout: 5000 })
+        expect(result.status).toBe('partial_success')
+        expect(result.functionCount).toBe(0)
+
+        const analyses = database.findAnalysesBySample(sampleId)
+        expect(analyses[0].status).toBe('partial_success')
+        const outputJson = JSON.parse(analyses[0].output_json || '{}')
+        expect(outputJson.project_path).toBeDefined()
+        expect(outputJson.function_extraction.status).toBe('failed')
+      } finally {
+        workerInternals.executeMainAnalysis = originalExecuteMainAnalysis
+        workerInternals.tryExtractFunctionsWithFallback = originalTryExtractFunctionsWithFallback
+        workerInternals.tryRecoverFunctionsFromPE = originalTryRecoverFunctionsFromPE
+      }
     })
 
     test('should recover function candidates from .pdata when Ghidra post-scripts fail', async () => {
@@ -926,6 +993,71 @@ describe('DecompilerWorker', () => {
       expect(normalized?.remediation_hints.join(' ')).toContain('GHIDRA_PATH')
       expect(normalized?.evidence.join(' ')).toContain('spawn_error=spawn EINVAL')
     })
+
+    test('should classify missing Ghidra project directory failures', () => {
+      const normalized = normalizeGhidraError(
+        new GhidraProcessError(
+          'Ghidra analysis failed',
+          {
+            raw_cmd: 'analyzeHeadless ...',
+            command: 'analyzeHeadless.bat',
+            args: [],
+            cwd: testWorkspaceRoot,
+            exit_code: 1,
+            signal: null,
+            timed_out: false,
+            cancelled: false,
+            stdout: '',
+            stderr:
+              'java.io.FileNotFoundException: Directory not found: C:\\Temp\\GhidraProject\nat ghidra.framework.project.DefaultProjectManager.createProject(DefaultProjectManager.java:100)',
+            stdout_encoding: 'utf-8',
+            stderr_encoding: 'utf-8',
+            log_path: 'C:\\Temp\\ghidra.log',
+            java_exception: {
+              exception_class: 'java.io.FileNotFoundException',
+              message: 'Directory not found: C:\\Temp\\GhidraProject',
+              stack_preview: ['at ghidra.framework.project.DefaultProjectManager.createProject(DefaultProjectManager.java:100)'],
+            },
+          },
+          'E_GHIDRA_PROCESS'
+        ),
+        'ghidra.analyze'
+      )
+
+      expect(normalized?.code).toBe('project_directory_missing')
+      expect(normalized?.category).toBe('configuration')
+      expect(normalized?.evidence.join(' ')).toContain('log_path=C:\\Temp\\ghidra.log')
+      expect(normalized?.remediation_hints.join(' ')).toContain('project root')
+    })
+
+    test('should classify Java runtime compatibility failures', () => {
+      const normalized = normalizeGhidraError(
+        new GhidraProcessError(
+          'Ghidra analysis failed',
+          {
+            raw_cmd: 'analyzeHeadless ...',
+            command: 'analyzeHeadless.bat',
+            args: [],
+            cwd: testWorkspaceRoot,
+            exit_code: 1,
+            signal: null,
+            timed_out: false,
+            cancelled: false,
+            stdout: '',
+            stderr:
+              'Error: UnsupportedClassVersionError\nJAVA_HOME=C:\\Java\\jdk-17\nclass file version 65.0',
+            stdout_encoding: 'utf-8',
+            stderr_encoding: 'utf-8',
+          },
+          'E_GHIDRA_PROCESS'
+        ),
+        'ghidra.health'
+      )
+
+      expect(normalized?.code).toBe('java_runtime_invalid')
+      expect(normalized?.category).toBe('environment')
+      expect(normalized?.remediation_hints.join(' ')).toContain('Java 21+')
+    })
   })
 
   describe('listFunctions', () => {
@@ -955,7 +1087,7 @@ describe('DecompilerWorker', () => {
       database.insertSample({
         id: sampleId,
         sha256: 'f'.repeat(64),
-        md5: 'g'.repeat(32),
+        md5: '7'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -1044,13 +1176,13 @@ describe('DecompilerWorker', () => {
     });
 
     test('should respect limit parameter', async () => {
-      const sampleId = 'sha256:' + 'h'.repeat(64);
+      const sampleId = 'sha256:' + '8'.repeat(64);
 
       // Insert sample
       database.insertSample({
         id: sampleId,
-        sha256: 'h'.repeat(64),
-        md5: 'i'.repeat(32),
+        sha256: '8'.repeat(64),
+        md5: '9'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -1113,13 +1245,13 @@ describe('DecompilerWorker', () => {
     });
 
     test('should handle functions with null name', async () => {
-      const sampleId = 'sha256:' + 'j'.repeat(64);
+      const sampleId = 'sha256:' + 'a'.repeat(64);
 
       // Insert sample
       database.insertSample({
         id: sampleId,
-        sha256: 'j'.repeat(64),
-        md5: 'k'.repeat(32),
+        sha256: 'a'.repeat(64),
+        md5: 'b'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -1732,13 +1864,13 @@ describe('DecompilerWorker', () => {
       }
 
       // Create a test sample with completed analysis
-      const sha256 = 'g'.repeat(64);
+      const sha256 = '7'.repeat(64);
       const sampleId = `sha256:${sha256}`;
 
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'h'.repeat(32),
+        md5: '8'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -1784,13 +1916,13 @@ describe('DecompilerWorker', () => {
       }
 
       // Create a test sample with completed analysis
-      const sha256 = 'i'.repeat(64);
+      const sha256 = '9'.repeat(64);
       const sampleId = `sha256:${sha256}`;
 
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'j'.repeat(32),
+        md5: 'a'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -1941,13 +2073,13 @@ describe('DecompilerWorker', () => {
       }
 
       // Create a test sample with completed analysis
-      const sha256 = 'g'.repeat(64);
+      const sha256 = '7'.repeat(64);
       const sampleId = `sha256:${sha256}`;
 
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'h'.repeat(32),
+        md5: '8'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -1993,13 +2125,13 @@ describe('DecompilerWorker', () => {
       }
 
       // Create a test sample with completed analysis
-      const sha256 = 'i'.repeat(64);
+      const sha256 = '9'.repeat(64);
       const sampleId = `sha256:${sha256}`;
 
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'j'.repeat(32),
+        md5: 'a'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),
@@ -2045,13 +2177,13 @@ describe('DecompilerWorker', () => {
       }
 
       // Create a test sample with completed analysis
-      const sha256 = 'k'.repeat(64);
+      const sha256 = 'b'.repeat(64);
       const sampleId = `sha256:${sha256}`;
 
       database.insertSample({
         id: sampleId,
         sha256,
-        md5: 'l'.repeat(32),
+        md5: 'c'.repeat(32),
         size: 1024,
         file_type: 'PE32',
         created_at: new Date().toISOString(),

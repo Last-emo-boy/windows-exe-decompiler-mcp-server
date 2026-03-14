@@ -117,6 +117,8 @@ describe('ghidra.analyze tool', () => {
     expect(payload.data.analysis_id).toBe('job-123')
     expect(payload.data.job_id).toBe('job-123')
     expect(payload.data.status).toBe('queued')
+    expect(payload.data.polling_guidance.prefer_sleep).toBe(true)
+    expect(payload.data.polling_guidance.recommended_wait_seconds).toBeGreaterThan(0)
     expect(enqueue).toHaveBeenCalledTimes(1)
   })
 

@@ -15,6 +15,7 @@ import { createReconstructWorkflowHandler } from './reconstruct.js'
 import { AnalysisProvenanceSchema } from '../analysis-provenance.js'
 import { AnalysisSelectionDiffSchema } from '../selection-diff.js'
 import { BinaryRoleProfileDataSchema } from '../tools/binary-role-profile.js'
+import { GhidraExecutionSummarySchema } from '../ghidra-execution-summary.js'
 import {
   RequiredUserInputSchema,
   SetupActionSchema,
@@ -22,6 +23,7 @@ import {
   mergeRequiredUserInputs,
   mergeSetupActions,
 } from '../setup-guidance.js'
+import { PollingGuidanceSchema, buildPollingGuidance } from '../polling-guidance.js'
 
 const TOOL_NAME = 'workflow.function_explanation_review'
 
@@ -260,6 +262,7 @@ export const functionExplanationReviewWorkflowOutputSchema = z.object({
         tool: z.literal(TOOL_NAME),
         sample_id: z.string(),
         progress: z.number().int().min(0).max(100),
+        polling_guidance: PollingGuidanceSchema.nullable(),
       }),
       z.object({
       sample_id: z.string(),
@@ -309,6 +312,7 @@ export const functionExplanationReviewWorkflowOutputSchema = z.object({
             function_index_recovery: z.any().nullable(),
           })
           .nullable(),
+        ghidra_execution: GhidraExecutionSummarySchema.nullable(),
         provenance: AnalysisProvenanceSchema.nullable(),
         selection_diffs: AnalysisSelectionDiffSchema.nullable(),
         notes: z.array(z.string()),
@@ -412,6 +416,12 @@ export function createFunctionExplanationReviewWorkflowHandler(
             tool: TOOL_NAME,
             sample_id: input.sample_id,
             progress: 0,
+            polling_guidance: buildPollingGuidance({
+              tool: TOOL_NAME,
+              status: 'queued',
+              progress: 0,
+              timeout_ms: jobTimeoutMs,
+            }),
           },
           metrics: {
             elapsed_ms: Date.now() - startTime,
@@ -490,6 +500,7 @@ export function createFunctionExplanationReviewWorkflowHandler(
           rust_profile: unknown | null
           function_index_recovery: unknown | null
         } | null
+        ghidra_execution: z.infer<typeof GhidraExecutionSummarySchema> | null
         provenance: z.infer<typeof AnalysisProvenanceSchema> | null
         selection_diffs: z.infer<typeof AnalysisSelectionDiffSchema> | null
         notes: string[]
@@ -503,6 +514,7 @@ export function createFunctionExplanationReviewWorkflowHandler(
         build_validation_status: null,
         harness_validation_status: null,
         preflight: null,
+        ghidra_execution: null,
         provenance: null,
         selection_diffs: null,
         notes: [],
@@ -560,6 +572,7 @@ export function createFunctionExplanationReviewWorkflowHandler(
             build_validation_status: null,
             harness_validation_status: null,
             preflight: null,
+            ghidra_execution: null,
             provenance: null,
             selection_diffs: null,
             notes: ['Refresh export failed after function explanation apply.'],
@@ -576,6 +589,7 @@ export function createFunctionExplanationReviewWorkflowHandler(
             build_validation_status: exportData.export?.build_validation_status || null,
             harness_validation_status: exportData.export?.harness_validation_status || null,
             preflight: exportData.preflight || null,
+            ghidra_execution: exportData.ghidra_execution || null,
             provenance: exportData.provenance || null,
             selection_diffs: exportData.selection_diffs || null,
             notes: Array.isArray(exportData.notes) ? exportData.notes : [],

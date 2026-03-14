@@ -107,6 +107,8 @@ describe('workflow.module_reconstruction_review tool', () => {
     expect(data.tool).toBe('workflow.module_reconstruction_review')
     expect(data.sample_id).toBe(sampleId)
     expect(data.job_id).toBeTruthy()
+    expect(data.polling_guidance.prefer_sleep).toBe(true)
+    expect(data.polling_guidance.recommended_wait_seconds).toBeGreaterThan(0)
     expect(queue.getStatus(data.job_id)?.status).toBe('queued')
   })
 
@@ -162,6 +164,17 @@ describe('workflow.module_reconstruction_review tool', () => {
             rust_profile: null,
             function_index_recovery: null,
           },
+          ghidra_execution: {
+            analysis_id: 'analysis-module-refresh',
+            selected_source: 'best_ready',
+            backend: 'ghidra',
+            status: 'completed',
+            function_count: 64,
+            command_log_paths: ['logs/module_cmd.log'],
+            runtime_log_paths: ['logs/module_run.log'],
+            progress_stages: [{ stage: 'completed', at: '2026-03-14T12:30:00.000Z' }],
+            warnings: [],
+          },
           provenance: {
             runtime: {
               scope: 'all',
@@ -210,6 +223,8 @@ describe('workflow.module_reconstruction_review tool', () => {
     expect(data.export.status).toBe('completed')
     expect(data.export.selected_path).toBe('native')
     expect(data.export.export_tool).toBe('code.reconstruct.export')
+    expect(data.export.ghidra_execution.analysis_id).toBe('analysis-module-refresh')
+    expect(data.export.ghidra_execution.runtime_log_paths[0]).toContain('module_run.log')
     expect(data.next_steps).toContain('export refreshed')
 
     expect(reconstructWorkflowHandler).toHaveBeenCalledWith(

@@ -24,6 +24,32 @@ export interface GhidraAnalysisMetadata {
   function_count?: number
   project_path?: string
   project_key?: string
+  ghidra_execution?: {
+    project_root?: string
+    log_root?: string
+    command_log_paths?: string[]
+    runtime_log_paths?: string[]
+    progress_stages?: Array<{
+      progress?: number
+      stage?: string
+      detail?: string | null
+      recorded_at?: string | null
+    }>
+    java_exception?: {
+      exception_class?: string
+      message?: string
+      stack_preview?: string[]
+    }
+  }
+  ghidra_diagnostics?: {
+    log_path?: string
+    runtime_log_path?: string
+    java_exception?: {
+      exception_class?: string
+      message?: string
+      stack_preview?: string[]
+    }
+  }
   function_extraction?: {
     status?: string
     script_used?: string

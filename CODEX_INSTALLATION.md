@@ -23,6 +23,15 @@ It also pins:
 - `DB_PATH`
 - `CACHE_ROOT`
 - `AUDIT_LOG_PATH`
+- `GHIDRA_PROJECT_ROOT`
+- `GHIDRA_LOG_ROOT`
+
+The server's bundled `ghidra_scripts/` directory is resolved from the installed
+package or repository root, not from the shell's current working directory. You
+do not need to manually configure a script path for `ExtractFunctions.py`.
+
+For Ghidra 12.0.4, keep Java 21+ available. If Java is installed in a custom
+location, set `JAVA_HOME` before starting Codex.
 
 If Ghidra is not already configured through `GHIDRA_PATH` or
 `GHIDRA_INSTALL_DIR`, pass it explicitly:
@@ -44,6 +53,8 @@ If you want a different persistent workspace root:
 - updates `~/.codex/config.toml`
 - writes `WORKSPACE_ROOT` so workspaces do not depend on the current repo path
 - writes `GHIDRA_PATH` and `GHIDRA_INSTALL_DIR` when a Ghidra path is provided
+- honors `GHIDRA_PROJECT_ROOT` and `GHIDRA_LOG_ROOT` when you want Ghidra
+  projects and runtime logs under a fixed location
 
 ## Manual configuration example
 

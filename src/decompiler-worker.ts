@@ -19,6 +19,9 @@ import {
   createGhidraProject,
   buildProcessInvocation,
   type ProcessInvocation,
+  getConfiguredGhidraLogRoot,
+  getConfiguredGhidraProjectRoot,
+  getSampleScopedGhidraProjectRoot,
 } from './ghidra-config.js';
 import {
   findBestGhidraAnalysis,
@@ -54,6 +57,7 @@ export interface GhidraOptions {
   cspec?: string;
   scriptPaths?: string[];
   abortSignal?: AbortSignal;
+  onProgress?: (progress: number, stage: string, detail?: string) => void;
 }
 
 /**
@@ -252,6 +256,13 @@ export interface GhidraProcessDiagnostics {
   stdout_encoding: string;
   stderr_encoding: string;
   spawn_error?: string;
+  log_path?: string;
+  runtime_log_path?: string;
+  java_exception?: {
+    exception_class: string;
+    message: string;
+    stack_preview: string[];
+  };
 }
 
 export interface NormalizedGhidraError {
@@ -259,6 +270,8 @@ export interface NormalizedGhidraError {
     | 'timeout'
     | 'cancelled'
     | 'project_lock'
+    | 'project_directory_missing'
+    | 'java_runtime_invalid'
     | 'spawn_einval'
     | 'spawn_failure'
     | 'pyghidra_unavailable'
@@ -277,6 +290,8 @@ interface GhidraCommandOutput {
   stdout: string;
   stderr: string;
   diagnostics: GhidraProcessDiagnostics;
+  command_log_path?: string;
+  runtime_log_path?: string;
 }
 
 interface FunctionExtractionAttempt {
@@ -284,6 +299,8 @@ interface FunctionExtractionAttempt {
   stdout?: string;
   stderr?: string;
   diagnostics?: GhidraProcessDiagnostics;
+  command_log_path?: string;
+  runtime_log_path?: string;
   parse_error?: string;
   error?: string;
 }
@@ -358,6 +375,46 @@ function truncateDiagnosticText(value: string | undefined, limit: number = 240):
   return `${normalized.slice(0, limit)}...`
 }
 
+function parseJavaExceptionSummary(text: string | undefined): {
+  exception_class: string
+  message: string
+  stack_preview: string[]
+} | undefined {
+  if (!text) {
+    return undefined
+  }
+
+  const lines = text
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+
+  const firstExceptionIndex = lines.findIndex((line) =>
+    /(?:^|[\s:])(java|javax|ghidra)\.[A-Za-z0-9_.$]+(?:Exception|Error)\b/.test(line)
+  )
+
+  if (firstExceptionIndex < 0) {
+    return undefined
+  }
+
+  const exceptionLine = lines[firstExceptionIndex]
+  const match = exceptionLine.match(/((?:java|javax|ghidra)\.[A-Za-z0-9_.$]+(?:Exception|Error))(?::\s*(.*))?/)
+  if (!match) {
+    return undefined
+  }
+
+  const stack_preview = lines
+    .slice(firstExceptionIndex + 1)
+    .filter((line) => /^at\s+/.test(line))
+    .slice(0, 4)
+
+  return {
+    exception_class: match[1],
+    message: (match[2] || exceptionLine).trim(),
+    stack_preview,
+  }
+}
+
 export function normalizeGhidraError(
   error: unknown,
   stage?: string
@@ -376,6 +433,11 @@ export function normalizeGhidraError(
     diagnostics?.raw_cmd ? `raw_cmd=${diagnostics.raw_cmd}` : '',
     typeof diagnostics?.exit_code === 'number' ? `exit_code=${diagnostics.exit_code}` : '',
     diagnostics?.spawn_error ? `spawn_error=${diagnostics.spawn_error}` : '',
+    diagnostics?.log_path ? `log_path=${diagnostics.log_path}` : '',
+    diagnostics?.runtime_log_path ? `runtime_log_path=${diagnostics.runtime_log_path}` : '',
+    diagnostics?.java_exception
+      ? `java_exception=${diagnostics.java_exception.exception_class}: ${diagnostics.java_exception.message}`
+      : '',
     truncateDiagnosticText(diagnostics?.stderr) ? `stderr=${truncateDiagnosticText(diagnostics?.stderr)}` : '',
     truncateDiagnosticText(diagnostics?.stdout) ? `stdout=${truncateDiagnosticText(diagnostics?.stdout)}` : '',
   ].filter((item): item is string => item.length > 0)
@@ -420,6 +482,35 @@ export function normalizeGhidraError(
       remediation_hints: [
         'Wait for the other Ghidra process to release the project lock, then retry.',
         'Avoid running multiple decompile/CFG/export operations against the same project concurrently.',
+      ],
+      evidence,
+    }
+  }
+
+  if (/Directory not found:|FileNotFoundException: Directory not found|DefaultProjectManager\.createProject/i.test(corpus)) {
+    return {
+      code: 'project_directory_missing',
+      category: 'configuration',
+      stage,
+      summary: withStage('Ghidra could not create or open the project because the project directory is missing or invalid.'),
+      remediation_hints: [
+        'Set a writable Ghidra project root and ensure its parent directory exists.',
+        'If you are overriding the project location, create the parent directory first or let the server create it automatically.',
+        'Inspect the attached log_path, runtime_log_path, or java_exception details for the failing project directory.',
+      ],
+      evidence,
+    }
+  }
+
+  if (/JAVA_HOME|UnsupportedClassVersionError|class file version|JavaRuntime|java version/i.test(corpus)) {
+    return {
+      code: 'java_runtime_invalid',
+      category: 'environment',
+      stage,
+      summary: withStage('Ghidra launch appears to be blocked by a missing or incompatible Java runtime.'),
+      remediation_hints: [
+        'Set JAVA_HOME to a Java 21+ installation and retry.',
+        'Run system.setup.guide or ghidra.health to retrieve explicit Java and Ghidra setup actions.',
       ],
       evidence,
     }
@@ -596,6 +687,76 @@ export class DecompilerWorker {
     return samplePath;
   }
 
+  private reportProgress(options: GhidraOptions | undefined, progress: number, stage: string, detail?: string): void {
+    try {
+      options?.onProgress?.(Math.max(0, Math.min(100, progress)), stage, detail)
+    } catch (error) {
+      logger.warn(
+        {
+          progress,
+          stage,
+          detail,
+          error: error instanceof Error ? error.message : String(error),
+        },
+        'Ghidra progress callback failed'
+      )
+    }
+  }
+
+  private buildGhidraCommandLogPath(sampleId: string, stage: string, projectKey?: string): string {
+    const sha256 = sampleId.startsWith('sha256:') ? sampleId.slice('sha256:'.length) : sampleId
+    const bucket1 = sha256.slice(0, 2)
+    const bucket2 = sha256.slice(2, 4)
+    const stageKey = stage.replace(/[^a-z0-9._-]+/gi, '_')
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    const filename = `${timestamp}_${stageKey}${projectKey ? `_${projectKey}` : ''}.command.log`
+    return path.join(ghidraConfig.logRoot, bucket1, bucket2, sha256, filename)
+  }
+
+  private buildGhidraRuntimeLogPath(sampleId: string, stage: string, projectKey?: string): string {
+    return this.buildGhidraCommandLogPath(sampleId, stage, projectKey).replace(/\.command\.log$/i, '.ghidra.log')
+  }
+
+  private persistGhidraCommandLog(
+    logFilePath: string | undefined,
+    invocation: ProcessInvocation,
+    cwd: string,
+    decoded: DecodedProcessStreams,
+    exitCode: number | null,
+    signal: NodeJS.Signals | null,
+    timedOut: boolean,
+    cancelled: boolean,
+    spawnError?: string
+  ): string | undefined {
+    if (!logFilePath) {
+      return undefined
+    }
+
+    const payload = [
+      `timestamp=${new Date().toISOString()}`,
+      `raw_cmd=${buildRawCommandLine(invocation.command, invocation.args)}`,
+      `cwd=${cwd}`,
+      `exit_code=${exitCode === null ? 'null' : String(exitCode)}`,
+      `signal=${signal || 'null'}`,
+      `timed_out=${timedOut}`,
+      `cancelled=${cancelled}`,
+      spawnError ? `spawn_error=${spawnError}` : '',
+      '',
+      '--- stdout ---',
+      decoded.stdout.text,
+      '',
+      '--- stderr ---',
+      decoded.stderr.text,
+      '',
+    ]
+      .filter((line) => line !== '')
+      .join('\n')
+
+    fs.mkdirSync(path.dirname(logFilePath), { recursive: true })
+    fs.writeFileSync(logFilePath, `${payload}\n`, 'utf8')
+    return logFilePath
+  }
+
   private getAlternateWorkspaceRoot(): string | null {
     const currentRoot = this.workspaceManager.getWorkspaceRoot();
     const siblingRoot = path.join(path.dirname(path.dirname(currentRoot)), 'workspaces');
@@ -644,12 +805,16 @@ export class DecompilerWorker {
     const bucket2 = sha256.slice(2, 4);
     const projectDirName = path.basename(originalProjectPath);
     const currentRoot = this.workspaceManager.getWorkspaceRoot();
-    const roots = [currentRoot, this.getAlternateWorkspaceRoot()].filter(
+    const configuredProjectRoot = getSampleScopedGhidraProjectRoot(sampleId);
+    const roots = [configuredProjectRoot, currentRoot, this.getAlternateWorkspaceRoot()].filter(
       (value): value is string => Boolean(value)
     );
 
     for (const root of roots) {
-      const ghidraDir = path.join(root, bucket1, bucket2, sha256, 'ghidra');
+      const ghidraDir =
+        path.resolve(root) === path.resolve(configuredProjectRoot)
+          ? root
+          : path.join(root, bucket1, bucket2, sha256, 'ghidra');
       const mappedProjectPath = path.join(ghidraDir, projectDirName);
       if (fs.existsSync(mappedProjectPath)) {
         const projectKey = projectDirName.startsWith('project_')
@@ -697,8 +862,11 @@ export class DecompilerWorker {
     signal: NodeJS.Signals | null,
     timedOut: boolean,
     cancelled: boolean,
-    spawnError?: string
+    spawnError?: string,
+    logPath?: string,
+    runtimeLogPath?: string
   ): GhidraProcessDiagnostics {
+    const javaException = parseJavaExceptionSummary(`${decoded.stderr.text}\n${decoded.stdout.text}`);
     return {
       raw_cmd: buildRawCommandLine(invocation.command, invocation.args),
       command: invocation.command,
@@ -713,7 +881,26 @@ export class DecompilerWorker {
       stdout_encoding: decoded.stdout.encoding,
       stderr_encoding: decoded.stderr.encoding,
       spawn_error: spawnError,
+      log_path: logPath,
+      runtime_log_path: runtimeLogPath,
+      java_exception: javaException,
     };
+  }
+
+  private buildProcessFailureMessage(
+    failureMessage: string,
+    diagnostics: GhidraProcessDiagnostics
+  ): string {
+    return [
+      `${failureMessage} with exit code ${diagnostics.exit_code}`,
+      diagnostics.java_exception
+        ? `${diagnostics.java_exception.exception_class}: ${diagnostics.java_exception.message}`
+        : undefined,
+      diagnostics.log_path ? `log_path=${diagnostics.log_path}` : undefined,
+      diagnostics.runtime_log_path ? `runtime_log_path=${diagnostics.runtime_log_path}` : undefined,
+    ]
+      .filter((value): value is string => Boolean(value))
+      .join(' | ');
   }
 
   private async runGhidraCommand(
@@ -723,20 +910,37 @@ export class DecompilerWorker {
     timeoutMs: number,
     abortSignal: AbortSignal | undefined,
     timeoutMessage: string,
-    failureMessage: string
+    failureMessage: string,
+    logFilePath?: string,
+    runtimeLogPath?: string
   ): Promise<GhidraCommandOutput> {
     const invocation = buildProcessInvocation(command, args);
+    fs.mkdirSync(cwd, { recursive: true });
 
     return new Promise((resolve, reject) => {
       if (abortSignal?.aborted) {
-        const diagnostics = this.buildProcessDiagnostics(
+        const decoded = decodeProcessStreams(Buffer.alloc(0), Buffer.alloc(0));
+        const persistedLogPath = this.persistGhidraCommandLog(
+          logFilePath,
           invocation,
           cwd,
-          decodeProcessStreams(Buffer.alloc(0), Buffer.alloc(0)),
+          decoded,
           null,
           null,
           false,
           true
+        );
+        const diagnostics = this.buildProcessDiagnostics(
+          invocation,
+          cwd,
+          decoded,
+          null,
+          null,
+          false,
+          true,
+          undefined,
+          persistedLogPath,
+          runtimeLogPath
         );
         reject(
           new GhidraProcessError(
@@ -769,24 +973,88 @@ export class DecompilerWorker {
 
       const timeoutTimer = setTimeout(() => {
         timedOut = true;
-        childProcess.kill('SIGTERM');
+        settle(() => {
+          childProcess.kill('SIGTERM');
 
-        // Force kill after 5 seconds if still running
-        setTimeout(() => {
-          if (!childProcess.killed) {
-            childProcess.kill('SIGKILL');
-          }
-        }, 5000);
+          // Force kill after 5 seconds if still running
+          setTimeout(() => {
+            if (!childProcess.killed) {
+              childProcess.kill('SIGKILL');
+            }
+          }, 5000);
+
+          const decoded = decodeProcessStreams(
+            Buffer.concat(stdoutChunks),
+            Buffer.concat(stderrChunks)
+          );
+          const persistedLogPath = this.persistGhidraCommandLog(
+            logFilePath,
+            invocation,
+            cwd,
+            decoded,
+            null,
+            null,
+            true,
+            cancelled
+          );
+          const diagnostics = this.buildProcessDiagnostics(
+            invocation,
+            cwd,
+            decoded,
+            null,
+            null,
+            true,
+            cancelled,
+            undefined,
+            persistedLogPath,
+            runtimeLogPath
+          );
+          reject(new GhidraProcessError(timeoutMessage, diagnostics, 'E_TIMEOUT'));
+        });
       }, timeoutMs);
 
       onAbort = () => {
         cancelled = true;
-        childProcess.kill('SIGTERM');
-        setTimeout(() => {
-          if (!childProcess.killed) {
-            childProcess.kill('SIGKILL');
-          }
-        }, 5000);
+        settle(() => {
+          childProcess.kill('SIGTERM');
+          setTimeout(() => {
+            if (!childProcess.killed) {
+              childProcess.kill('SIGKILL');
+            }
+          }, 5000);
+          const decoded = decodeProcessStreams(
+            Buffer.concat(stdoutChunks),
+            Buffer.concat(stderrChunks)
+          );
+          const persistedLogPath = this.persistGhidraCommandLog(
+            logFilePath,
+            invocation,
+            cwd,
+            decoded,
+            null,
+            null,
+            false,
+            true
+          );
+          const diagnostics = this.buildProcessDiagnostics(
+            invocation,
+            cwd,
+            decoded,
+            null,
+            null,
+            false,
+            true,
+            undefined,
+            persistedLogPath
+          );
+          reject(
+            new GhidraProcessError(
+              'E_CANCELLED: Ghidra command cancelled by user',
+              diagnostics,
+              'E_CANCELLED'
+            )
+          );
+        });
       };
 
       if (abortSignal) {
@@ -808,7 +1076,8 @@ export class DecompilerWorker {
             Buffer.concat(stdoutChunks),
             Buffer.concat(stderrChunks)
           );
-          const diagnostics = this.buildProcessDiagnostics(
+          const persistedLogPath = this.persistGhidraCommandLog(
+            logFilePath,
             invocation,
             cwd,
             decoded,
@@ -816,6 +1085,18 @@ export class DecompilerWorker {
             signal,
             timedOut,
             cancelled
+          );
+          const diagnostics = this.buildProcessDiagnostics(
+            invocation,
+            cwd,
+            decoded,
+            code,
+            signal,
+            timedOut,
+            cancelled,
+            undefined,
+            persistedLogPath,
+            runtimeLogPath
           );
 
           if (timedOut) {
@@ -837,7 +1118,7 @@ export class DecompilerWorker {
           if (code !== 0) {
             reject(
               new GhidraProcessError(
-                `${failureMessage} with exit code ${code}`,
+                this.buildProcessFailureMessage(failureMessage, diagnostics),
                 diagnostics,
                 'E_GHIDRA_PROCESS'
               )
@@ -849,6 +1130,8 @@ export class DecompilerWorker {
             stdout: decoded.stdout.text,
             stderr: decoded.stderr.text,
             diagnostics,
+            command_log_path: persistedLogPath,
+            runtime_log_path: runtimeLogPath,
           });
         });
       });
@@ -860,7 +1143,8 @@ export class DecompilerWorker {
             Buffer.concat(stdoutChunks),
             Buffer.concat(stderrChunks)
           );
-          const diagnostics = this.buildProcessDiagnostics(
+          const persistedLogPath = this.persistGhidraCommandLog(
+            logFilePath,
             invocation,
             cwd,
             decoded,
@@ -870,9 +1154,21 @@ export class DecompilerWorker {
             cancelled,
             error.message
           );
+          const diagnostics = this.buildProcessDiagnostics(
+            invocation,
+            cwd,
+            decoded,
+            null,
+            null,
+            timedOut,
+            cancelled,
+            error.message,
+            persistedLogPath,
+            runtimeLogPath
+          );
           reject(
             new GhidraProcessError(
-              `Failed to spawn Ghidra process: ${error.message}`,
+              `Failed to spawn Ghidra process: ${error.message}${persistedLogPath ? ` | log_path=${persistedLogPath}` : ''}`,
               diagnostics,
               'E_SPAWN'
             )
@@ -952,11 +1248,18 @@ export class DecompilerWorker {
     projectPath: string,
     projectKey: string,
     samplePath: string,
-    options: GhidraOptions
+    options: GhidraOptions,
+    sampleId: string
   ): Promise<GhidraCommandOutput> {
     const timeout = options.timeout || 300000; // Default 5 minutes
     const command = ghidraConfig.analyzeHeadlessPath;
-    const args = this.buildAnalysisArgs(projectPath, projectKey, samplePath, options);
+    const logFilePath = this.buildGhidraCommandLogPath(sampleId, 'analyze_main', projectKey);
+    const ghidraRuntimeLogPath = this.buildGhidraRuntimeLogPath(sampleId, 'analyze_main', projectKey);
+    const args = [
+      ...this.buildAnalysisArgs(projectPath, projectKey, samplePath, options),
+      '-log',
+      ghidraRuntimeLogPath,
+    ];
 
     logger.debug(
       {
@@ -975,7 +1278,9 @@ export class DecompilerWorker {
         timeout,
         options.abortSignal,
         `E_TIMEOUT: Ghidra analysis exceeded timeout of ${timeout}ms`,
-        'Ghidra analysis failed'
+        'Ghidra analysis failed',
+        logFilePath,
+        ghidraRuntimeLogPath
       );
     } catch (error) {
       if (error instanceof GhidraProcessError) {
@@ -1001,10 +1306,20 @@ export class DecompilerWorker {
     samplePath: string,
     scriptName: string,
     timeoutMs: number,
-    options?: GhidraOptions
+    options?: GhidraOptions,
+    sampleId?: string
   ): Promise<GhidraCommandOutput> {
     const command = ghidraConfig.analyzeHeadlessPath;
-    const args = this.buildExtractFunctionsArgs(projectPath, projectKey, samplePath, scriptName, options);
+    const logFilePath = sampleId
+      ? this.buildGhidraCommandLogPath(sampleId, `extract_${scriptName}`, projectKey)
+      : undefined;
+    const ghidraRuntimeLogPath = sampleId
+      ? this.buildGhidraRuntimeLogPath(sampleId, `extract_${scriptName}`, projectKey)
+      : undefined;
+    const args = [
+      ...this.buildExtractFunctionsArgs(projectPath, projectKey, samplePath, scriptName, options),
+      ...(ghidraRuntimeLogPath ? ['-log', ghidraRuntimeLogPath] : []),
+    ];
 
     logger.debug(
       {
@@ -1023,7 +1338,9 @@ export class DecompilerWorker {
       timeoutMs,
       undefined,
       `E_TIMEOUT: Function extraction (${scriptName}) exceeded timeout of ${timeoutMs}ms`,
-      `Function extraction (${scriptName}) failed`
+      `Function extraction (${scriptName}) failed`,
+      logFilePath,
+      ghidraRuntimeLogPath
     );
   }
 
@@ -1032,7 +1349,8 @@ export class DecompilerWorker {
     projectKey: string,
     samplePath: string,
     timeoutMs: number,
-    options?: GhidraOptions
+    options?: GhidraOptions,
+    sampleId?: string
   ): Promise<FunctionExtractionResult> {
     const warnings: string[] = [];
     const attempts: FunctionExtractionAttempt[] = [];
@@ -1049,7 +1367,8 @@ export class DecompilerWorker {
           samplePath,
           scriptName,
           timeoutMs,
-          options
+          options,
+          sampleId
         );
       } catch (error) {
         const diagnostics =
@@ -1059,6 +1378,8 @@ export class DecompilerWorker {
         attempts.push({
           script: scriptName,
           diagnostics,
+          command_log_path: diagnostics?.log_path,
+          runtime_log_path: diagnostics?.runtime_log_path,
           error: error instanceof Error ? error.message : String(error),
         });
         throw error;
@@ -1071,6 +1392,8 @@ export class DecompilerWorker {
           stdout: output.stdout,
           stderr: output.stderr,
           diagnostics: output.diagnostics,
+          command_log_path: output.command_log_path,
+          runtime_log_path: output.runtime_log_path,
         });
         return parsed;
       } catch (parseError) {
@@ -1084,6 +1407,8 @@ export class DecompilerWorker {
           stdout: output.stdout,
           stderr: output.stderr,
           diagnostics,
+          command_log_path: output.command_log_path,
+          runtime_log_path: output.runtime_log_path,
           parse_error: parseMessage,
           error: parseMessage,
         });
@@ -1241,6 +1566,9 @@ export class DecompilerWorker {
             timed_out: diagnostics.timed_out,
             cancelled: diagnostics.cancelled,
             spawn_error: diagnostics.spawn_error,
+            log_path: diagnostics.log_path,
+            runtime_log_path: diagnostics.runtime_log_path,
+            java_exception: diagnostics.java_exception,
           }
         : undefined,
     };
@@ -1252,7 +1580,8 @@ export class DecompilerWorker {
     projectKey: string,
     samplePath: string,
     target: string,
-    timeoutMs: number
+    timeoutMs: number,
+    sampleId?: string
   ): Promise<GhidraCapabilityProbeResult> {
     try {
       const output =
@@ -1263,14 +1592,16 @@ export class DecompilerWorker {
               samplePath,
               target,
               false,
-              timeoutMs
+              timeoutMs,
+              sampleId
             )
           : await this.executeCFGScript(
               projectPath,
               projectKey,
               samplePath,
               target,
-              timeoutMs
+              timeoutMs,
+              sampleId
             );
 
       if (capability === 'decompile') {
@@ -1395,6 +1726,25 @@ export class DecompilerWorker {
     }
 
     const startTime = Date.now();
+    const progressStages: Array<{
+      progress: number;
+      stage: string;
+      detail: string | null;
+      recorded_at: string;
+    }> = [];
+    const trackProgress = (progress: number, stage: string, detail?: string) => {
+      progressStages.push({
+        progress: Math.max(0, Math.min(100, Math.round(progress))),
+        stage,
+        detail: typeof detail === 'string' ? detail : null,
+        recorded_at: new Date().toISOString(),
+      });
+      this.reportProgress(options, progress, stage, detail);
+    };
+    const sample = this.database.findSample(sampleId);
+    if (!sample) {
+      throw new Error(`Sample not found: ${sampleId}`);
+    }
 
     // 1. Create analysis record (Requirement 8.2)
     const analysisId = options.analysisId || randomUUID();
@@ -1415,17 +1765,16 @@ export class DecompilerWorker {
       sampleId,
       options
     }, 'Starting Ghidra analysis');
+    trackProgress(5, 'starting', 'Preparing Ghidra analysis');
 
     try {
       // 2. Get sample information
-      const sample = this.database.findSample(sampleId);
-      if (!sample) {
-        throw new Error(`Sample not found: ${sampleId}`);
-      }
+      trackProgress(10, 'sample_loaded', 'Sample metadata loaded');
 
       // 3. Get workspace paths
       const workspace = await this.workspaceManager.getWorkspace(sampleId);
       const samplePath = await this.resolveSamplePathForSample(sampleId);
+      trackProgress(20, 'sample_resolved', samplePath);
 
       // Verify sample file exists
       if (!fs.existsSync(samplePath)) {
@@ -1433,10 +1782,12 @@ export class DecompilerWorker {
       }
 
       // 4. Create isolated Ghidra project space (Requirement 8.1, 8.7)
+      const ghidraProjectRoot = getSampleScopedGhidraProjectRoot(sampleId);
       const { projectPath, projectKey } = createGhidraProject(
-        workspace.ghidra,
+        ghidraProjectRoot,
         options.projectKey
       );
+      trackProgress(30, 'project_created', projectPath);
 
       logger.debug({
         projectPath,
@@ -1445,12 +1796,14 @@ export class DecompilerWorker {
       }, 'Created Ghidra project');
 
       // 5. Execute main Ghidra analysis/import phase
-      await this.executeMainAnalysis(
+      const mainAnalysisOutput = await this.executeMainAnalysis(
         projectPath,
         projectKey,
         samplePath,
-        options
+        options,
+        sampleId
       );
+      trackProgress(55, 'main_analysis_complete', projectKey);
 
       // 6. Execute post-processing function extraction with fallback chain.
       // If extraction fails but main analysis succeeded, persist partial_success.
@@ -1459,8 +1812,10 @@ export class DecompilerWorker {
         projectKey,
         samplePath,
         options.timeout || 300000,
-        options
+        options,
+        sampleId
       );
+      trackProgress(72, 'function_extraction_complete', extraction.scriptUsed || 'fallback_completed');
       const analysisOutput = extraction.output;
       const extractionWarnings = extraction.warnings || [];
       const extractionAttempts = extraction.attempts || [];
@@ -1506,6 +1861,7 @@ export class DecompilerWorker {
       if (effectiveFunctions.length > 0) {
         // 7. Store functions to database (Requirement 8.4)
         await this.storeFunctions(sampleId, effectiveFunctions);
+        trackProgress(84, 'functions_stored', String(effectiveFunctions.length));
 
         // 8. Store analysis artifact
         const artifactId = randomUUID();
@@ -1559,7 +1915,8 @@ export class DecompilerWorker {
             projectKey,
             samplePath,
             probeTarget,
-            probeTimeoutMs
+            probeTimeoutMs,
+            sampleId
           );
           cfgProbe = await this.probeCapability(
             'cfg',
@@ -1567,11 +1924,11 @@ export class DecompilerWorker {
             projectKey,
             samplePath,
             probeTarget,
-            probeTimeoutMs
+            probeTimeoutMs,
+            sampleId
           );
         }
       }
-
       // 9. Update analysis status
       const elapsedMs = Date.now() - startTime;
       const status: 'done' | 'partial_success' = analysisOutputHasFunctions ? 'done' : 'partial_success';
@@ -1623,8 +1980,43 @@ export class DecompilerWorker {
                 ? 'Function candidates were recovered from PE metadata only; Ghidra CFG readiness was not established.'
                 : 'Function index is unavailable, so CFG readiness was not probed.',
               checked_at: new Date().toISOString(),
-            } satisfies GhidraCapabilityStatus),
+          } satisfies GhidraCapabilityStatus),
       };
+      trackProgress(94, 'readiness_recorded', status);
+      const commandLogPaths = Array.from(
+        new Set(
+          [
+            mainAnalysisOutput.command_log_path,
+            ...extractionAttempts.map((attempt) => attempt.command_log_path || attempt.diagnostics?.log_path),
+            decompileProbe?.output?.command_log_path,
+            cfgProbe?.output?.command_log_path,
+          ]
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+        )
+      );
+      const runtimeLogPaths = Array.from(
+        new Set(
+          [
+            mainAnalysisOutput.runtime_log_path,
+            ...extractionAttempts.map(
+              (attempt) => attempt.runtime_log_path || attempt.diagnostics?.runtime_log_path
+            ),
+            decompileProbe?.output?.runtime_log_path,
+            cfgProbe?.output?.runtime_log_path,
+          ]
+            .filter((item): item is string => typeof item === 'string')
+            .map((item) => item.trim())
+            .filter((item) => item.length > 0)
+        )
+      );
+      const javaException =
+        mainAnalysisOutput.diagnostics.java_exception ||
+        extractionAttempts.find((attempt) => attempt.diagnostics?.java_exception)?.diagnostics
+          ?.java_exception ||
+        decompileProbe?.output?.diagnostics.java_exception ||
+        cfgProbe?.output?.diagnostics.java_exception;
       this.database.updateAnalysis(analysisId, {
         status,
         finished_at: new Date().toISOString(),
@@ -1649,6 +2041,14 @@ export class DecompilerWorker {
             decompile: decompileProbe?.status,
             cfg: cfgProbe?.status,
             checked_at: new Date().toISOString(),
+          },
+          ghidra_execution: {
+            project_root: getConfiguredGhidraProjectRoot(),
+            log_root: getConfiguredGhidraLogRoot(),
+            command_log_paths: commandLogPaths,
+            runtime_log_paths: runtimeLogPaths,
+            progress_stages: progressStages,
+            java_exception: javaException,
           },
         }),
         metrics_json: JSON.stringify({
@@ -1675,6 +2075,7 @@ export class DecompilerWorker {
           readiness,
         }, 'Ghidra analysis completed with partial_success (function extraction failed)');
       }
+      trackProgress(100, 'completed', status);
 
       return {
         analysisId,
@@ -1709,7 +2110,15 @@ export class DecompilerWorker {
         finished_at: new Date().toISOString(),
         output_json: JSON.stringify({
           error: errorMessage,
-          ghidra_diagnostics: diagnostics
+          ghidra_diagnostics: diagnostics,
+          ghidra_execution: {
+            project_root: getConfiguredGhidraProjectRoot(),
+            log_root: getConfiguredGhidraLogRoot(),
+            command_log_paths: diagnostics?.log_path ? [diagnostics.log_path] : [],
+            runtime_log_paths: diagnostics?.runtime_log_path ? [diagnostics.runtime_log_path] : [],
+            progress_stages: progressStages,
+            java_exception: diagnostics?.java_exception,
+          },
         }),
         metrics_json: JSON.stringify({
           elapsed_ms: elapsedMs
@@ -2068,7 +2477,8 @@ export class DecompilerWorker {
             samplePath,
             addressOrSymbol,
             includeXrefs,
-            timeout
+            timeout,
+            sampleId
           );
 
           const parsed = this.parseDecompileOutput(
@@ -2152,12 +2562,18 @@ export class DecompilerWorker {
     diagnostics?: GhidraProcessDiagnostics
   ): string {
     const rawCommand = diagnostics?.raw_cmd ? `raw_cmd=${diagnostics.raw_cmd}` : undefined;
+    const logPath = diagnostics?.log_path ? `log_path=${diagnostics.log_path}` : undefined;
+    const javaException = diagnostics?.java_exception
+      ? `java_exception=${diagnostics.java_exception.exception_class}: ${diagnostics.java_exception.message}`
+      : undefined;
     const lockHint = /unable to lock project|lockexception/i.test(`${stdout}\n${stderr}`)
       ? 'signal_hint=project_lock_detected'
       : undefined;
     return [
       `${stage}: No JSON output found`,
       rawCommand,
+      logPath,
+      javaException,
       lockHint,
       `stdout_snippet=${this.buildOutputSnippet(stdout)}`,
       `stderr_snippet=${this.buildOutputSnippet(stderr)}`,
@@ -2416,13 +2832,20 @@ export class DecompilerWorker {
     samplePath: string,
     addressOrSymbol: string,
     includeXrefs: boolean,
-    timeout: number
+    timeout: number,
+    sampleId?: string
   ): Promise<GhidraCommandOutput> {
     const scriptOrder = ['DecompileFunction.java'];
     let lastError: unknown;
 
     for (const scriptName of scriptOrder) {
       const command = ghidraConfig.analyzeHeadlessPath;
+      const logFilePath = sampleId
+        ? this.buildGhidraCommandLogPath(sampleId, `decompile_${scriptName}`, projectKey)
+        : undefined;
+      const ghidraRuntimeLogPath = sampleId
+        ? this.buildGhidraRuntimeLogPath(sampleId, `decompile_${scriptName}`, projectKey)
+        : undefined;
       const args = [
         projectPath,
         projectKey,
@@ -2430,7 +2853,8 @@ export class DecompilerWorker {
         '-readOnly',
         '-scriptPath', ghidraConfig.scriptsDir,
         '-postScript', scriptName, addressOrSymbol, String(includeXrefs),
-        '-noanalysis'
+        '-noanalysis',
+        ...(ghidraRuntimeLogPath ? ['-log', ghidraRuntimeLogPath] : [])
       ];
 
       logger.debug({
@@ -2448,7 +2872,9 @@ export class DecompilerWorker {
           timeout,
           undefined,
           `E_TIMEOUT: Function decompilation exceeded timeout of ${timeout}ms`,
-          `Function decompilation failed (${scriptName})`
+          `Function decompilation failed (${scriptName})`,
+          logFilePath,
+          ghidraRuntimeLogPath
         );
       } catch (error) {
         lastError = error;
@@ -2593,7 +3019,8 @@ export class DecompilerWorker {
             projectKey,
             samplePath,
             addressOrSymbol,
-            timeout
+            timeout,
+            sampleId
           );
 
           const parsed = this.parseCFGOutput(output.stdout, output.stderr, output.diagnostics);
@@ -2651,13 +3078,20 @@ export class DecompilerWorker {
     projectKey: string,
     samplePath: string,
     addressOrSymbol: string,
-    timeout: number
+    timeout: number,
+    sampleId?: string
   ): Promise<GhidraCommandOutput> {
     const scriptOrder = ['ExtractCFG.java'];
     let lastError: unknown;
 
     for (const scriptName of scriptOrder) {
       const command = ghidraConfig.analyzeHeadlessPath;
+      const logFilePath = sampleId
+        ? this.buildGhidraCommandLogPath(sampleId, `cfg_${scriptName}`, projectKey)
+        : undefined;
+      const ghidraRuntimeLogPath = sampleId
+        ? this.buildGhidraRuntimeLogPath(sampleId, `cfg_${scriptName}`, projectKey)
+        : undefined;
       const args = [
         projectPath,
         projectKey,
@@ -2665,7 +3099,8 @@ export class DecompilerWorker {
         '-readOnly',
         '-scriptPath', ghidraConfig.scriptsDir,
         '-postScript', scriptName, addressOrSymbol,
-        '-noanalysis'
+        '-noanalysis',
+        ...(ghidraRuntimeLogPath ? ['-log', ghidraRuntimeLogPath] : [])
       ];
 
       logger.debug({
@@ -2682,7 +3117,9 @@ export class DecompilerWorker {
           timeout,
           undefined,
           `E_TIMEOUT: CFG extraction exceeded timeout of ${timeout}ms`,
-          `CFG extraction failed (${scriptName})`
+          `CFG extraction failed (${scriptName})`,
+          logFilePath,
+          ghidraRuntimeLogPath
         );
       } catch (error) {
         lastError = error;
@@ -2728,7 +3165,8 @@ export class DecompilerWorker {
           apiQuery,
           stringQuery,
           limit,
-          timeout
+          timeout,
+          sampleId
         );
 
         const result = this.parseSearchOutput(output.stdout, output.stderr, output.diagnostics);
@@ -2812,9 +3250,16 @@ export class DecompilerWorker {
     apiQuery: string,
     stringQuery: string,
     limit: number,
-    timeout: number
+    timeout: number,
+    sampleId?: string
   ): Promise<GhidraCommandOutput> {
     const command = ghidraConfig.analyzeHeadlessPath;
+    const logFilePath = sampleId
+      ? this.buildGhidraCommandLogPath(sampleId, 'search_function_references', projectKey)
+      : undefined;
+    const ghidraRuntimeLogPath = sampleId
+      ? this.buildGhidraRuntimeLogPath(sampleId, 'search_function_references', projectKey)
+      : undefined;
     const args = [
       projectPath,
       projectKey,
@@ -2823,6 +3268,7 @@ export class DecompilerWorker {
       '-scriptPath', ghidraConfig.scriptsDir,
       '-postScript', 'SearchFunctionReferences.java', apiQuery || '-', stringQuery || '-', String(limit),
       '-noanalysis',
+      ...(ghidraRuntimeLogPath ? ['-log', ghidraRuntimeLogPath] : []),
     ];
 
     logger.debug(
@@ -2841,7 +3287,9 @@ export class DecompilerWorker {
       timeout,
       undefined,
       `E_TIMEOUT: Function search exceeded timeout of ${timeout}ms`,
-      'Function search failed'
+      'Function search failed',
+      logFilePath,
+      ghidraRuntimeLogPath
     );
   }
 

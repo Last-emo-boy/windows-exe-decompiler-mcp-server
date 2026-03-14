@@ -35,6 +35,10 @@ import {
   AnalysisSelectionDiffSchema,
   buildArtifactSelectionDiff,
 } from '../selection-diff.js'
+import {
+  GhidraExecutionSummarySchema,
+  buildGhidraExecutionSummary,
+} from '../ghidra-execution-summary.js'
 
 const TOOL_NAME = 'report.summarize'
 
@@ -199,6 +203,9 @@ export const ReportSummarizeOutputSchema = z.object({
       ),
       provenance: AnalysisProvenanceSchema.optional().describe(
         'Explicit runtime/semantic artifact selection used to produce this report, including scope, session selector, and selected artifact IDs.'
+      ),
+      ghidra_execution: GhidraExecutionSummarySchema.nullable().optional().describe(
+        'Latest persisted Ghidra execution summary, including project/log locations, extraction status, and recorded progress stages.'
       ),
       selection_diffs: AnalysisSelectionDiffSchema.optional().describe(
         'Optional comparison between the current artifact selection and a caller-provided baseline runtime/semantic selection.'
@@ -766,6 +773,7 @@ function createMinimalDotnetFallback(
   startTime: number,
   functionExplanations: Array<z.infer<typeof FunctionExplanationSummarySchema>> = [],
   provenance?: z.infer<typeof AnalysisProvenanceSchema>,
+  ghidraExecution?: z.infer<typeof GhidraExecutionSummarySchema> | null,
   evidenceScope: 'all' | 'latest' | 'session' = 'all',
   binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>,
   rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
@@ -802,6 +810,7 @@ function createMinimalDotnetFallback(
       binary_profile: binaryProfile,
       rust_profile: rustProfile,
       provenance,
+      ghidra_execution: ghidraExecution,
       function_explanations: functionExplanations.length > 0 ? functionExplanations : undefined,
       inference: {
         classification: 'unknown',
@@ -825,6 +834,7 @@ function createDynamicEvidenceFallback(
   startTime: number,
   functionExplanations: Array<z.infer<typeof FunctionExplanationSummarySchema>> = [],
   provenance?: z.infer<typeof AnalysisProvenanceSchema>,
+  ghidraExecution?: z.infer<typeof GhidraExecutionSummarySchema> | null,
   evidenceScope: 'all' | 'latest' | 'session' = 'all',
   binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>,
   rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
@@ -863,6 +873,7 @@ function createDynamicEvidenceFallback(
       binary_profile: binaryProfile,
       rust_profile: rustProfile,
       provenance,
+      ghidra_execution: ghidraExecution,
       function_explanations: functionExplanations.length > 0 ? functionExplanations : undefined,
       evidence_weights: {
         import: 0.05,
@@ -924,6 +935,7 @@ export function createReportSummarizeHandler(
         }
       }
       const warnings: string[] = []
+      const analyses = database.findAnalysesBySample(input.sample_id)
 
       const dynamicEvidence = await loadDynamicTraceEvidence(workspaceManager, database, input.sample_id, {
         evidenceScope: input.evidence_scope,
@@ -976,6 +988,7 @@ export function createReportSummarizeHandler(
           input.semantic_session_tag
         ),
       }
+      const ghidraExecution = buildGhidraExecutionSummary(analyses)
       const selectionDiffs: z.infer<typeof AnalysisSelectionDiffSchema> = {}
       if (input.compare_evidence_scope) {
         const baselineDynamicEvidence = await loadDynamicTraceEvidence(
@@ -1032,6 +1045,7 @@ export function createReportSummarizeHandler(
               startTime,
               functionExplanations,
               provenance,
+              ghidraExecution,
               input.evidence_scope,
               binaryProfile,
               rustProfile
@@ -1072,6 +1086,7 @@ export function createReportSummarizeHandler(
             binary_profile: enrichedTriageData.binary_profile,
             rust_profile: enrichedTriageData.rust_profile,
             provenance,
+            ghidra_execution: ghidraExecution,
             selection_diffs:
               Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
             function_explanations: enrichedTriageData.function_explanations,
@@ -1099,6 +1114,7 @@ export function createReportSummarizeHandler(
             startTime,
             functionExplanations,
             provenance,
+            ghidraExecution,
             input.evidence_scope,
             binaryProfile,
             rustProfile
@@ -1129,6 +1145,7 @@ export function createReportSummarizeHandler(
             binary_profile: binaryProfile,
             rust_profile: rustProfile,
             provenance,
+            ghidra_execution: ghidraExecution,
             selection_diffs:
               Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
             function_explanations: functionExplanations.length > 0 ? functionExplanations : undefined,

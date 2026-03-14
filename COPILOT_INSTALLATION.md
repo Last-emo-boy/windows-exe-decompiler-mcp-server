@@ -15,6 +15,15 @@ It also pins:
 - `DB_PATH`
 - `CACHE_ROOT`
 - `AUDIT_LOG_PATH`
+- `GHIDRA_PROJECT_ROOT`
+- `GHIDRA_LOG_ROOT`
+
+The server's bundled `ghidra_scripts/` directory is resolved from the installed
+package or repository root, not from the shell's current working directory. You
+do not need to separately point Copilot at `ExtractFunctions.py`.
+
+For Ghidra 12.0.4, keep Java 21+ available. If Java is installed outside the
+default system location, set `JAVA_HOME` before launching Copilot clients.
 
 Build the project first:
 
@@ -27,6 +36,11 @@ If Ghidra is not already configured in the environment, pass it explicitly:
 ```powershell
 .\install-to-copilot.ps1 -GhidraPath "C:\tools\ghidra"
 ```
+
+If you want to pin Ghidra projects and logs under a fixed location, set:
+
+- `GHIDRA_PROJECT_ROOT`
+- `GHIDRA_LOG_ROOT`
 
 If you want a different persistent workspace root:
 

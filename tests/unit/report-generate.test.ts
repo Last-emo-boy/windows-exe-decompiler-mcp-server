@@ -150,6 +150,33 @@ describe('report.generate tool', () => {
       output_json: JSON.stringify({ function_count: 2 }),
       metrics_json: JSON.stringify({ elapsed_ms: 1234 }),
     })
+    database.updateAnalysis('analysis-ghidra', {
+      output_json: JSON.stringify({
+        function_count: 2,
+        project_path: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects/sample/project_demo',
+        project_key: 'project_demo',
+        readiness: {
+          function_index: { available: true, status: 'ready' },
+          decompile: { available: true, status: 'ready' },
+          cfg: { available: true, status: 'ready' },
+        },
+        function_extraction: {
+          status: 'success',
+          script_used: 'ExtractFunctions.java',
+          warnings: [],
+        },
+        ghidra_execution: {
+          project_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects',
+          log_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs',
+          command_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/ghidra_cmd.log'],
+          runtime_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/ghidra_runtime.log'],
+          progress_stages: [
+            { progress: 5, stage: 'starting', detail: 'Preparing Ghidra analysis', recorded_at: createdAt },
+            { progress: 100, stage: 'completed', detail: 'done', recorded_at: createdAt },
+          ],
+        },
+      }),
+    })
 
     database.insertFunction({
       sample_id: sampleId,
@@ -200,6 +227,9 @@ describe('report.generate tool', () => {
     expect(reportContent).toContain('## Sample Information')
     expect(reportContent).toContain('## Function Statistics')
     expect(reportContent).toContain('## Confidence Semantics')
+    expect(reportContent).toContain('## Ghidra Execution')
+    expect(reportContent).toContain('Project Root')
+    expect(reportContent).toContain('ghidra_cmd.log')
     expect(reportContent).toContain('entry_main')
 
     const artifacts = database.findArtifacts(sampleId)

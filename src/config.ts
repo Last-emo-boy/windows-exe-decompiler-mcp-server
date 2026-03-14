@@ -34,6 +34,26 @@ export function getDefaultAuditLogPath(): string {
   return path.join(getDefaultAppRoot(), 'audit.log')
 }
 
+export function getDefaultGhidraBaseRoot(): string {
+  if (process.platform === 'win32') {
+    const programData = process.env.ProgramData || process.env.PROGRAMDATA
+    if (programData && programData.trim().length > 0) {
+      return path.join(programData, APP_CONFIG_DIRNAME)
+    }
+    return path.join('C:\\', 'ProgramData', APP_CONFIG_DIRNAME)
+  }
+
+  return getDefaultAppRoot()
+}
+
+export function getDefaultGhidraProjectRoot(): string {
+  return path.join(getDefaultGhidraBaseRoot(), 'ghidra-projects')
+}
+
+export function getDefaultGhidraLogRoot(): string {
+  return path.join(getDefaultGhidraBaseRoot(), 'ghidra-logs')
+}
+
 // Configuration schema using Zod
 export const ConfigSchema = z.object({
   server: z.object({
@@ -57,6 +77,11 @@ export const ConfigSchema = z.object({
     ghidra: z.object({
       enabled: z.boolean().default(false),
       path: z.string().optional(),
+      projectRoot: z.string().default(getDefaultGhidraProjectRoot()),
+      logRoot: z.string().default(getDefaultGhidraLogRoot()),
+      cleanupAfterAnalysis: z.boolean().default(false),
+      logRetentionDays: z.number().int().min(1).default(30),
+      minJavaVersion: z.number().int().min(8).default(21),
       maxConcurrent: z.number().int().min(1).max(16).default(4),
       timeout: z.number().int().min(1).default(300),
     }).default({}),
@@ -158,6 +183,32 @@ export function loadConfigFromEnv(): Record<string, any> {
     if (!config.workers.ghidra) config.workers.ghidra = {}
     config.workers.ghidra.path = process.env.GHIDRA_PATH || process.env.GHIDRA_INSTALL_DIR
     config.workers.ghidra.enabled = true
+  }
+  if (process.env.GHIDRA_PROJECT_ROOT) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.ghidra) config.workers.ghidra = {}
+    config.workers.ghidra.projectRoot = process.env.GHIDRA_PROJECT_ROOT
+  }
+  if (process.env.GHIDRA_LOG_ROOT) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.ghidra) config.workers.ghidra = {}
+    config.workers.ghidra.logRoot = process.env.GHIDRA_LOG_ROOT
+  }
+  if (process.env.GHIDRA_CLEANUP_AFTER_ANALYSIS) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.ghidra) config.workers.ghidra = {}
+    config.workers.ghidra.cleanupAfterAnalysis =
+      /^(1|true|yes|on)$/i.test(process.env.GHIDRA_CLEANUP_AFTER_ANALYSIS)
+  }
+  if (process.env.GHIDRA_LOG_RETENTION_DAYS) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.ghidra) config.workers.ghidra = {}
+    config.workers.ghidra.logRetentionDays = parseInt(process.env.GHIDRA_LOG_RETENTION_DAYS, 10)
+  }
+  if (process.env.GHIDRA_MIN_JAVA_VERSION) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.ghidra) config.workers.ghidra = {}
+    config.workers.ghidra.minJavaVersion = parseInt(process.env.GHIDRA_MIN_JAVA_VERSION, 10)
   }
   if (process.env.PYTHON_PATH) {
     if (!config.workers) config.workers = {}

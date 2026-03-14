@@ -20,6 +20,7 @@ import type { JobQueue } from '../job-queue.js';
 import { DecompilerWorker } from '../decompiler-worker.js';
 import { logger } from '../logger.js';
 import { triageWorkflow } from './triage.js';
+import { buildPollingGuidance } from '../polling-guidance.js';
 
 /**
  * Input schema for deep static workflow
@@ -325,6 +326,12 @@ export function createDeepStaticWorkflowHandler(
                 tool: 'workflow.deep_static',
                 sample_id: input.sample_id,
                 progress: 0,
+                polling_guidance: buildPollingGuidance({
+                  tool: 'workflow.deep_static',
+                  status: 'queued',
+                  progress: 0,
+                  timeout_ms: jobTimeoutMs,
+                }),
               }
             }, null, 2)
           }]

@@ -305,7 +305,7 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
 
   if (toolName === 'system.setup.guide') {
     if (path === 'focus') {
-      return 'Use all for a first-run bootstrap guide, ghidra when you specifically need the install path/environment guidance, and dynamic when you only need runtime-analysis extras.'
+      return 'Use all for a first-run bootstrap guide, java when you need JVM setup for Ghidra, ghidra for install path/project-root guidance, and dynamic when you only need runtime-analysis extras.'
     }
     if (path === 'include_optional') {
       return 'When false, only required setup steps are returned. Leave true to include optional extras such as PyGhidra and dynamic-analysis components.'
@@ -337,7 +337,7 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
   const notes: string[] = []
   if (definition.name === 'system.setup.guide') {
     notes.push(
-      'Use this before first-run or after a degraded health probe when the MCP client needs exact pip install commands and required user-supplied paths such as GHIDRA_PATH.'
+      'Use this before first-run or after a degraded health probe when the MCP client needs exact pip install commands and required user-supplied paths such as JAVA_HOME, GHIDRA_PATH, or GHIDRA_PROJECT_ROOT.'
     )
   }
   if (
@@ -392,6 +392,12 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
   if (definition.name === 'tool.help') {
     notes.push(
       'Query this tool first when an MCP client needs exact enum values, defaults, or scope/session usage guidance before calling another tool.'
+    )
+  }
+
+  if (definition.name === 'task.status') {
+    notes.push(
+      'For queued or running jobs, inspect polling_guidance and prefer one client-side sleep/wait before the next status check instead of repeated immediate polling.'
     )
   }
 
@@ -494,6 +500,19 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
   if (definition.name === 'workflow.module_reconstruction_review') {
     notes.push(
       'Use this high-level workflow when you want module review plus an optional reconstruct/export refresh in one MCP call.'
+    )
+  }
+
+  if (
+    definition.name === 'ghidra.analyze' ||
+    definition.name === 'workflow.deep_static' ||
+    definition.name === 'workflow.reconstruct' ||
+    definition.name === 'workflow.semantic_name_review' ||
+    definition.name === 'workflow.function_explanation_review' ||
+    definition.name === 'workflow.module_reconstruction_review'
+  ) {
+    notes.push(
+      'Queued responses include polling_guidance. If your MCP client can sleep or wait, follow that guidance instead of repeatedly polling task.status.'
     )
   }
 

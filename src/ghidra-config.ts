@@ -8,13 +8,32 @@ import path from 'path'
 import { spawnSync } from 'child_process'
 import { logger } from './logger.js'
 import { buildRawCommandLine, decodeProcessStreams } from './process-output.js'
+import { resolvePackagePath } from './runtime-paths.js'
+import {
+  config,
+  getDefaultGhidraLogRoot,
+  getDefaultGhidraProjectRoot,
+} from './config.js'
 
 export interface GhidraConfig {
   installDir: string
   analyzeHeadlessPath: string
   scriptsDir: string
+  projectRoot: string
+  logRoot: string
+  minJavaVersion: number
   version?: string
   isValid: boolean
+}
+
+export interface JavaRuntimeProbe {
+  available: boolean
+  source: 'JAVA_HOME' | 'PATH' | 'none'
+  command: string
+  version?: string
+  major_version?: number
+  version_ok: boolean
+  error?: string
 }
 
 export interface GhidraHealthStatus {
@@ -23,6 +42,8 @@ export interface GhidraHealthStatus {
   install_dir: string
   analyze_headless_path: string
   scripts_dir: string
+  project_root: string
+  log_root: string
   version?: string
   checks: {
     install_dir_exists: boolean
@@ -30,6 +51,8 @@ export interface GhidraHealthStatus {
     scripts_dir_exists: boolean
     launch_ok: boolean
     pyghidra_available: boolean
+    java_available: boolean
+    java_version_ok: boolean
   }
   launch_probe?: {
     raw_cmd: string
@@ -46,6 +69,7 @@ export interface GhidraHealthStatus {
     version?: string
     error?: string
   }
+  java_probe?: JavaRuntimeProbe
   errors: string[]
   warnings: string[]
 }
@@ -151,6 +175,110 @@ export function probePyGhidraAvailability(timeoutMs: number = 5000): {
   error?: string
 } {
   return probePyGhidra(timeoutMs)
+}
+
+function parseJavaMajorVersion(versionText: string): number | null {
+  const match = versionText.match(/version\s+"(\d+)(?:\.(\d+))?/i) || versionText.match(/\b(\d+)\.(\d+)\.(\d+)\b/)
+  if (!match) {
+    return null
+  }
+  const primary = Number(match[1])
+  if (!Number.isFinite(primary)) {
+    return null
+  }
+  if (primary === 1 && typeof match[2] === 'string') {
+    const legacy = Number(match[2])
+    return Number.isFinite(legacy) ? legacy : null
+  }
+  return primary
+}
+
+function getJavaExecutableFromHome(javaHome: string): string | null {
+  const candidates = process.platform === 'win32'
+    ? [path.join(javaHome, 'bin', 'java.exe'), path.join(javaHome, 'java.exe')]
+    : [path.join(javaHome, 'bin', 'java'), path.join(javaHome, 'java')]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+export function probeJavaRuntime(
+  timeoutMs: number = 5000,
+  minJavaVersion: number = config.workers.ghidra.minJavaVersion
+): JavaRuntimeProbe {
+  const javaHome = process.env.JAVA_HOME?.trim()
+  const javaFromHome = javaHome ? getJavaExecutableFromHome(javaHome) : null
+  const javaCommand = javaFromHome || 'java'
+  const source: JavaRuntimeProbe['source'] = javaFromHome
+    ? 'JAVA_HOME'
+    : javaHome
+      ? 'JAVA_HOME'
+      : 'PATH'
+
+  try {
+    const result = spawnSync(javaCommand, ['-version'], {
+      timeout: timeoutMs,
+      windowsHide: true,
+      encoding: 'utf8',
+    })
+
+    if (result.error) {
+      return {
+        available: false,
+        source: javaHome ? 'JAVA_HOME' : 'none',
+        command: javaCommand,
+        version_ok: false,
+        error: result.error.message,
+      }
+    }
+
+    const combined = `${String(result.stderr || '').trim()}\n${String(result.stdout || '').trim()}`.trim()
+    const major = parseJavaMajorVersion(combined)
+    const versionLine = combined
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find((line) => /version|openjdk|java/i.test(line))
+
+    return {
+      available: true,
+      source,
+      command: javaCommand,
+      version: versionLine || undefined,
+      major_version: major || undefined,
+      version_ok: typeof major === 'number' ? major >= minJavaVersion : false,
+      error: typeof major === 'number' ? undefined : 'Unable to parse Java version output.',
+    }
+  } catch (error) {
+    return {
+      available: false,
+      source: javaHome ? 'JAVA_HOME' : 'none',
+      command: javaCommand,
+      version_ok: false,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+export function getConfiguredGhidraProjectRoot(): string {
+  const configured = config.workers.ghidra.projectRoot?.trim()
+  return path.resolve(configured || getDefaultGhidraProjectRoot())
+}
+
+export function getConfiguredGhidraLogRoot(): string {
+  const configured = config.workers.ghidra.logRoot?.trim()
+  return path.resolve(configured || getDefaultGhidraLogRoot())
+}
+
+export function getSampleScopedGhidraProjectRoot(sampleId: string): string {
+  const sha256 = sampleId.startsWith('sha256:') ? sampleId.slice('sha256:'.length) : sampleId
+  const bucket1 = sha256.slice(0, 2)
+  const bucket2 = sha256.slice(2, 4)
+  return path.join(getConfiguredGhidraProjectRoot(), bucket1, bucket2, sha256)
 }
 
 function looksLikeAnalyzeHeadlessHelp(stdout: string, stderr: string): boolean {
@@ -350,8 +478,8 @@ export function getGhidraVersion(installDir: string): string | null {
 /**
  * Ensure Ghidra scripts directory exists
  */
-export function ensureScriptsDirectory(baseDir: string = './ghidra_scripts'): string {
-  const scriptsDir = path.resolve(baseDir)
+export function ensureScriptsDirectory(baseDir?: string): string {
+  const scriptsDir = path.resolve(baseDir || resolvePackagePath('ghidra_scripts'))
   
   if (!fs.existsSync(scriptsDir)) {
     fs.mkdirSync(scriptsDir, { recursive: true })
@@ -365,6 +493,11 @@ export function ensureScriptsDirectory(baseDir: string = './ghidra_scripts'): st
  * Initialize Ghidra configuration
  */
 export function initializeGhidraConfig(installDir?: string): GhidraConfig {
+  const projectRoot = getConfiguredGhidraProjectRoot()
+  const logRoot = getConfiguredGhidraLogRoot()
+  fs.mkdirSync(projectRoot, { recursive: true })
+  fs.mkdirSync(logRoot, { recursive: true })
+
   // Detect installation directory
   const detectedInstallDir = installDir || detectGhidraInstallation()
   
@@ -374,6 +507,9 @@ export function initializeGhidraConfig(installDir?: string): GhidraConfig {
       installDir: '',
       analyzeHeadlessPath: '',
       scriptsDir: '',
+      projectRoot,
+      logRoot,
+      minJavaVersion: config.workers.ghidra.minJavaVersion,
       isValid: false,
     }
   }
@@ -387,6 +523,9 @@ export function initializeGhidraConfig(installDir?: string): GhidraConfig {
       installDir: detectedInstallDir,
       analyzeHeadlessPath: '',
       scriptsDir: '',
+      projectRoot,
+      logRoot,
+      minJavaVersion: config.workers.ghidra.minJavaVersion,
       isValid: false,
     }
   }
@@ -396,24 +535,29 @@ export function initializeGhidraConfig(installDir?: string): GhidraConfig {
   const scriptsDir = ensureScriptsDirectory()
   const version = getGhidraVersion(detectedInstallDir)
 
-  const config: GhidraConfig = {
+  const resolvedConfig: GhidraConfig = {
     installDir: detectedInstallDir,
     analyzeHeadlessPath,
     scriptsDir,
+    projectRoot,
+    logRoot,
+    minJavaVersion: config.workers.ghidra.minJavaVersion,
     version: version || undefined,
     isValid: true,
   }
 
   logger.info(
     {
-      installDir: config.installDir,
-      version: config.version,
-      scriptsDir: config.scriptsDir,
+      installDir: resolvedConfig.installDir,
+      version: resolvedConfig.version,
+      scriptsDir: resolvedConfig.scriptsDir,
+      projectRoot: resolvedConfig.projectRoot,
+      logRoot: resolvedConfig.logRoot,
     },
     'Ghidra configuration initialized'
   )
 
-  return config
+  return resolvedConfig
 }
 
 /**
@@ -445,9 +589,14 @@ export function createGhidraProject(
 ): { projectPath: string; projectKey: string } {
   // Generate project key if not provided
   const key = projectKey || generateProjectKey()
+  const parentDir = path.resolve(ghidraWorkspaceDir)
+  if (!fs.existsSync(parentDir)) {
+    fs.mkdirSync(parentDir, { recursive: true })
+    logger.info({ ghidraWorkspaceDir: parentDir }, 'Created Ghidra project parent directory')
+  }
   
   // Create project directory: workspace/ghidra/project_<key>/
-  const projectPath = path.join(ghidraWorkspaceDir, `project_${key}`)
+  const projectPath = path.join(parentDir, `project_${key}`)
   
   // Create directory if it doesn't exist
   if (!fs.existsSync(projectPath)) {
@@ -524,6 +673,8 @@ export function checkGhidraHealth(timeoutMs: number = 8000): GhidraHealthStatus 
   const installDir = ghidraConfig.installDir || detectGhidraInstallation() || ''
   const analyzeHeadlessPath = installDir ? getAnalyzeHeadlessPath(installDir) : ''
   const scriptsDir = ghidraConfig.scriptsDir || ensureScriptsDirectory()
+  const projectRoot = ghidraConfig.projectRoot || getConfiguredGhidraProjectRoot()
+  const logRoot = ghidraConfig.logRoot || getConfiguredGhidraLogRoot()
 
   const installDirExists = Boolean(installDir && fs.existsSync(installDir))
   const analyzeHeadlessExists = Boolean(
@@ -532,6 +683,9 @@ export function checkGhidraHealth(timeoutMs: number = 8000): GhidraHealthStatus 
   const scriptsDirExists = Boolean(scriptsDir && fs.existsSync(scriptsDir))
   const pyghidraProbe = probePyGhidra(Math.min(timeoutMs, 5000))
   const pyghidraAvailable = pyghidraProbe.available === true
+  const javaProbe = probeJavaRuntime(Math.min(timeoutMs, 5000), ghidraConfig.minJavaVersion)
+  const javaAvailable = javaProbe.available === true
+  const javaVersionOk = javaProbe.version_ok === true
 
   if (!installDirExists) {
     errors.push('Ghidra install directory was not found. Set GHIDRA_PATH or GHIDRA_INSTALL_DIR.')
@@ -545,6 +699,15 @@ export function checkGhidraHealth(timeoutMs: number = 8000): GhidraHealthStatus 
   if (!pyghidraAvailable) {
     warnings.push(
       'PyGhidra is unavailable in current Python environment; Python post-scripts may fail and Java fallback will be used.'
+    )
+  }
+  if (!javaAvailable) {
+    warnings.push(
+      'No usable Java runtime was detected from JAVA_HOME or PATH. Set JAVA_HOME to a Java 21+ installation if Ghidra launch fails.'
+    )
+  } else if (!javaVersionOk) {
+    warnings.push(
+      `Detected Java runtime appears older than the recommended Java ${ghidraConfig.minJavaVersion}+ baseline for Ghidra ${ghidraConfig.version || '12.x'}.`
     )
   }
 
@@ -598,6 +761,15 @@ export function checkGhidraHealth(timeoutMs: number = 8000): GhidraHealthStatus 
             `analyzeHeadless returned non-zero exit code (${result.status}) but help output was detected.`
           )
         } else {
+          if (!javaAvailable) {
+            errors.push(
+              'analyzeHeadless launch failed and no usable Java runtime was detected. Set JAVA_HOME or verify the bundled Ghidra runtime.'
+            )
+          } else if (!javaVersionOk) {
+            errors.push(
+              `analyzeHeadless launch failed and the detected Java runtime is older than Java ${ghidraConfig.minJavaVersion}.`
+            )
+          }
           errors.push(
             `analyzeHeadless returned non-zero exit code (${result.status}). ${stderrText}`.trim()
           )
@@ -621,6 +793,8 @@ export function checkGhidraHealth(timeoutMs: number = 8000): GhidraHealthStatus 
     install_dir: installDir,
     analyze_headless_path: analyzeHeadlessPath,
     scripts_dir: scriptsDir,
+    project_root: projectRoot,
+    log_root: logRoot,
     version: ghidraConfig.version,
     checks: {
       install_dir_exists: installDirExists,
@@ -628,9 +802,12 @@ export function checkGhidraHealth(timeoutMs: number = 8000): GhidraHealthStatus 
       scripts_dir_exists: scriptsDirExists,
       launch_ok: launchOk,
       pyghidra_available: pyghidraAvailable,
+      java_available: javaAvailable,
+      java_version_ok: javaVersionOk,
     },
     launch_probe: launchProbe,
     pyghidra_probe: pyghidraProbe,
+    java_probe: javaProbe,
     errors,
     warnings,
   }
