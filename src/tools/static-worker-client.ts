@@ -1,7 +1,10 @@
-import { spawn } from 'child_process'
 import { v4 as uuidv4 } from 'uuid'
-import { resolvePackagePath } from '../runtime-paths.js'
 import { config } from '../config.js'
+import type { DatabaseManager } from '../database.js'
+import {
+  buildStaticWorkerCompatibilityKey,
+  getRuntimeWorkerPool,
+} from '../runtime-worker-pool.js'
 
 export interface StaticWorkerRequest {
   job_id: string
@@ -59,52 +62,49 @@ export function buildStaticWorkerRequest(input: {
   }
 }
 
-export async function callStaticWorker(request: StaticWorkerRequest): Promise<StaticWorkerResponse> {
-  return new Promise((resolve, reject) => {
-    const workerPath = resolvePackagePath('workers', 'static_worker.py')
-    const pythonCommand =
-      config.workers.static.pythonPath ||
-      (process.platform === 'win32' ? 'python' : 'python3')
-    const pythonProcess = spawn(pythonCommand, [workerPath], {
-      stdio: ['pipe', 'pipe', 'pipe'],
-    })
+export async function callStaticWorker(
+  request: StaticWorkerRequest,
+  options: {
+    database?: DatabaseManager
+    family?: string
+    compatibilityKey?: string
+    timeoutMs?: number
+  } = {}
+): Promise<StaticWorkerResponse> {
+  const compatibilityKey = options.compatibilityKey || buildStaticWorkerCompatibilityKey(request)
+  const family =
+    options.family ||
+    (request.tool === 'strings.extract' && request.args?.scan_mode === 'full'
+      ? 'static_python.full'
+      : 'static_python.preview')
 
-    let stdout = ''
-    let stderr = ''
-
-    pythonProcess.stdout.on('data', (data) => {
-      stdout += data.toString()
-    })
-
-    pythonProcess.stderr.on('data', (data) => {
-      stderr += data.toString()
-    })
-
-    pythonProcess.on('close', (code) => {
-      if (code !== 0) {
-        reject(new Error(`Python worker exited with code ${code}. stderr: ${stderr}`))
-        return
-      }
-
-      try {
-        const lines = stdout.trim().split('\n')
-        const lastLine = lines[lines.length - 1]
-        const response = JSON.parse(lastLine) as StaticWorkerResponse
-        resolve(response)
-      } catch (error) {
-        reject(new Error(`Failed to parse worker response: ${(error as Error).message}. stdout: ${stdout}`))
-      }
-    })
-
-    pythonProcess.on('error', (error) => {
-      reject(new Error(`Failed to spawn Python worker: ${error.message}`))
-    })
-
-    try {
-      pythonProcess.stdin.write(JSON.stringify(request) + '\n')
-      pythonProcess.stdin.end()
-    } catch (error) {
-      reject(new Error(`Failed to write to worker stdin: ${(error as Error).message}`))
-    }
+  const { response, lease } = await getRuntimeWorkerPool().executeStaticWorker(request as StaticWorkerRequest & Record<string, unknown>, {
+    database: options.database,
+    family,
+    compatibilityKey,
+    timeoutMs:
+      options.timeoutMs ||
+      ((config.workers.static.timeout || 60) * 1000),
   })
+
+  return {
+    job_id: typeof response.job_id === 'string' ? response.job_id : request.job_id,
+    ok: Boolean(response.ok),
+    warnings: Array.isArray(response.warnings) ? response.warnings : [],
+    errors: Array.isArray(response.errors) ? response.errors : [],
+    data: response.data,
+    artifacts: Array.isArray(response.artifacts) ? response.artifacts : [],
+    metrics: {
+      ...(response.metrics || {}),
+      worker_pool: {
+        family: lease.family,
+        compatibility_key: lease.compatibility_key,
+        deployment_key: lease.deployment_key,
+        worker_id: lease.worker_id,
+        pool_kind: lease.pool_kind,
+        warm_reuse: lease.warm_reuse,
+        cold_start: lease.cold_start,
+      },
+    },
+  }
 }

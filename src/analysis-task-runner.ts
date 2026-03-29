@@ -9,12 +9,28 @@ import type { WorkspaceManager } from './workspace-manager.js'
 import type { Job, JobQueue } from './job-queue.js'
 import type { CacheManager } from './cache-manager.js'
 import type { JobResult } from './types.js'
+import type { PolicyGuard } from './policy-guard.js'
 import { logger } from './logger.js'
 import { deepStaticWorkflow } from './workflows/deep-static.js'
 import { createReconstructWorkflowHandler } from './workflows/reconstruct.js'
 import { createSemanticNameReviewWorkflowHandler } from './workflows/semantic-name-review.js'
 import { createFunctionExplanationReviewWorkflowHandler } from './workflows/function-explanation-review.js'
 import { createModuleReconstructionReviewWorkflowHandler } from './workflows/module-reconstruction-review.js'
+import { createStringsExtractHandler } from './tools/strings-extract.js'
+import { createStringsFlossDecodeHandler } from './tools/strings-floss-decode.js'
+import { createBinaryRoleProfileHandler } from './tools/binary-role-profile.js'
+import { createAnalysisContextLinkHandler } from './tools/analysis-context-link.js'
+import { createCryptoIdentifyHandler } from './tools/crypto-identify.js'
+import {
+  AnalysisBudgetScheduler,
+  findWorkerReuseTelemetry,
+  getRuntimeMemoryUsageMb,
+} from './analysis-budget-scheduler.js'
+import {
+  ANALYSIS_STAGE_JOB_TOOL,
+  createAnalyzePipelineStageContext,
+  executeQueuedAnalysisStage,
+} from './workflows/analyze-pipeline.js'
 
 export interface AnalysisTaskRunnerOptions {
   pollIntervalMs?: number
@@ -28,6 +44,8 @@ export class AnalysisTaskRunner {
   private readonly database: DatabaseManager
   private readonly workspaceManager: WorkspaceManager
   private readonly cacheManager?: CacheManager
+  private readonly policyGuard: PolicyGuard
+  private readonly scheduler: AnalysisBudgetScheduler
   private timer?: NodeJS.Timeout
   private processing = false
   private activeControllers = new Map<string, AbortController>()
@@ -36,12 +54,15 @@ export class AnalysisTaskRunner {
     private readonly jobQueue: JobQueue,
     database: DatabaseManager,
     workspaceManager: WorkspaceManager,
-    cacheManager?: CacheManager,
+    cacheManager: CacheManager | undefined,
+    policyGuard: PolicyGuard,
     options: AnalysisTaskRunnerOptions = {}
   ) {
     this.database = database
     this.workspaceManager = workspaceManager
     this.cacheManager = cacheManager
+    this.policyGuard = policyGuard
+    this.scheduler = new AnalysisBudgetScheduler(database)
     this.decompilerWorker = new DecompilerWorker(database, workspaceManager)
     this.pollIntervalMs = options.pollIntervalMs ?? 500
     this.staleRunningMs = options.staleRunningMs
@@ -117,7 +138,11 @@ export class AnalysisTaskRunner {
       return
     }
 
-    const job = this.jobQueue.dequeue()
+    const selection = this.scheduler.selectNextJob(this.jobQueue)
+    if (!selection) {
+      return
+    }
+    const job = this.jobQueue.startQueuedJob(selection.job.id)
     if (!job) {
       return
     }
@@ -132,10 +157,44 @@ export class AnalysisTaskRunner {
       if (typeof result.metrics.elapsedMs !== 'number' || result.metrics.elapsedMs <= 0) {
         result.metrics.elapsedMs = Date.now() - startTime
       }
+      const currentRssMb = getRuntimeMemoryUsageMb()
+      const workerTelemetry = findWorkerReuseTelemetry(result.data)
+      this.scheduler.recordCompletion({
+        jobId: job.id,
+        runId:
+          job.tool === ANALYSIS_STAGE_JOB_TOOL && typeof job.args?.run_id === 'string'
+            ? String(job.args.run_id)
+            : null,
+        sampleId: job.sampleId,
+        tool: job.tool,
+        stage:
+          job.tool === ANALYSIS_STAGE_JOB_TOOL && typeof job.args?.stage === 'string'
+            ? String(job.args.stage)
+            : null,
+        executionBucket: selection.plan.execution_bucket,
+        costClass: selection.plan.cost_class,
+        workerFamily: workerTelemetry?.worker_family || selection.plan.worker_family,
+        warmReuse: workerTelemetry?.warm_reuse,
+        coldStart: workerTelemetry?.cold_start,
+        peakRssMb:
+          typeof result.metrics.peakRssMb === 'number' && result.metrics.peakRssMb > 0
+            ? result.metrics.peakRssMb
+            : currentRssMb,
+        currentRssMb,
+        expectedRssMb: selection.plan.expected_rss_mb,
+        latencyMs: result.metrics.elapsedMs,
+      })
       this.jobQueue.complete(job.id, result)
     } catch (error) {
       const elapsedMs = Date.now() - startTime
       const message = error instanceof Error ? error.message : String(error)
+      const currentRssMb = getRuntimeMemoryUsageMb()
+      const interruptionCause =
+        /oom|out of memory|memory|allocation|killed/i.test(message)
+          ? 'memory_pressure'
+          : /cancelled|aborted/i.test(message)
+            ? 'cancelled'
+            : 'tool_error'
       logger.error(
         {
           job_id: job.id,
@@ -145,6 +204,29 @@ export class AnalysisTaskRunner {
         },
         'Analysis task failed'
       )
+
+      this.scheduler.recordInterruption({
+        jobId: job.id,
+        runId:
+          job.tool === ANALYSIS_STAGE_JOB_TOOL && typeof job.args?.run_id === 'string'
+            ? String(job.args.run_id)
+            : null,
+        sampleId: job.sampleId,
+        tool: job.tool,
+        stage:
+          job.tool === ANALYSIS_STAGE_JOB_TOOL && typeof job.args?.stage === 'string'
+            ? String(job.args.stage)
+            : null,
+        executionBucket: selection.plan.execution_bucket,
+        costClass: selection.plan.cost_class,
+        workerFamily: selection.plan.worker_family,
+        reason: message,
+        interruptionCause,
+        peakRssMb: currentRssMb,
+        currentRssMb,
+        expectedRssMb: selection.plan.expected_rss_mb,
+        latencyMs: elapsedMs,
+      })
 
       const normalizedError =
         error instanceof Error ? error : new Error(message)
@@ -255,6 +337,160 @@ export class AnalysisTaskRunner {
         metrics: {
           elapsedMs:
             typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
+          peakRssMb: 0,
+        },
+      }
+    }
+
+    if (job.tool === ANALYSIS_STAGE_JOB_TOOL) {
+      if (!this.cacheManager) {
+        throw new Error('workflow.analyze.stage requires cache manager for queued execution')
+      }
+      const stageContext = createAnalyzePipelineStageContext(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager,
+        this.policyGuard,
+        undefined,
+        {},
+        this.jobQueue
+      )
+      const input = job.args as {
+        run_id: string
+        stage: 'fast_profile' | 'enrich_static' | 'function_map' | 'reconstruct' | 'dynamic_plan' | 'dynamic_execute' | 'summarize'
+        force_refresh?: boolean
+      }
+      return executeQueuedAnalysisStage(stageContext, input)
+    }
+
+    if (job.tool === 'strings.extract') {
+      if (!this.cacheManager) {
+        throw new Error('strings.extract requires cache manager for queued execution')
+      }
+      const handler = createStringsExtractHandler(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager,
+        this.jobQueue,
+        { allowDeferred: false }
+      )
+      const result = await handler(job.args || {})
+      return {
+        jobId: job.id,
+        ok: result.ok,
+        data: result.data,
+        errors: result.errors || [],
+        warnings: result.warnings || [],
+        artifacts: result.artifacts || [],
+        metrics: {
+          elapsedMs: typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
+          peakRssMb: 0,
+        },
+      }
+    }
+
+    if (job.tool === 'strings.floss.decode') {
+      if (!this.cacheManager) {
+        throw new Error('strings.floss.decode requires cache manager for queued execution')
+      }
+      const handler = createStringsFlossDecodeHandler(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager,
+        this.jobQueue,
+        { allowDeferred: false }
+      )
+      const result = await handler(job.args || {})
+      return {
+        jobId: job.id,
+        ok: result.ok,
+        data: result.data,
+        errors: result.errors || [],
+        warnings: result.warnings || [],
+        artifacts: result.artifacts || [],
+        metrics: {
+          elapsedMs: typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
+          peakRssMb: 0,
+        },
+      }
+    }
+
+    if (job.tool === 'binary.role.profile') {
+      if (!this.cacheManager) {
+        throw new Error('binary.role.profile requires cache manager for queued execution')
+      }
+      const handler = createBinaryRoleProfileHandler(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager,
+        undefined,
+        this.jobQueue,
+        { allowDeferred: false }
+      )
+      const result = await handler(job.args || {})
+      return {
+        jobId: job.id,
+        ok: result.ok,
+        data: result.data,
+        errors: result.errors || [],
+        warnings: result.warnings || [],
+        artifacts: result.artifacts || [],
+        metrics: {
+          elapsedMs: typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
+          peakRssMb: 0,
+        },
+      }
+    }
+
+    if (job.tool === 'analysis.context.link') {
+      if (!this.cacheManager) {
+        throw new Error('analysis.context.link requires cache manager for queued execution')
+      }
+      const handler = createAnalysisContextLinkHandler(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager,
+        {},
+        this.jobQueue,
+        { allowDeferred: false }
+      )
+      const result = await handler(job.args || {})
+      return {
+        jobId: job.id,
+        ok: result.ok,
+        data: result.data,
+        errors: result.errors || [],
+        warnings: result.warnings || [],
+        artifacts: result.artifacts || [],
+        metrics: {
+          elapsedMs: typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
+          peakRssMb: 0,
+        },
+      }
+    }
+
+    if (job.tool === 'crypto.identify') {
+      if (!this.cacheManager) {
+        throw new Error('crypto.identify requires cache manager for queued execution')
+      }
+      const handler = createCryptoIdentifyHandler(
+        this.workspaceManager,
+        this.database,
+        this.cacheManager,
+        {},
+        this.jobQueue,
+        { allowDeferred: false }
+      )
+      const result = await handler(job.args || {})
+      return {
+        jobId: job.id,
+        ok: result.ok,
+        data: result.data,
+        errors: result.errors || [],
+        warnings: result.warnings || [],
+        artifacts: result.artifacts || [],
+        metrics: {
+          elapsedMs: typeof result.metrics?.elapsed_ms === 'number' ? result.metrics.elapsed_ms : 0,
           peakRssMb: 0,
         },
       }

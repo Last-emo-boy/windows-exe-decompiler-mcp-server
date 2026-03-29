@@ -18,6 +18,7 @@ export type JSONSchema = z.ZodTypeAny
  */
 export interface ToolDefinition {
   name: string
+  canonicalName?: string
   description: string
   inputSchema: JSONSchema
   outputSchema?: JSONSchema
@@ -110,6 +111,7 @@ export interface Content {
 export interface ToolResult {
   content: Content[]
   isError?: boolean
+  structuredContent?: Record<string, unknown>
 }
 
 /**
@@ -260,7 +262,13 @@ export enum JobPriority {
  * Job execution status
  * Requirements: 21.1, 21.2
  */
-export type JobStatusType = 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+export type JobStatusType =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'failed'
+  | 'cancelled'
+  | 'interrupted'
 
 /**
  * Retry policy for failed jobs
@@ -287,6 +295,7 @@ export interface Job {
   retryPolicy: RetryPolicy
   createdAt: string
   attempts: number
+  estimatedDurationMs?: number  // Estimated duration for async job pattern
 }
 
 /**

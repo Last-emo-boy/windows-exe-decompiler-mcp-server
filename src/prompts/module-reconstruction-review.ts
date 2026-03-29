@@ -52,6 +52,8 @@ export function buildModuleReconstructionReviewPromptText(
     '- optional refined_name',
     '- optional focus_areas',
     '- optional priority_functions',
+    '- If no module-level review is evidence-grounded, return {"reviews":[]} instead of inventing roles or summaries.',
+    '- Do not wrap the JSON in markdown or prose.',
     '',
     'Prepared bundle JSON:',
     preparedBundleJson,

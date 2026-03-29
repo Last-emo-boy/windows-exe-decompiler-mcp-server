@@ -15,6 +15,10 @@ import { generateCacheKey } from '../cache-manager.js'
 import { resolvePackagePath } from '../runtime-paths.js'
 import { lookupCachedResult, formatCacheWarning } from './cache-observability.js'
 import { inspectSampleWorkspace, formatMissingOriginalError, resolvePrimarySamplePath } from '../sample-workspace.js'
+import {
+  buildStaticWorkerRequest,
+  callStaticWorker as callPooledStaticWorker,
+} from './static-worker-client.js'
 
 // ============================================================================
 // Constants
@@ -251,31 +255,22 @@ export function createPEImportsExtractHandler(
       }
 
       // 4. Prepare worker request
-      const workerRequest: WorkerRequest = {
-        job_id: uuidv4(),
+      const workerRequest: WorkerRequest = buildStaticWorkerRequest({
         tool: TOOL_NAME,
-        sample: {
-          sample_id: input.sample_id,
-          path: samplePath,
-        },
+        sampleId: input.sample_id,
+        samplePath,
         args: {
           group_by_dll: input.group_by_dll,
         },
-        context: {
-          request_time_utc: new Date().toISOString(),
-          policy: {
-            allow_dynamic: false,
-            allow_network: false,
-          },
-          versions: {
-            tool_version: TOOL_VERSION,
-          },
-        },
-      }
+        toolVersion: TOOL_VERSION,
+      })
 
       // 5. Call Static Worker
       // Requirements: 3.1, 3.2
-      const workerResponse = await callStaticWorker(workerRequest)
+      const workerResponse = await callPooledStaticWorker(workerRequest, {
+        database,
+        family: 'static_python.preview',
+      })
 
       if (!workerResponse.ok) {
         return {
@@ -291,7 +286,14 @@ export function createPEImportsExtractHandler(
       // 7. Return result
       return {
         ok: true,
-        data: workerResponse.data,
+        data:
+          workerResponse.data && typeof workerResponse.data === 'object'
+            ? {
+                ...(workerResponse.data as Record<string, unknown>),
+                worker_pool:
+                  (workerResponse.metrics as Record<string, unknown> | undefined)?.worker_pool,
+              }
+            : workerResponse.data,
         warnings: input.force_refresh
           ? ['force_refresh=true; bypassed cache lookup', ...(workerResponse.warnings || [])]
           : workerResponse.warnings,

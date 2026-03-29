@@ -615,3 +615,131 @@ export function modulesSuggestedByRuntimeStages(stages: string[] = []): string[]
   }
   return Array.from(modules)
 }
+
+// ============================================================================
+// Batch Correlation API (for automated workflow)
+// Tasks: dynamic-analysis-automation 3.1, 3.2, 3.3
+// ============================================================================
+
+/**
+ * Batch correlation input for automated workflow
+ */
+export interface BatchCorrelationInput {
+  traceEvents: Array<{
+    type: string
+    api: string
+    timestamp: number
+    thread_id: number
+    args?: Record<string, unknown>
+    result?: unknown
+  }>
+  functionContext?: {
+    address?: string
+    name?: string
+    apis?: string[]
+  }[]
+}
+
+/**
+ * Batch correlation result
+ */
+export interface BatchCorrelationResult {
+  totalEvents: number
+  correlatedFunctions: Array<{
+    address?: string
+    name?: string
+    apiCalls: number
+    confidence: number
+    evidence: string[]
+  }>
+  summary: {
+    uniqueApis: number
+    uniqueThreads: number
+    timeRangeMs: number
+    topCapabilities: string[]
+  }
+}
+
+/**
+ * Perform batch correlation on trace events
+ * Tasks: dynamic-analysis-automation 3.1
+ */
+export function correlateBatch(input: BatchCorrelationInput): BatchCorrelationResult {
+  const { traceEvents, functionContext = [] } = input
+  
+  // Count unique APIs and threads
+  const uniqueApis = new Set(traceEvents.map(e => e.api))
+  const uniqueThreads = new Set(traceEvents.map(e => e.thread_id))
+  
+  // Calculate time range
+  const timestamps = traceEvents.map(e => e.timestamp)
+  const timeRangeMs = timestamps.length > 0
+    ? Math.max(...timestamps) - Math.min(...timestamps)
+    : 0
+  
+  // Correlate to functions
+  const correlatedFunctions = functionContext.map(func => {
+    if (!func.apis || func.apis.length === 0) {
+      return {
+        address: func.address,
+        name: func.name,
+        apiCalls: 0,
+        confidence: 0.3,
+        evidence: ['No API matches'],
+      }
+    }
+    
+    // Count matching API calls
+    const matchingEvents = traceEvents.filter(e => func.apis!.includes(e.api))
+    const apiCalls = matchingEvents.length
+    
+    // Calculate confidence based on match count
+    const confidence = apiCalls > 0
+      ? Math.min(0.5 + (apiCalls / 10) * 0.5, 0.95)
+      : 0.3
+    
+    return {
+      address: func.address,
+      name: func.name,
+      apiCalls,
+      confidence,
+      evidence: apiCalls > 0
+        ? [`Matched ${apiCalls} API calls`, ...uniqueApis.values()].slice(0, 5)
+        : ['No direct API matches'],
+    }
+  })
+  
+  // Sort by confidence
+  correlatedFunctions.sort((a, b) => b.confidence - a.confidence)
+  
+  // Identify top capabilities
+  const capabilityMap = new Map<string, number>()
+  for (const api of uniqueApis) {
+    const normalized = normalizeRuntimeApiName(api)
+    if (normalized.includes('Crypt')) {
+      capabilityMap.set('crypto', (capabilityMap.get('crypto') || 0) + 1)
+    } else if (normalized.includes('Thread') || normalized.includes('Process')) {
+      capabilityMap.set('process_manipulation', (capabilityMap.get('process_manipulation') || 0) + 1)
+    } else if (normalized.includes('File') || normalized.includes('Reg')) {
+      capabilityMap.set('persistence', (capabilityMap.get('persistence') || 0) + 1)
+    } else if (normalized.includes('Internet') || normalized.includes('Http')) {
+      capabilityMap.set('network', (capabilityMap.get('network') || 0) + 1)
+    }
+  }
+  
+  const topCapabilities = Array.from(capabilityMap.entries())
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 3)
+    .map(([cap]) => cap)
+  
+  return {
+    totalEvents: traceEvents.length,
+    correlatedFunctions,
+    summary: {
+      uniqueApis: uniqueApis.size,
+      uniqueThreads: uniqueThreads.size,
+      timeRangeMs,
+      topCapabilities,
+    },
+  }
+}

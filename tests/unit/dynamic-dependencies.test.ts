@@ -94,4 +94,39 @@ describe('dynamic.dependencies tool', () => {
     expect(data.setup_actions.map((item) => item.id)).toContain('install_python_requirements')
     expect(data.setup_actions.map((item) => item.id)).toContain('install_speakeasy_emulator')
   })
+
+  test('should merge extended Linux dynamic backends into the response', async () => {
+    const handler = createDynamicDependenciesHandler(workspaceManager, database, {
+      callWorker: async () => ({
+        job_id: 'test-job',
+        ok: true,
+        warnings: [],
+        errors: [],
+        data: {
+          status: 'partial',
+          available_components: ['speakeasy'],
+          components: {
+            speakeasy: { available: true, version: '1.0.0' },
+            frida: { available: false, version: null },
+            psutil: { available: true, version: '7.2.2' },
+          },
+          recommendations: [],
+          checked_at: new Date().toISOString(),
+        },
+        artifacts: [],
+        metrics: { elapsed_ms: 1, tool: 'dynamic.dependencies' },
+      }),
+    })
+
+    const result = await handler({})
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.components).toHaveProperty('qiling')
+    expect(data.components).toHaveProperty('angr')
+    expect(data.components).toHaveProperty('panda')
+    expect(data.components).toHaveProperty('wine')
+    expect(data.components).toHaveProperty('winedbg')
+    expect(data.components).toHaveProperty('frida_cli')
+    expect(Array.isArray(data.required_user_inputs)).toBe(true)
+  })
 })

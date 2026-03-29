@@ -355,7 +355,8 @@ describe('createFridaRuntimeInstrumentHandler', () => {
     expect(result.ok).toBe(true)
     expect(result.artifacts).toHaveLength(1)
     expect((result.artifacts as any)[0].type).toBe('dynamic_trace')
-    expect((fs as any).existsSync((result.artifacts as any)[0].path)).toBe(true)
+    const artifactExists = await fs.access((result.artifacts as any)[0].path).then(() => true).catch(() => false)
+    expect(artifactExists).toBe(true)
   })
 
   test('should handle worker returning failure with import error', async () => {

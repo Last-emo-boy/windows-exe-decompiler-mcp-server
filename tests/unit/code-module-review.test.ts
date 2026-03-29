@@ -125,23 +125,24 @@ describe('code.module.review tool', () => {
           },
         },
       })
+    const samplingRequester = jest.fn(async (): Promise<any> => ({
+      role: 'assistant',
+      model: 'generic-tool-calling-llm',
+      stopReason: 'endTurn',
+      content: {
+        type: 'text',
+        text: [
+          '```json',
+          '{"reviews":[{"module_name":"process_ops","refined_name":"remote_process_operations","summary":"Groups runtime wrappers and remote process access helpers.","role_hint":"Remote process operations and execution transfer.","confidence":0.86,"assumptions":["The grouped helpers share a dispatcher."],"evidence_used":["runtime:prepare_remote_process_access","api:WriteProcessMemory"],"rewrite_guidance":["Split handle acquisition from execution transfer."],"focus_areas":["process_ops"],"priority_functions":["FUN_140081090"]}]}',
+          '```',
+        ].join('\n'),
+      },
+    }))
 
     const handler = createCodeModuleReviewHandler(workspaceManager, database, cacheManager, undefined, {
       prepareHandler,
       applyHandler,
-      samplingRequester: async () => ({
-        role: 'assistant',
-        model: 'generic-tool-calling-llm',
-        stopReason: 'endTurn',
-        content: {
-          type: 'text',
-          text: [
-            '```json',
-            '{"reviews":[{"module_name":"process_ops","refined_name":"remote_process_operations","summary":"Groups runtime wrappers and remote process access helpers.","role_hint":"Remote process operations and execution transfer.","confidence":0.86,"assumptions":["The grouped helpers share a dispatcher."],"evidence_used":["runtime:prepare_remote_process_access","api:WriteProcessMemory"],"rewrite_guidance":["Split handle acquisition from execution transfer."],"focus_areas":["process_ops"],"priority_functions":["FUN_140081090"]}]}',
-            '```',
-          ].join('\n'),
-        },
-      }),
+      samplingRequester: samplingRequester as any,
       clientCapabilitiesProvider: () => ({
         sampling: {},
       }),
@@ -192,5 +193,10 @@ describe('code.module.review tool', () => {
         semantic_session_tag: 'semantic-alpha',
       })
     )
+    expect(samplingRequester).toHaveBeenCalledTimes(1)
+    const samplingParams = (samplingRequester.mock.calls as any[][])[0]?.[0] as any
+    expect(samplingParams.systemPrompt).toContain('Do not wrap the response in markdown')
+    expect(samplingParams.systemPrompt).toContain('Do not call tools')
+    expect(samplingParams.systemPrompt).toContain('Preserve uncertainty explicitly')
   })
 })

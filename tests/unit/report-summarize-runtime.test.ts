@@ -354,6 +354,7 @@ describe('report.summarize runtime evidence integration', () => {
     const result = await handler({
       sample_id: sampleId,
       mode: 'triage',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)
@@ -492,6 +493,7 @@ describe('report.summarize runtime evidence integration', () => {
     const result = await handler({
       sample_id: sampleId,
       mode: 'triage',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)
@@ -600,6 +602,7 @@ describe('report.summarize runtime evidence integration', () => {
     const result = await handler({
       sample_id: sampleId,
       mode: 'triage',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)
@@ -637,6 +640,7 @@ describe('report.summarize runtime evidence integration', () => {
     const result = await handler({
       sample_id: sampleId,
       mode: 'triage',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)
@@ -893,6 +897,7 @@ describe('report.summarize runtime evidence integration', () => {
     const result = await handler({
       sample_id: sampleId,
       mode: 'triage',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)
@@ -979,6 +984,7 @@ describe('report.summarize runtime evidence integration', () => {
       mode: 'triage',
       semantic_scope: 'session',
       semantic_session_tag: 'semantic-beta',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)
@@ -1032,6 +1038,7 @@ describe('report.summarize runtime evidence integration', () => {
       static_scope: 'session',
       static_session_tag: 'static-alpha',
       compare_static_scope: 'all',
+      detail_level: 'full',
     })
 
     expect(result.ok).toBe(true)

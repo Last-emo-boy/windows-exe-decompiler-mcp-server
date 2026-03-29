@@ -7,6 +7,7 @@ import { MCPServer } from '../../src/server'
 import { Config, getDefaultAuditLogPath, getDefaultCacheRoot } from '../../src/config'
 import { z } from 'zod'
 import { TextContent } from '@modelcontextprotocol/sdk/types.js'
+import { toTransportToolName } from '../../src/tool-name-normalization'
 
 describe('MCPServer', () => {
   let server: MCPServer
@@ -100,7 +101,7 @@ describe('MCPServer', () => {
 
       const tools = await server.listTools()
       expect(tools).toHaveLength(1)
-      expect(tools[0].name).toBe('test.tool')
+      expect(tools[0].name).toBe(toTransportToolName('test.tool'))
       expect(tools[0].description).toBe('A test tool')
       expect(tools[0].inputSchema).toHaveProperty('type', 'object')
     })
@@ -123,8 +124,8 @@ describe('MCPServer', () => {
 
       const tools = await server.listTools()
       expect(tools).toHaveLength(2)
-      expect(tools.map((t) => t.name)).toContain('tool.one')
-      expect(tools.map((t) => t.name)).toContain('tool.two')
+      expect(tools.map((t) => t.name)).toContain(toTransportToolName('tool.one'))
+      expect(tools.map((t) => t.name)).toContain(toTransportToolName('tool.two'))
     })
 
     it('should preserve wrapped field types and required flags in JSON schema', async () => {
@@ -143,7 +144,7 @@ describe('MCPServer', () => {
       server.registerTool(toolDefinition, async () => ({ ok: true, data: {} }))
 
       const tools = await server.listTools()
-      const schema = tools.find((tool) => tool.name === 'schema.wrappers')?.inputSchema as any
+      const schema = tools.find((tool) => tool.name === toTransportToolName('schema.wrappers'))?.inputSchema as any
 
       expect(schema.type).toBe('object')
       expect(schema.required).toBeUndefined()
@@ -153,10 +154,78 @@ describe('MCPServer', () => {
       expect(schema.properties.engines.type).toBe('array')
       expect(schema.properties.engines.items.type).toBe('string')
       expect(schema.properties.engines.items.enum).toEqual(['yara', 'entropy'])
-      expect(schema.properties.timeout.type).toBe('number')
+      expect(schema.properties.timeout.type).toBe('integer')
       expect(schema.properties.timeout.default).toBe(60)
-      expect(schema.properties.min_len.type).toBe('number')
+      expect(schema.properties.min_len.type).toBe('integer')
       expect(schema.properties.min_len.default).toBe(4)
+      expect(schema.properties.min_len.minimum).toBe(1)
+      expect(schema.properties.engines.minItems).toBeUndefined()
+    })
+
+    it('should export outputSchema and preserve high-value constraints', async () => {
+      const toolDefinition = {
+        name: 'schema.fidelity',
+        description: 'Schema fidelity test',
+        inputSchema: z
+          .object({
+            sample_id: z.string().min(7).max(80).describe('Sample identifier'),
+            ttl_seconds: z.number().int().min(30).max(3600).default(300),
+            tags: z.array(z.string()).min(1).max(4),
+          })
+          .superRefine(() => undefined)
+          .describe(
+            'Provide valid routing arguments. Session-like or mutually exclusive rules may be surfaced as guidance metadata.'
+          ),
+        outputSchema: z.object({
+          ok: z.boolean(),
+          data: z.object({
+            sample_id: z.string(),
+          }),
+        }),
+      }
+
+      server.registerTool(toolDefinition, async () => ({ ok: true, data: {} }))
+
+      const tools = await server.listTools()
+      const schema = tools.find((tool) => tool.name === toTransportToolName('schema.fidelity'))?.inputSchema as any
+      const outputSchema = tools.find((tool) => tool.name === toTransportToolName('schema.fidelity'))?.outputSchema as any
+
+      expect(schema.description).toContain('routing arguments')
+      expect(schema['x-guidance']).toEqual(
+        expect.arrayContaining([expect.stringContaining('Provide valid routing arguments')])
+      )
+      expect(schema.properties.sample_id.minLength).toBe(7)
+      expect(schema.properties.sample_id.maxLength).toBe(80)
+      expect(schema.properties.ttl_seconds.type).toBe('integer')
+      expect(schema.properties.ttl_seconds.minimum).toBe(30)
+      expect(schema.properties.ttl_seconds.maximum).toBe(3600)
+      expect(schema.properties.tags.minItems).toBe(1)
+      expect(schema.properties.tags.maxItems).toBe(4)
+      expect(outputSchema.type).toBe('object')
+      expect(outputSchema.properties.data.type).toBe('object')
+    })
+
+    it('should export z.any fields without coercing them to strings', async () => {
+      const toolDefinition = {
+        name: 'schema.any',
+        description: 'Any schema test',
+        inputSchema: z.object({}),
+        outputSchema: z.object({
+          ok: z.boolean(),
+          data: z.object({
+            raw: z.any(),
+            bag: z.record(z.any()),
+          }),
+        }),
+      }
+
+      server.registerTool(toolDefinition, async () => ({ ok: true, data: {} }))
+
+      const tools = await server.listTools()
+      const outputSchema = tools.find((tool) => tool.name === toTransportToolName('schema.any'))?.outputSchema as any
+
+      expect(outputSchema.properties.data.properties.raw.type).toBeUndefined()
+      expect(outputSchema.properties.data.properties.bag.additionalProperties.type).toBeUndefined()
     })
 
     it('should convert top-level union schema to anyOf', async () => {
@@ -171,7 +240,7 @@ describe('MCPServer', () => {
       server.registerTool(toolDefinition, async () => ({ ok: true, data: {} }))
 
       const tools = await server.listTools()
-      const schema = tools.find((tool) => tool.name === 'schema.union')?.inputSchema as any
+      const schema = tools.find((tool) => tool.name === toTransportToolName('schema.union'))?.inputSchema as any
 
       expect(Array.isArray(schema.anyOf)).toBe(true)
       expect(schema.anyOf).toHaveLength(2)
@@ -349,11 +418,13 @@ describe('MCPServer', () => {
       expect(result.isError).toBe(false)
       expect(result.content).toHaveLength(1)
       expect(result.content[0].type).toBe('text')
+      expect(result.structuredContent).toBeDefined()
 
       const textContent = result.content[0] as TextContent
       const parsedResult = JSON.parse(textContent.text)
       expect(parsedResult.ok).toBe(true)
       expect(parsedResult.data.echo).toBe('hello')
+      expect((result.structuredContent as any).data.echo).toBe('hello')
     })
 
     it('should return error for non-existent tool', async () => {
@@ -436,6 +507,57 @@ describe('MCPServer', () => {
       const parsedResult = JSON.parse(textContent.text)
       expect(parsedResult.warnings).toContain('Warning message')
       expect(parsedResult.metrics.elapsed).toBe(100)
+      expect((result.structuredContent as any).warnings).toContain('Warning message')
+      expect((result.structuredContent as any).metrics.elapsed).toBe(100)
+    })
+
+    it('should sanitize structured worker content to match outputSchema', async () => {
+      const toolDefinition = {
+        name: 'test.structured.sanitize',
+        description: 'Structured content sanitization test',
+        inputSchema: z.object({}),
+        outputSchema: z.object({
+          ok: z.boolean(),
+          data: z
+            .object({
+              value: z.string(),
+            })
+            .optional(),
+          metrics: z
+            .object({
+              elapsed_ms: z.number(),
+              tool: z.string(),
+            })
+            .optional(),
+        }),
+      }
+
+      server.registerTool(toolDefinition, async () => ({
+        ok: true,
+        data: {
+          value: 'kept',
+          extra: 'removed',
+        },
+        metrics: {
+          elapsed_ms: 12,
+          tool: 'test.structured.sanitize',
+          cache_key: 'drop-me',
+        },
+      }))
+
+      const result = await server.callTool('test.structured.sanitize', {})
+
+      expect(result.isError).toBe(false)
+      expect(result.structuredContent).toEqual({
+        ok: true,
+        data: {
+          value: 'kept',
+        },
+        metrics: {
+          elapsed_ms: 12,
+          tool: toTransportToolName('test.structured.sanitize'),
+        },
+      })
     })
   })
 
@@ -1085,6 +1207,37 @@ describe('MCPServer', () => {
       expect(parsedResult.errors[0]).toContain('count')
     })
   })
+
+  describe('Tool name aliases', () => {
+    it('should expose underscore transport names and accept both dotted and underscore calls', async () => {
+      const toolDefinition = {
+        name: 'sample.ingest',
+        description: 'Alias test tool',
+        inputSchema: z.object({
+          value: z.string(),
+        }),
+      }
+
+      server.registerTool(toolDefinition, async (args: any) => ({
+        ok: true,
+        data: {
+          echoed: args.value,
+          recommended_next_tools: ['workflow.analyze.start', 'task.status'],
+        },
+      }))
+
+      const tools = await server.listTools()
+      expect(tools.map((tool) => tool.name)).toContain('sample_ingest')
+
+      const dottedCall = await server.callTool('sample.ingest', { value: 'dotted' })
+      const underscoreCall = await server.callTool('sample_ingest', { value: 'underscore' })
+
+      expect((dottedCall.structuredContent as any)?.data?.echoed).toBe('dotted')
+      expect((underscoreCall.structuredContent as any)?.data?.echoed).toBe('underscore')
+      expect((underscoreCall.structuredContent as any)?.data?.recommended_next_tools).toEqual([
+        'workflow_analyze_start',
+        'task_status',
+      ])
+    })
+  })
 })
-
-

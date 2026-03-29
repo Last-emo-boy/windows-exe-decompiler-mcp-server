@@ -289,6 +289,15 @@ const ReconstructedFunctionSchema = z.object({
   assembly_excerpt: z.string(),
 })
 type ReconstructedFunction = z.infer<typeof ReconstructedFunctionSchema>
+type FunctionXrefSignal = z.infer<typeof FunctionXrefSignalSchema>
+type FunctionRelationshipEntry = z.infer<typeof FunctionRelationshipEntrySchema>
+type FunctionRuntimeContext = z.infer<typeof FunctionRuntimeContextSchema>
+type FunctionCFGShape = z.infer<typeof FunctionCFGShapeSchema>
+type FunctionParameterRole = z.infer<typeof FunctionParameterRoleSchema>
+type FunctionReturnRole = z.infer<typeof FunctionReturnRoleSchema>
+type FunctionStateRole = z.infer<typeof FunctionStateRoleSchema>
+type FunctionStructInference = z.infer<typeof FunctionStructInferenceSchema>
+type FunctionNameResolution = z.infer<typeof FunctionNameResolutionSchema>
 
 export const CodeFunctionsReconstructOutputSchema = z.object({
   ok: z.boolean(),
@@ -402,52 +411,16 @@ interface SemanticEvidencePack {
   function_name: string
   address: string
   semantic_summary: string
-  xref_signals: FunctionXrefSummary[]
+  xref_signals: FunctionXrefSignal[]
   call_relationships: RelationshipContext
-  runtime_context: ReturnType<typeof correlateFunctionWithRuntimeEvidence> | undefined
+  runtime_context: FunctionRuntimeContext | undefined
   string_hints: string[]
   pseudocode_excerpt: string
-  cfg_shape: {
-    node_count: number
-    edge_count: number
-    has_loop: boolean
-    has_branching: boolean
-    block_types: string[]
-    entry_block_type: string | null
-  }
-  parameter_roles: Array<{
-    slot: string
-    role: string
-    inferred_type: string
-    confidence: number
-    evidence: string[]
-  }>
-  return_role?:
-    | {
-        role: string
-        inferred_type: string
-        confidence: number
-        evidence: string[]
-      }
-    | null
-  state_roles: Array<{
-    state_key: string
-    role: string
-    confidence: number
-    evidence: string[]
-  }>
-  struct_inference: Array<{
-    semantic_name: string
-    rewrite_type_name?: string | null
-    kind: 'request' | 'result' | 'context' | 'table' | 'session'
-    confidence: number
-    fields: Array<{
-      name: string
-      inferred_type: string
-      source_slot?: string | null
-    }>
-    evidence: string[]
-  }>
+  cfg_shape: FunctionCFGShape
+  parameter_roles: FunctionParameterRole[]
+  return_role?: FunctionReturnRole | null
+  state_roles: FunctionStateRole[]
+  struct_inference: FunctionStructInference[]
 }
 
 interface ConstrainedSemanticNameSuggestion {
@@ -535,15 +508,8 @@ const LINKED_SUGGESTION_PRIORITY_PREFIXES = [
   'finalize_',
 ] as const
 
-interface RelationshipSummaryEntry {
-  target: string
-  relation_types: string[]
-  reference_types: string[]
-  resolved_by: string | null
-  is_exact: boolean | null
-}
-
-interface RelationshipContext {
+type RelationshipSummaryEntry = FunctionRelationshipEntry
+type RelationshipContext = {
   callers: RelationshipSummaryEntry[]
   callees: RelationshipSummaryEntry[]
 }
@@ -2381,16 +2347,7 @@ export function buildDefaultSemanticNameSuggestion(
 
 function withNameResolutionHeader(
   sourceLikeSnippet: string,
-  nameResolution:
-    | {
-        rule_based_name: string | null
-        llm_suggested_name: string | null
-        validated_name: string | null
-        resolution_source: 'rule' | 'llm' | 'hybrid' | 'unresolved'
-        unresolved_semantic_name: boolean
-      }
-    | null
-    | undefined
+  nameResolution: FunctionNameResolution | null | undefined
 ): string {
   const baseLines = sourceLikeSnippet
     .split(/\r?\n/)
@@ -2422,7 +2379,10 @@ async function finalizeLayeredNameResolution(
     address: func.address,
     semantic_summary: func.semantic_summary,
     xref_signals: func.xref_signals,
-    call_relationships: func.call_relationships,
+    call_relationships: {
+      callers: func.call_relationships?.callers || [],
+      callees: func.call_relationships?.callees || [],
+    },
     runtime_context: func.runtime_context || undefined,
     string_hints: func.semantic_evidence?.string_hints || [],
     pseudocode_excerpt:

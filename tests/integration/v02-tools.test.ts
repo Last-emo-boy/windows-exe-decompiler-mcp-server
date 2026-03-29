@@ -24,13 +24,9 @@ const __dirname = path.dirname(__filename);
 
 describe('V0.2 Tools Integration Tests', () => {
   let database: DatabaseManager;
-  // @ts-expect-error - These are initialized for future integration tests
   let workspaceManager: WorkspaceManager;
-  // @ts-expect-error - These are initialized for future integration tests
   let policyGuard: PolicyGuard;
-  // @ts-expect-error - These are initialized for future integration tests
   let cacheManager: CacheManager;
-  // @ts-expect-error - These are initialized for future integration tests
   let server: MCPServer;
   let testDbPath: string;
   let testWorkspaceRoot: string;

@@ -6,5 +6,6 @@ pefile==2024.8.26
 lief==0.17.5
 flare-capa==9.3.1
 yara-python==4.5.4
+yara-x==1.14.0
 flare-floss==3.1.1
 dnfile==0.18.0

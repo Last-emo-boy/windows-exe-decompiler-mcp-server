@@ -328,6 +328,83 @@ describe('sample.ingest tool', () => {
     })
   })
 
+  describe('Upload URL compatibility', () => {
+    test('should finalize an uploaded session from upload_url', async () => {
+      const stagedData = Buffer.from('MZ\x90\x00\x03\x00\x00\x00')
+      const stagedPath = path.join(testDir, 'staged-Weixin.dll')
+      fs.writeFileSync(stagedPath, stagedData)
+
+      const session = database.createUploadSession({
+        filename: 'Weixin.dll',
+        source: 'mcp_upload',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      })
+      database.markUploadSessionUploaded(session.token, {
+        staged_path: stagedPath,
+        size: stagedData.length,
+        filename: 'Weixin.dll',
+      })
+
+      const result = await handler({
+        upload_url: `http://localhost:18080/api/v1/uploads/${session.token}`,
+      })
+      const data = result.data as SampleIngestOutput['data']
+
+      expect(result.ok).toBe(true)
+      expect(data?.sample_id).toMatch(/^sha256:[a-f0-9]{64}$/)
+      expect(data?.file_type).toBe('PE')
+      expect(fs.existsSync(stagedPath)).toBe(false)
+
+      const refreshed = database.findUploadSessionByToken(session.token)
+      expect(refreshed?.status).toBe('registered')
+      expect(refreshed?.sample_id).toBe(data?.sample_id)
+    })
+
+    test('should return existing sample for a registered upload session', async () => {
+      const ingestResult = await handler({
+        bytes_b64: Buffer.from('MZ\x90\x00\x03\x00\x00\x00').toString('base64'),
+        filename: 'existing.exe',
+      })
+      const ingestData = ingestResult.data as SampleIngestOutput['data']
+
+      const session = database.createUploadSession({
+        filename: 'existing.exe',
+        source: 'mcp_upload',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      })
+      database.markUploadSessionRegistered(session.token, {
+        sample_id: ingestData?.sample_id as string,
+        size: ingestData?.size,
+        sha256: (ingestData?.sample_id as string).slice(7),
+        md5: 'ignored',
+      })
+
+      const result = await handler({
+        upload_url: `http://localhost:18080/api/v1/uploads/${session.token}`,
+      })
+      const data = result.data as SampleIngestOutput['data']
+
+      expect(result.ok).toBe(true)
+      expect(data?.sample_id).toBe(ingestData?.sample_id)
+      expect(data?.existed).toBe(true)
+    })
+
+    test('should reject pending upload sessions that have no uploaded bytes', async () => {
+      const session = database.createUploadSession({
+        filename: 'pending.dll',
+        source: 'mcp_upload',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      })
+
+      const result = await handler({
+        upload_url: `http://localhost:18080/api/v1/uploads/${session.token}`,
+      })
+
+      expect(result.ok).toBe(false)
+      expect(result.errors?.[0]).toContain('File not yet uploaded')
+    })
+  })
+
   describe('File type detection', () => {
     test('should detect PE file type', async () => {
       const peData = Buffer.from('MZ\x90\x00\x03\x00\x00\x00')

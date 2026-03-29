@@ -136,8 +136,15 @@ describe('system.health tool', () => {
     expect(data.components.ghidra.status).toBe('healthy')
     expect(data.components.static_worker.status).toBe('healthy')
     expect(data.components.cache.status).toBe('healthy')
+    expect(data.components.static_worker.details.external_backends).toHaveProperty('graphviz')
+    expect(data.components.static_worker.details.external_backends).toHaveProperty('rizin')
+    expect(data.components.static_worker.details.external_backends).toHaveProperty('qiling')
+    expect(data.components.static_worker.details.external_backends).toHaveProperty('retdec')
     expect(data.cache_observability.key).toContain('health_cache_probe_')
     expect(data.cache_observability.hit_at).toBeTruthy()
+    expect(data.result_mode).toBe('environment_health')
+    expect(data.tool_surface_role).toBe('primary')
+    expect(data.recommended_next_tools).toContain('workflow.analyze.start')
   })
 
   test('should return degraded when optional component fails', async () => {
@@ -160,6 +167,8 @@ describe('system.health tool', () => {
     expect(data.setup_actions.map((item: any) => item.id)).toContain('set_ghidra_path')
     expect(data.required_user_inputs.map((item: any) => item.key)).toContain('java_home')
     expect(data.required_user_inputs.map((item: any) => item.key)).toContain('ghidra_install_dir')
+    expect(data.recommended_next_tools).toContain('system.setup.guide')
+    expect(data.next_actions[0]).toContain('setup_actions')
   })
 
   test('should return unhealthy when essential component fails', async () => {

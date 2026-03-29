@@ -1291,4 +1291,178 @@ describe('workflow.reconstruct tool', () => {
       'ghidra_install_dir'
     )
   })
+
+  test('should attach alternate backend summaries when reverse corroboration is selected', async () => {
+    const sampleId = 'sha256:' + '8'.repeat(64)
+    await setupSample(sampleId, '8')
+
+    const handler = createReconstructWorkflowHandler(workspaceManager, database, cacheManager, {
+      runtimeDetectHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          is_dotnet: false,
+          suspected: [{ runtime: 'native', confidence: 0.81, evidence: ['imports'] }],
+        },
+      }),
+      binaryRoleProfileHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: createBinaryProfilePayload(sampleId),
+      }),
+      dllExportProfileHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          library_like: true,
+          role_confidence: 0.6,
+          likely_entry_model: 'dllmain',
+          dll_entry_hints: ['DllMain present'],
+          export_dispatch_profile: {
+            likely_dispatch_model: 'exports',
+          },
+          host_interaction_profile: {
+            host_hints: [],
+          },
+          lifecycle_surface: { exports: [], suspicious_behaviors: [], entry_callbacks: [] },
+          class_factory_surface: [],
+          callback_surface: [],
+          analysis_priorities: [],
+        },
+      }),
+      comRoleProfileHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          likely_com_server: false,
+          com_confidence: 0.05,
+          activation_model: 'none',
+          class_factory_exports: [],
+          registration_exports: [],
+          clsid_strings: [],
+          progid_strings: [],
+          interface_hints: [],
+          class_factory_surface: [],
+          activation_steps: [],
+          analysis_priorities: [],
+        },
+      }),
+      rustBinaryAnalyzeHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: createRustProfilePayload(sampleId),
+      }),
+      functionIndexRecoverHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          applied: true,
+          define_from: 'smart_recover',
+          recovered_function_count: 6,
+          recovered_symbol_count: 6,
+          imported_count: 6,
+          function_index_status: 'ready',
+          decompile_status: 'missing',
+          cfg_status: 'missing',
+          recovery_strategy: ['smart_recover'],
+          next_steps: ['export'],
+        },
+      }),
+      planHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          feasibility: 'low',
+          confidence: 0.44,
+          restoration_expectation: 'partial only',
+          blockers: ['weak function coverage'],
+          recommendations: ['use alternate backends'],
+        },
+      }),
+      nativeExportHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          export_root: 'reports/reconstruct/alt',
+          manifest_path: 'reports/reconstruct/alt/manifest.json',
+          gaps_path: 'reports/reconstruct/alt/gaps.md',
+          notes_path: 'reports/reconstruct/alt/reverse_notes.md',
+          module_count: 1,
+          unresolved_count: 12,
+          degraded_mode: true,
+          binary_profile: {
+            binary_role: 'executable',
+            original_filename: 'alt.exe',
+            export_count: 0,
+            forwarder_count: 0,
+            notable_exports: [],
+            packed: false,
+            packing_confidence: 0.1,
+            analysis_priorities: ['recover_functions'],
+          },
+        },
+      }),
+      rizinAnalyzeHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          status: 'ready',
+          operation: 'functions',
+          item_count: 12,
+          preview: [{ name: 'sub_140001000' }],
+          summary: 'Rizin function inspection complete.',
+          recommended_next_tools: [],
+          next_actions: [],
+        },
+      }),
+      angrAnalyzeHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          status: 'ready',
+          analysis: 'cfg_fast',
+          function_count: 18,
+          functions: [{ name: 'entry', address: '0x401000' }],
+          summary: 'angr CFGFast complete.',
+          recommended_next_tools: [],
+          next_actions: [],
+        },
+      }),
+      retdecDecompileHandler: jest.fn<(args: ToolArgs) => Promise<WorkerResult>>().mockResolvedValue({
+        ok: true,
+        data: {
+          status: 'ready',
+          output_format: 'plain',
+          preview: { inline_text: 'int main() {}', truncated: false, char_count: 14 },
+          summary: 'RetDec output ready.',
+          recommended_next_tools: [],
+          next_actions: [],
+        },
+      }),
+      resolveBackends: () => ({
+        capa_cli: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        capa_rules: { available: false, source: 'none', path: null, error: null },
+        die: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        graphviz: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        rizin: { available: true, source: 'path', path: '/tool/rizin', version: '1', checked_candidates: ['rizin'], error: null },
+        upx: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        wine: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        winedbg: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        frida_cli: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        yara_x: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        qiling: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        angr: { available: true, source: 'path', path: '/tool/angr-python', version: '1', checked_candidates: ['python3'], error: null },
+        panda: { available: false, source: 'none', path: null, version: null, checked_candidates: [], error: null },
+        retdec: { available: true, source: 'path', path: '/tool/retdec', version: '1', checked_candidates: ['retdec'], error: null },
+      }),
+    })
+
+    const result = await handler({
+      sample_id: sampleId,
+      path: 'native',
+      depth: 'deep',
+      backend_policy: 'prefer_new',
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.backend_selected.map((item: any) => item.tool)).toEqual(
+      expect.arrayContaining(['rizin.analyze', 'angr.analyze', 'retdec.decompile'])
+    )
+    expect(data.alternate_backends.rizin.operation).toBe('functions')
+    expect(data.alternate_backends.angr.analysis).toBe('cfg_fast')
+    expect(data.alternate_backends.retdec.output_format).toBe('plain')
+    expect(data.notes.join(' ')).toContain('Rizin corroboration')
+    expect(data.notes.join(' ')).toContain('RetDec alternate decompilation')
+  })
 })

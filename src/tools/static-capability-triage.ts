@@ -64,7 +64,7 @@ export const staticCapabilityTriageInputSchema = z.object({
     .int()
     .min(10)
     .max(600)
-    .default(120)
+    .default(300)
     .describe('Maximum capa execution time in seconds'),
   persist_artifact: z
     .boolean()
@@ -129,7 +129,10 @@ export const staticCapabilityTriageToolDefinition: ToolDefinition = {
 }
 
 interface StaticCapabilityTriageDependencies {
-  callWorker?: (request: ReturnType<typeof buildStaticWorkerRequest>) => Promise<StaticWorkerResponse>
+  callWorker?: (
+    request: ReturnType<typeof buildStaticWorkerRequest>,
+    options?: { database?: DatabaseManager; family?: string }
+  ) => Promise<StaticWorkerResponse>
 }
 
 function normalizeBackend(rawBackend: unknown) {
@@ -210,7 +213,10 @@ export function createStaticCapabilityTriageHandler(
         },
         toolVersion: TOOL_VERSION,
       })
-      const workerResponse = await callWorker(workerRequest)
+      const workerResponse = await callWorker(workerRequest, {
+        database,
+        family: 'static_python.preview',
+      })
       if (!workerResponse.ok || !workerResponse.data || typeof workerResponse.data !== 'object') {
         return {
           ok: false,

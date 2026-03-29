@@ -170,6 +170,19 @@ describe('code.function.rename.review tool', () => {
           ],
         },
       })
+    const samplingRequester = jest.fn(async (): Promise<any> => ({
+      role: 'assistant',
+      model: 'generic-tool-calling-llm',
+      stopReason: 'endTurn',
+      content: {
+        type: 'text',
+        text: [
+          '```json',
+          '{"suggestions":[{"address_or_function":"0x1400d0580","candidate_name":"scan_packer_layout_and_signatures","confidence":0.82,"why":"Uses packer strings and scan-oriented evidence.","required_assumptions":["The string cluster belongs to the same control path."],"evidence_used":["strings:Packer/Protector Detection","xref:GetProcAddress"]}]}',
+          '```',
+        ].join('\n'),
+      },
+    }))
 
     const handler = createCodeFunctionRenameReviewHandler(
       workspaceManager,
@@ -180,19 +193,7 @@ describe('code.function.rename.review tool', () => {
         prepareHandler,
         applyHandler,
         reconstructHandler,
-        samplingRequester: async () => ({
-          role: 'assistant',
-          model: 'generic-tool-calling-llm',
-          stopReason: 'endTurn',
-          content: {
-            type: 'text',
-            text: [
-              '```json',
-              '{"suggestions":[{"address_or_function":"0x1400d0580","candidate_name":"scan_packer_layout_and_signatures","confidence":0.82,"why":"Uses packer strings and scan-oriented evidence.","required_assumptions":["The string cluster belongs to the same control path."],"evidence_used":["strings:Packer/Protector Detection","xref:GetProcAddress"]}]}',
-              '```',
-            ].join('\n'),
-          },
-        }),
+        samplingRequester: samplingRequester as any,
         clientCapabilitiesProvider: () => ({
           sampling: {},
         }),
@@ -254,6 +255,11 @@ describe('code.function.rename.review tool', () => {
         semantic_session_tag: 'semantic-reference',
       })
     )
+    expect(samplingRequester).toHaveBeenCalledTimes(1)
+    const samplingParams = (samplingRequester.mock.calls as any[][])[0]?.[0] as any
+    expect(samplingParams.systemPrompt).toContain('Do not wrap the response in markdown')
+    expect(samplingParams.systemPrompt).toContain('Do not call tools')
+    expect(samplingParams.systemPrompt).toContain('Preserve uncertainty explicitly')
   })
 
   test('rerun reconstruct should default to the current naming session when semantic scope is not explicitly narrowed', async () => {

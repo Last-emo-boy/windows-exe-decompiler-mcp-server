@@ -39,6 +39,35 @@ export const ghidraAnalyzeInputSchema = z.object({
 
 export type GhidraAnalyzeInput = z.infer<typeof ghidraAnalyzeInputSchema>;
 
+const GhidraAnalyzeDataSchema = z.object({
+  analysis_id: z.string(),
+  job_id: z.string().optional(),
+  backend: z.string(),
+  function_count: z.number().int().nonnegative(),
+  project_path: z.string(),
+  status: z.string(),
+  polling_guidance: PollingGuidanceSchema.nullable().optional(),
+  capabilities: z
+    .object({
+      function_index: z.any(),
+      decompile: z.any(),
+      cfg: z.any(),
+    })
+    .optional(),
+  result_mode: z.enum(['queued', 'reused', 'completed', 'partial_success']),
+  recommended_next_tools: z.array(z.string()),
+  next_actions: z.array(z.string()),
+})
+
+export const ghidraAnalyzeOutputSchema = z.object({
+  ok: z.boolean(),
+  data: GhidraAnalyzeDataSchema.optional(),
+  diagnostics: z.any().optional(),
+  normalized_error: z.any().optional(),
+  errors: z.array(z.string()).optional(),
+  warnings: z.array(z.string()).optional(),
+})
+
 /**
  * Output schema for ghidra.analyze tool
  * Requirements: 8.2, 8.3
@@ -58,6 +87,9 @@ export interface GhidraAnalyzeOutput {
       decompile: unknown;
       cfg: unknown;
     };
+    result_mode?: 'queued' | 'reused' | 'completed' | 'partial_success';
+    recommended_next_tools?: string[];
+    next_actions?: string[];
   };
   diagnostics?: unknown;
   normalized_error?: unknown;
@@ -71,8 +103,17 @@ export interface GhidraAnalyzeOutput {
  */
 export const ghidraAnalyzeToolDefinition: ToolDefinition = {
   name: 'ghidra.analyze',
-  description: 'Analyze a binary sample with Ghidra Headless and extract function list. This is a long-running operation that may take several minutes depending on sample size.',
-  inputSchema: ghidraAnalyzeInputSchema
+  description:
+    'Start or reuse deep static analysis with Ghidra Headless to extract function indexes and unlock decompile/CFG workflows. ' +
+    'Use this after a sample has been registered and you need code-level reverse engineering, not just quick profiling. ' +
+    'Do not use this as the first host-file ingest step or as a health check. ' +
+    '\n\nDecision guide:\n' +
+    '- Use when: you need function-level reverse engineering, decompilation, or reconstruction prerequisites.\n' +
+    '- Do not use when: the sample is not ingested yet or you only need a fast triage profile.\n' +
+    '- Typical next step: if status=queued, poll task.status(job_id); if completed/reused, continue with workflow.reconstruct, code.functions.list, or code.function.decompile.\n' +
+    '- Common mistake: assuming this tool is always synchronous and skipping task.status when a queue-backed client is active.',
+  inputSchema: ghidraAnalyzeInputSchema,
+  outputSchema: ghidraAnalyzeOutputSchema,
 };
 
 /**
@@ -90,6 +131,20 @@ export function createGhidraAnalyzeHandler(
   database: DatabaseManager,
   jobQueue?: JobQueue
 ): ToolHandler {
+  const buildJsonResult = (
+    payload: GhidraAnalyzeOutput,
+    isError = false
+  ): ToolResult => ({
+    content: [
+      {
+        type: 'text',
+        text: JSON.stringify(payload, null, 2),
+      },
+    ],
+    structuredContent: payload as unknown as Record<string, unknown>,
+    isError,
+  })
+
   return async (args: unknown): Promise<ToolResult> => {
     try {
       // Validate input
@@ -103,16 +158,13 @@ export function createGhidraAnalyzeHandler(
       // Check if sample exists
       const sample = database.findSample(input.sample_id);
       if (!sample) {
-        return {
-          content: [{
-            type: 'text',
-            text: JSON.stringify({
-              ok: false,
-              errors: [`Sample not found: ${input.sample_id}`]
-            }, null, 2)
-          }],
-          isError: true
-        };
+        return buildJsonResult(
+          {
+            ok: false,
+            errors: [`Sample not found: ${input.sample_id}`],
+          },
+          true
+        );
       }
 
       // Create decompiler worker
@@ -148,6 +200,16 @@ export function createGhidraAnalyzeHandler(
               typeof metadata.project_path === 'string' ? metadata.project_path : '',
             status: 'reused',
             capabilities: getGhidraReadiness(reusableAnalysis),
+            result_mode: 'reused',
+            recommended_next_tools: [
+              'workflow.reconstruct',
+              'code.functions.list',
+              'code.function.decompile',
+            ],
+            next_actions: [
+              'Use workflow.reconstruct for source-like reconstruction over the completed Ghidra analysis.',
+              'Use code.functions.list or code.function.decompile when you need direct function-level inspection.',
+            ],
           },
           warnings: [
             input.options?.project_key
@@ -156,14 +218,7 @@ export function createGhidraAnalyzeHandler(
           ],
         }
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(reusedOutput, null, 2),
-            },
-          ],
-        }
+        return buildJsonResult(reusedOutput)
       }
 
       // Convert timeout from seconds to milliseconds
@@ -216,17 +271,16 @@ export function createGhidraAnalyzeHandler(
               progress: 0,
               timeout_ms: timeoutMs,
             }),
+            result_mode: 'queued',
+            recommended_next_tools: ['task.status'],
+            next_actions: [
+              'Wait for approximately the recommended polling interval before querying task.status.',
+              'Call task.status with the returned job_id until the analysis completes, fails, or is cancelled.',
+            ],
           }
         };
 
-        return {
-          content: [
-            {
-              type: 'text',
-              text: JSON.stringify(output, null, 2)
-            }
-          ]
-        };
+        return buildJsonResult(output);
       }
 
       // Otherwise, execute synchronously
@@ -246,18 +300,21 @@ export function createGhidraAnalyzeHandler(
           project_path: result.projectPath,
           status: result.status === 'partial_success' ? 'partial_success' : 'completed',
           capabilities: result.readiness,
+          result_mode: result.status === 'partial_success' ? 'partial_success' : 'completed',
+          recommended_next_tools: [
+            'workflow.reconstruct',
+            'code.functions.list',
+            'code.function.decompile',
+          ],
+          next_actions: [
+            'Use workflow.reconstruct for source-like reconstruction over the completed Ghidra analysis.',
+            'Use code.functions.list or code.function.decompile when you need direct function-level inspection.',
+          ],
         },
         warnings: result.warnings,
       };
 
-      return {
-        content: [
-          {
-            type: 'text',
-            text: JSON.stringify(output, null, 2)
-          }
-        ]
-      };
+      return buildJsonResult(output);
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
@@ -276,13 +333,7 @@ export function createGhidraAnalyzeHandler(
         errors: [errorMessage]
       };
 
-      return {
-        content: [{
-          type: 'text',
-          text: JSON.stringify(output, null, 2)
-        }],
-        isError: true
-      };
+      return buildJsonResult(output, true);
     }
   };
 }

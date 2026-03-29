@@ -72,10 +72,17 @@ describe('sample.profile.get tool', () => {
       created_at: '2024-01-01T00:00:00Z',
       source: 'upload',
     })
+    expect(data.analysis_summary).toEqual({
+      detail: 'compact',
+      total_count: 0,
+      returned_count: 0,
+      analyses_truncated: false,
+      json_preview_chars: 2048,
+    })
     expect(data.analyses).toEqual([])
   })
 
-  test('should retrieve sample profile with completed analyses', async () => {
+  test('should retrieve sample profile with completed analyses in compact mode by default', async () => {
     // Insert a test sample
     const sample: Sample = {
       id: 'sha256:abc123',
@@ -124,6 +131,13 @@ describe('sample.profile.get tool', () => {
     
     const data = result.data as any
     expect(data.sample.id).toBe('sha256:abc123')
+    expect(data.analysis_summary).toEqual({
+      detail: 'compact',
+      total_count: 2,
+      returned_count: 2,
+      analyses_truncated: false,
+      json_preview_chars: 2048,
+    })
     expect(data.analyses).toHaveLength(2)
     
     // Check first analysis (most recent first)
@@ -134,8 +148,14 @@ describe('sample.profile.get tool', () => {
       status: 'done',
       started_at: '2024-01-01T00:02:00Z',
       finished_at: '2024-01-01T00:02:10Z',
-      output_json: JSON.stringify({ strings: ['test', 'hello'] }),
-      metrics_json: JSON.stringify({ elapsed_ms: 10000 }),
+      output_json: undefined,
+      metrics_json: undefined,
+      output_json_preview: JSON.stringify({ strings: ['test', 'hello'] }),
+      metrics_json_preview: JSON.stringify({ elapsed_ms: 10000 }),
+      output_json_bytes: Buffer.byteLength(JSON.stringify({ strings: ['test', 'hello'] }), 'utf8'),
+      metrics_json_bytes: Buffer.byteLength(JSON.stringify({ elapsed_ms: 10000 }), 'utf8'),
+      output_json_truncated: false,
+      metrics_json_truncated: false,
     })
 
     // Check second analysis
@@ -146,8 +166,61 @@ describe('sample.profile.get tool', () => {
       status: 'done',
       started_at: '2024-01-01T00:01:00Z',
       finished_at: '2024-01-01T00:01:05Z',
-      output_json: JSON.stringify({ imphash: 'test123' }),
-      metrics_json: JSON.stringify({ elapsed_ms: 5000 }),
+      output_json: undefined,
+      metrics_json: undefined,
+      output_json_preview: JSON.stringify({ imphash: 'test123' }),
+      metrics_json_preview: JSON.stringify({ elapsed_ms: 5000 }),
+      output_json_bytes: Buffer.byteLength(JSON.stringify({ imphash: 'test123' }), 'utf8'),
+      metrics_json_bytes: Buffer.byteLength(JSON.stringify({ elapsed_ms: 5000 }), 'utf8'),
+      output_json_truncated: false,
+      metrics_json_truncated: false,
+    })
+  })
+
+  test('should return full analysis payloads when analysis_detail=full', async () => {
+    const sample: Sample = {
+      id: 'sha256:full123',
+      sha256: 'full123',
+      md5: 'full456',
+      size: 1024,
+      file_type: 'PE',
+      created_at: '2024-01-01T00:00:00Z',
+      source: 'upload',
+    }
+    database.insertSample(sample)
+
+    database.insertAnalysis({
+      id: 'analysis-full',
+      sample_id: sample.id,
+      stage: 'strings',
+      backend: 'static',
+      status: 'done',
+      started_at: '2024-01-01T00:02:00Z',
+      finished_at: '2024-01-01T00:02:10Z',
+      output_json: JSON.stringify({ strings: ['test', 'hello'] }),
+      metrics_json: JSON.stringify({ elapsed_ms: 10000 }),
+    })
+
+    const result = await handler({ sample_id: sample.id, analysis_detail: 'full' })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.analysis_summary.detail).toBe('full')
+    expect(data.analyses[0]).toEqual({
+      id: 'analysis-full',
+      stage: 'strings',
+      backend: 'static',
+      status: 'done',
+      started_at: '2024-01-01T00:02:00Z',
+      finished_at: '2024-01-01T00:02:10Z',
+      output_json: JSON.stringify({ strings: ['test', 'hello'] }),
+      metrics_json: JSON.stringify({ elapsed_ms: 10000 }),
+      output_json_preview: undefined,
+      metrics_json_preview: undefined,
+      output_json_bytes: Buffer.byteLength(JSON.stringify({ strings: ['test', 'hello'] }), 'utf8'),
+      metrics_json_bytes: Buffer.byteLength(JSON.stringify({ elapsed_ms: 10000 }), 'utf8'),
+      output_json_truncated: undefined,
+      metrics_json_truncated: undefined,
     })
   })
 
@@ -231,6 +304,12 @@ describe('sample.profile.get tool', () => {
       finished_at: undefined,
       output_json: undefined,
       metrics_json: undefined,
+      output_json_preview: undefined,
+      metrics_json_preview: undefined,
+      output_json_bytes: undefined,
+      metrics_json_bytes: undefined,
+      output_json_truncated: undefined,
+      metrics_json_truncated: undefined,
     })
   })
 
@@ -271,6 +350,13 @@ describe('sample.profile.get tool', () => {
     expect(result.data).toBeDefined()
     
     const data = result.data as any
+    expect(data.analysis_summary).toEqual({
+      detail: 'compact',
+      total_count: 5,
+      returned_count: 5,
+      analyses_truncated: false,
+      json_preview_chars: 2048,
+    })
     expect(data.analyses).toHaveLength(5)
     
     // Verify all analyses are present
@@ -315,7 +401,8 @@ describe('sample.profile.get tool', () => {
     expect(data.analyses).toHaveLength(1)
     expect(data.analyses[0].status).toBe('failed')
     expect(data.analyses[0].finished_at).toBeDefined()
-    expect(data.analyses[0].output_json).toContain('"stale_reaped":true')
+    expect(data.analyses[0].output_json).toBeUndefined()
+    expect(data.analyses[0].output_json_preview).toContain('"stale_reaped":true')
   })
 
   test('should not auto-reap running analyses when stale_running_ms is omitted', async () => {
@@ -377,6 +464,67 @@ describe('sample.profile.get tool', () => {
     expect(data.workspace.status).toBe('original_file_missing')
     expect(data.workspace.original_present).toBe(false)
     expect(data.workspace.original_file_count).toBe(0)
+    expect(data.workspace.original_file_list_truncated).toBe(false)
+    expect(data.workspace.alternate_original_file_count).toBe(0)
+    expect(data.workspace.alternate_original_file_list_truncated).toBe(false)
     expect(data.workspace.remediation.some((item: string) => item.includes('sample.ingest'))).toBe(true)
+  })
+
+  test('should bound analysis previews and workspace file lists in compact mode', async () => {
+    const hash = 'b'.repeat(64)
+    const sample: Sample = {
+      id: `sha256:${hash}`,
+      sha256: hash,
+      md5: 'b'.repeat(32),
+      size: 4096,
+      file_type: 'PE',
+      created_at: '2024-01-06T00:00:00Z',
+      source: 'upload',
+    }
+    database.insertSample(sample)
+
+    const largeJson = JSON.stringify({ blob: 'A'.repeat(400) })
+    for (let i = 1; i <= 4; i++) {
+      database.insertAnalysis({
+        id: `analysis-bounded-${i}`,
+        sample_id: sample.id,
+        stage: `stage-${i}`,
+        backend: 'static',
+        status: 'done',
+        started_at: `2024-01-06T00:0${i}:00Z`,
+        finished_at: `2024-01-06T00:0${i}:30Z`,
+        output_json: largeJson,
+        metrics_json: JSON.stringify({ elapsed_ms: i * 1000 }),
+      })
+    }
+
+    const workspace = await workspaceManager.createWorkspace(sample.id)
+    for (let i = 1; i <= 5; i++) {
+      fs.writeFileSync(`${workspace.original}/sample-${i}.bin`, `payload-${i}`)
+    }
+
+    const result = await handler({
+      sample_id: sample.id,
+      max_analyses: 2,
+      json_preview_chars: 128,
+      workspace_file_preview_limit: 2,
+    })
+
+    expect(result.ok).toBe(true)
+    const data = result.data as any
+    expect(data.analysis_summary).toEqual({
+      detail: 'compact',
+      total_count: 4,
+      returned_count: 2,
+      analyses_truncated: true,
+      json_preview_chars: 128,
+    })
+    expect(data.analyses).toHaveLength(2)
+    expect(data.analyses[0].output_json_preview.length).toBeLessThanOrEqual(129)
+    expect(data.analyses[0].output_json_preview.endsWith('…')).toBe(true)
+    expect(data.analyses[0].output_json_truncated).toBe(true)
+    expect(data.workspace.original_file_count).toBe(5)
+    expect(data.workspace.original_files).toHaveLength(2)
+    expect(data.workspace.original_file_list_truncated).toBe(true)
   })
 })

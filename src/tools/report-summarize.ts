@@ -4,9 +4,9 @@
  */
 
 import { z } from 'zod'
-import type { ToolDefinition, ToolArgs, WorkerResult } from '../types.js'
+import type { ArtifactRef, ToolDefinition, ToolArgs, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
-import type { DatabaseManager } from '../database.js'
+import type { Artifact, DatabaseManager, Function as DbFunction } from '../database.js'
 import type { CacheManager } from '../cache-manager.js'
 import {
   BinaryRoleProfileDataSchema,
@@ -50,8 +50,58 @@ import {
   GhidraExecutionSummarySchema,
   buildGhidraExecutionSummary,
 } from '../ghidra-execution-summary.js'
+import {
+  BinaryProfileSummarySchema,
+  RustProfileSummarySchema,
+  StaticCapabilitySummarySchema,
+  PEStructureSummaryDigestSchema,
+  CompilerPackerSummaryDigestSchema,
+  SemanticExplanationDigestSchema,
+  ExplanationGraphSummarySchema,
+  SummaryArtifactRefSchema,
+  DigestTruncationSchema,
+  buildArtifactRefFromParts,
+  buildTriageStageDigest,
+  buildStaticStageDigest,
+  dedupeArtifactRefs,
+  limitArray,
+  truncateText,
+} from '../summary-digests.js'
+import {
+  CoverageEnvelopeSchema,
+  buildCoverageEnvelope,
+  classifySampleSizeTier,
+} from '../analysis-coverage.js'
+import {
+  ExplanationGraphDigestSchema,
+  type ExplanationGraphArtifact,
+  type ExplanationGraphDigest,
+  attachExplanationArtifactRef,
+  buildRuntimeStageExplanationGraph,
+  persistExplanationGraphArtifact,
+} from '../explanation-graphs.js'
+import { generateCallGraph } from '../visualization/call-graph.js'
+import { generateDataFlow } from '../visualization/data-flow.js'
+import { generateCryptoFlow } from '../visualization/crypto-flow.js'
+import {
+  CRYPTO_IDENTIFICATION_ARTIFACT_TYPE,
+  loadCryptoPlanningArtifactSelection,
+} from '../crypto-planning-artifacts.js'
+import { CryptoFindingSchema } from '../crypto-breakpoint-analysis.js'
+import { ToolSurfaceRoleSchema } from '../tool-surface-guidance.js'
+import {
+  ANALYSIS_DIFF_DIGEST_ARTIFACT_TYPE,
+  AnalysisDiffDigestSchema,
+  DebugStateSchema,
+  loadUnpackDebugArtifactSelection,
+  PackedStateSchema,
+  UnpackStateSchema,
+} from '../unpack-debug-runtime.js'
 
 const TOOL_NAME = 'report.summarize'
+const REPORT_INLINE_PAYLOAD_BUDGET_CHARS = 180_000
+
+type ReportSummarizeData = NonNullable<z.infer<typeof ReportSummarizeOutputSchema>['data']>
 
 export const ReportSummarizeInputSchema = z.object({
   sample_id: z.string().describe('Sample ID (format: sha256:<hex>)'),
@@ -59,6 +109,12 @@ export const ReportSummarizeInputSchema = z.object({
     .enum(['triage', 'dotnet'])
     .default('triage')
     .describe('Report mode: triage for quick assessment, dotnet for .NET-specific analysis'),
+  detail_level: z
+    .enum(['compact', 'full'])
+    .default('compact')
+    .describe(
+      'Compact is the default AI-facing digest mode and excludes heavyweight raw analysis trees. Use compact for normal and large-sample reporting; full is a bounded legacy richer mode for targeted smaller-sample review.'
+    ),
   evidence_scope: z
     .enum(['all', 'latest', 'session'])
     .default('all')
@@ -183,10 +239,26 @@ const FunctionExplanationSummarySchema = z.object({
   source: z.string().nullable(),
 })
 
+const PersistedStateVisibilitySchema = z.object({
+  persisted_only: z.boolean(),
+  persisted_run_id: z.string().nullable(),
+  reused_stage_names: z.array(z.string()),
+  deferred_requirements: z.array(z.string()),
+})
+
 export const ReportSummarizeOutputSchema = z.object({
   ok: z.boolean(),
   data: z
     .object({
+      detail_level: z
+        .enum(['compact', 'full'])
+        .describe('The response detail level that was used to build this report payload.'),
+      tool_surface_role: ToolSurfaceRoleSchema.describe(
+        'Marks this report surface as primary, compatibility, or export-only for AI routing.'
+      ),
+      preferred_primary_tools: z.array(z.string()).describe(
+        'Primary staged-runtime alternatives that should be preferred for final analyst-facing summary flows.'
+      ),
       summary: z.string().describe('Natural language summary of the analysis'),
       confidence: z.number().min(0).max(1).describe('Confidence score (0-1)'),
       threat_level: z
@@ -234,6 +306,24 @@ export const ReportSummarizeOutputSchema = z.object({
       confidence_semantics: ReportAssessmentConfidenceSchema.optional().describe(
         'Explains how to interpret confidence scores. These are heuristic evidence scores, not calibrated probabilities.'
       ),
+      binary_profile_summary: BinaryProfileSummarySchema.optional().describe(
+        'Compact binary role digest for AI-facing summary mode.'
+      ),
+      rust_profile_summary: RustProfileSummarySchema.optional().describe(
+        'Compact Rust/toolchain digest for AI-facing summary mode.'
+      ),
+      static_capability_summary: StaticCapabilitySummarySchema.optional().describe(
+        'Compact capability-triage digest that omits heavyweight capability arrays in compact mode.'
+      ),
+      pe_structure_summary: PEStructureSummaryDigestSchema.optional().describe(
+        'Compact PE-structure digest that omits detailed import/export/resource trees in compact mode.'
+      ),
+      compiler_packer_summary: CompilerPackerSummaryDigestSchema.optional().describe(
+        'Compact compiler/packer digest that omits raw backend payloads in compact mode.'
+      ),
+      semantic_explanation_summary: SemanticExplanationDigestSchema.optional().describe(
+        'Compact semantic-explanation digest with behavior and explanation counts.'
+      ),
       binary_profile: BinaryRoleProfileDataSchema.optional().describe(
         'Optional binary role profile summarizing EXE/DLL/COM/service/plugin/export characteristics.'
       ),
@@ -252,11 +342,52 @@ export const ReportSummarizeOutputSchema = z.object({
       provenance: AnalysisProvenanceSchema.optional().describe(
         'Explicit runtime/semantic artifact selection used to produce this report, including scope, session selector, and selected artifact IDs.'
       ),
+      persisted_state_visibility: PersistedStateVisibilitySchema.optional().describe(
+        'Machine-readable persisted-state and deferred-work explanation showing which run stages were reused and which prerequisites remain deferred.'
+      ),
+      packed_state: PackedStateSchema.optional().describe(
+        'Explicit packed-sample state derived from persisted staged runtime metadata.'
+      ),
+      unpack_state: UnpackStateSchema.optional().describe(
+        'Explicit unpack progression state derived from persisted unpack planning or execution artifacts.'
+      ),
+      unpack_confidence: z.number().min(0).max(1).optional().describe(
+        'Bounded unpack confidence indicating whether packed/unpacked progression is heuristic, partial, or strongly corroborated.'
+      ),
+      debug_state: DebugStateSchema.optional().describe(
+        'Persisted debug-session progression state, if a debug path has already been planned or executed.'
+      ),
+      unpack_debug_diffs: z.array(AnalysisDiffDigestSchema).optional().describe(
+        'Bounded unpack/debug diff digests consumed as explanation inputs instead of reinlining raw dumps or raw traces.'
+      ),
       ghidra_execution: GhidraExecutionSummarySchema.nullable().optional().describe(
         'Latest persisted Ghidra execution summary, including project/log locations, extraction status, and recorded progress stages.'
       ),
       selection_diffs: AnalysisSelectionDiffSchema.optional().describe(
         'Optional comparison between the current artifact selection and a caller-provided baseline runtime/semantic selection.'
+      ),
+      explanation_graphs: z
+        .array(ExplanationGraphSummarySchema)
+        .optional()
+        .describe(
+          'Bounded explanation-graph digests. These are semantic graph summaries with provenance, confidence state, and omission boundaries; use the referenced artifacts for deeper inspection.'
+        ),
+      artifact_refs: z
+        .object({
+          supporting: z.array(SummaryArtifactRefSchema),
+          runtime: z.array(SummaryArtifactRefSchema).optional(),
+          static_capabilities: z.array(SummaryArtifactRefSchema).optional(),
+          pe_structure: z.array(SummaryArtifactRefSchema).optional(),
+          compiler_packer: z.array(SummaryArtifactRefSchema).optional(),
+          semantic_explanations: z.array(SummaryArtifactRefSchema).optional(),
+          explanation_graphs: z.array(SummaryArtifactRefSchema).optional(),
+        })
+        .optional()
+        .describe(
+          'Artifact references backing this compact report. Fetch deeper detail with artifact.read or artifacts.list instead of relying on inline heavy payloads.'
+        ),
+      truncation: DigestTruncationSchema.optional().describe(
+        'Deterministic top-N and truncation metadata applied to compact digest fields.'
       ),
       function_explanations: z
         .array(FunctionExplanationSummarySchema)
@@ -303,7 +434,16 @@ export const ReportSummarizeOutputSchema = z.object({
         .optional()
         .describe('Inference layer separated from raw evidence'),
       recommendation: z.string().describe('Recommended next steps'),
+      recommended_next_tools: z
+        .array(z.string())
+        .optional()
+        .describe('Machine-readable follow-up tool suggestions.'),
+      next_actions: z
+        .array(z.string())
+        .optional()
+        .describe('Machine-readable compact-first retrieval guidance for clients.'),
     })
+    .extend(CoverageEnvelopeSchema.shape)
     .optional(),
   warnings: z.array(z.string()).optional(),
   errors: z.array(z.string()).optional(),
@@ -320,7 +460,16 @@ export type ReportSummarizeOutput = z.infer<typeof ReportSummarizeOutputSchema>
 export const reportSummarizeToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
   description:
-    'Generate a quick triage report with summary, confidence, IOC, evidence, and recommendations. Supports triage mode and dotnet fallback mode.',
+    'Generate a bounded analyst-facing summary digest from triage/runtime/static context. Default detail_level=compact is the safe AI-facing mode and excludes heavyweight raw analysis trees. This is a compatibility summary surface, not the primary staged final-report workflow. ' +
+    'Prefer workflow.summarize for staged final reporting, and use artifact.read / artifacts.list for deeper supporting detail. ' +
+    'Read coverage_level, completion_state, known_findings, suspected_findings, unverified_areas, and upgrade_paths before treating the report as complete. ' +
+    '\n\nDecision guide:\n' +
+    '- Use when: you want a deterministic compact report snapshot or compatibility with legacy report clients.\n' +
+    '- Best for: small/medium samples, quick analyst snapshots, or compact restatement of persisted fast/static evidence.\n' +
+    '- Large-sample pattern: keep detail_level=compact and prefer workflow.summarize for staged final output instead of requesting one large inline report.\n' +
+    '- Do not use when: you want the final multi-stage report synthesis path; prefer workflow.summarize.\n' +
+    '- Typical next step: call workflow.summarize for staged triage/static/deep/final digests, or artifact.read on returned artifact_refs for detail.\n' +
+    '- Common mistake: expecting compact mode to inline full static capability arrays, PE trees, or raw backend payloads.',
   inputSchema: ReportSummarizeInputSchema,
   outputSchema: ReportSummarizeOutputSchema,
 }
@@ -394,6 +543,262 @@ type TriageSummaryData = {
     }
   }
   recommendation: string
+}
+
+type LibraryProfileSummary = NonNullable<
+  NonNullable<TriageSummaryData['iocs']['compiler_artifacts']>['library_profile']
+>
+
+function normalizeLibraryProfile(
+  libraryProfile?:
+    | z.infer<typeof RustBinaryAnalyzeDataSchema>['library_profile']
+    | LibraryProfileSummary
+): LibraryProfileSummary | undefined {
+  if (!libraryProfile) {
+    return undefined
+  }
+
+  return {
+    ecosystems: libraryProfile.ecosystems || [],
+    top_crates: libraryProfile.top_crates || [],
+    notable_libraries: libraryProfile.notable_libraries || [],
+    evidence: libraryProfile.evidence || [],
+  }
+}
+
+function artifactRefFromArtifact(
+  artifact: Artifact,
+  metadata?: Record<string, unknown>
+) {
+  return buildArtifactRefFromParts({
+    id: artifact.id,
+    type: artifact.type,
+    path: artifact.path,
+    sha256: artifact.sha256,
+    mime: artifact.mime,
+    ...(metadata ? { metadata } : {}),
+  })
+}
+
+function selectArtifactRefsByIds(
+  artifacts: Artifact[],
+  artifactIds: string[],
+  metadata?: Record<string, unknown>
+) {
+  const selected = new Map(artifacts.map((item) => [item.id, item]))
+  return dedupeArtifactRefs(
+    artifactIds
+      .map((id) => selected.get(id))
+      .filter((item): item is Artifact => Boolean(item))
+      .map((item) => artifactRefFromArtifact(item, metadata))
+  )
+}
+
+function buildBinaryProfileDigest(
+  binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>
+): z.infer<typeof BinaryProfileSummarySchema> | undefined {
+  if (!binaryProfile) {
+    return undefined
+  }
+  const notableExports = limitArray(
+    'top_capabilities',
+    dedupe(binaryProfile.export_surface.notable_exports || [])
+  ).values
+  const hostHints = limitArray(
+    'top_groups',
+    dedupe(binaryProfile.host_interaction_profile.host_hints || [])
+  ).values
+  const priorities = limitArray(
+    'analysis_priorities',
+    dedupe(binaryProfile.analysis_priorities || [])
+  ).values
+  return {
+    binary_role: binaryProfile.binary_role,
+    role_confidence: binaryProfile.role_confidence,
+    packed: binaryProfile.packed,
+    packing_confidence: binaryProfile.packing_confidence,
+    export_count: binaryProfile.export_surface.total_exports,
+    notable_exports: notableExports,
+    dispatch_model:
+      binaryProfile.export_dispatch_profile.likely_dispatch_model === 'none'
+        ? null
+        : binaryProfile.export_dispatch_profile.likely_dispatch_model,
+    host_hints: hostHints,
+    analysis_priorities: priorities,
+    summary: buildBinaryProfileSummary(binaryProfile),
+  }
+}
+
+function buildRustProfileDigest(
+  rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
+): z.infer<typeof RustProfileSummarySchema> | undefined {
+  if (!rustProfile) {
+    return undefined
+  }
+  return {
+    suspected_rust: rustProfile.suspected_rust,
+    confidence: rustProfile.confidence,
+    primary_runtime: rustProfile.primary_runtime || null,
+    top_crates: limitArray('top_crates', dedupe(rustProfile.crate_hints || [])).values,
+    recovered_symbol_count: rustProfile.recovered_symbol_count,
+    recovered_function_count: rustProfile.recovered_function_count,
+    analysis_priorities: limitArray(
+      'analysis_priorities',
+      dedupe(rustProfile.analysis_priorities || [])
+    ).values,
+    summary: buildRustProfileSummary(rustProfile),
+  }
+}
+
+function buildStaticCapabilityDigest(
+  data?: z.infer<typeof StaticCapabilityTriageDataSchema>
+): z.infer<typeof StaticCapabilitySummarySchema> | undefined {
+  if (!data) {
+    return undefined
+  }
+  const topGroups = limitArray(
+    'top_groups',
+    Object.entries(data.capability_groups || {})
+      .sort((left, right) => Number(right[1]) - Number(left[1]))
+      .map(([name]) => name)
+  ).values
+  const topCapabilities = limitArray(
+    'top_capabilities',
+    (data.capabilities || []).map((item) => item.name || item.rule_id || 'unknown_capability')
+  ).values
+  return {
+    status: data.status,
+    capability_count: data.capability_count || 0,
+    top_groups: topGroups,
+    top_capabilities: topCapabilities,
+    summary:
+      data.status === 'ready'
+        ? `Capability triage matched ${data.capability_count || 0} finding(s)${
+            topGroups.length > 0 ? ` across ${topGroups.join(', ')}` : ''
+          }.`
+        : data.summary || 'Capability triage did not produce ready findings.',
+  }
+}
+
+function buildPEStructureDigest(
+  data?: z.infer<typeof PEStructureAnalyzeDataSchema>
+): z.infer<typeof PEStructureSummaryDigestSchema> | undefined {
+  if (!data) {
+    return undefined
+  }
+  return {
+    status: data.status,
+    section_count: data.summary.section_count,
+    import_function_count: data.summary.import_function_count,
+    export_count: data.summary.export_count,
+    resource_count: data.summary.resource_count,
+    overlay_present: data.summary.overlay_present,
+    parser_preference: data.summary.parser_preference || null,
+    summary: `PE structure recovered ${data.summary.section_count} section(s)${
+      data.summary.overlay_present ? ' with an overlay present' : ''
+    }.`,
+  }
+}
+
+function buildCompilerPackerDigest(
+  data?: z.infer<typeof CompilerPackerDetectDataSchema>
+): z.infer<typeof CompilerPackerSummaryDigestSchema> | undefined {
+  if (!data) {
+    return undefined
+  }
+  const compilerNames = limitArray(
+    'top_capabilities',
+    (data.compiler_findings || []).map((item) => item.name)
+  ).values
+  const packerNames = limitArray(
+    'top_capabilities',
+    (data.packer_findings || []).map((item) => item.name)
+  ).values
+  const protectorNames = limitArray(
+    'top_capabilities',
+    (data.protector_findings || []).map((item) => item.name)
+  ).values
+  const summary =
+    data.status !== 'ready'
+      ? data.backend?.error || 'Compiler/packer attribution is unavailable.'
+      : packerNames.length > 0 || protectorNames.length > 0
+        ? `Toolchain attribution suggests packer/protector signals (${[...packerNames, ...protectorNames].join(', ')}).`
+        : compilerNames.length > 0
+          ? `Toolchain attribution suggests compiler signals (${compilerNames.join(', ')}).`
+          : 'Toolchain attribution surfaced no strong compiler or packer findings.'
+  return {
+    status: data.status,
+    compiler_names: compilerNames,
+    packer_names: packerNames,
+    protector_names: protectorNames,
+    likely_primary_file_type: data.summary.likely_primary_file_type || null,
+    summary,
+  }
+}
+
+function buildSemanticExplanationDigest(
+  functionExplanations: Array<z.infer<typeof FunctionExplanationSummarySchema>>
+): z.infer<typeof SemanticExplanationDigestSchema> | undefined {
+  if (functionExplanations.length === 0) {
+    return undefined
+  }
+  const topBehaviors = limitArray(
+    'top_behaviors',
+    dedupe(functionExplanations.map((item) => item.behavior))
+  ).values
+  const topSummaries = limitArray(
+    'top_summaries',
+    functionExplanations.map((item) => truncateText(item.summary, 180))
+  ).values
+  return {
+    count: functionExplanations.length,
+    top_behaviors: topBehaviors,
+    top_summaries: topSummaries,
+    summary: `Semantic explanations are available for ${functionExplanations.length} function(s).`,
+  }
+}
+
+function buildReportArtifactRefs(
+  artifacts: Artifact[],
+  refs: {
+    runtimeIds: string[]
+    staticCapabilityIds: string[]
+    peStructureIds: string[]
+    compilerPackerIds: string[]
+    semanticIds: string[]
+  }
+) {
+  const runtime = selectArtifactRefsByIds(artifacts, refs.runtimeIds, {
+    report_section: 'runtime',
+  })
+  const staticCapabilities = selectArtifactRefsByIds(artifacts, refs.staticCapabilityIds, {
+    report_section: 'static_capabilities',
+  })
+  const peStructure = selectArtifactRefsByIds(artifacts, refs.peStructureIds, {
+    report_section: 'pe_structure',
+  })
+  const compilerPacker = selectArtifactRefsByIds(artifacts, refs.compilerPackerIds, {
+    report_section: 'compiler_packer',
+  })
+  const semanticExplanations = selectArtifactRefsByIds(artifacts, refs.semanticIds, {
+    report_section: 'semantic_explanations',
+  })
+  const supporting = dedupeArtifactRefs([
+    ...runtime,
+    ...staticCapabilities,
+    ...peStructure,
+    ...compilerPacker,
+    ...semanticExplanations,
+  ])
+
+  return {
+    supporting,
+    ...(runtime.length > 0 ? { runtime } : {}),
+    ...(staticCapabilities.length > 0 ? { static_capabilities: staticCapabilities } : {}),
+    ...(peStructure.length > 0 ? { pe_structure: peStructure } : {}),
+    ...(compilerPacker.length > 0 ? { compiler_packer: compilerPacker } : {}),
+    ...(semanticExplanations.length > 0 ? { semantic_explanations: semanticExplanations } : {}),
+  }
 }
 
 function buildBinaryProfileSummary(binaryProfile: z.infer<typeof BinaryRoleProfileDataSchema>): string {
@@ -545,7 +950,8 @@ function augmentWithRustProfile(
       ...rustProfile.rust_markers,
     ]),
     library_profile:
-      rustProfile.library_profile || triageData.iocs.compiler_artifacts?.library_profile,
+      normalizeLibraryProfile(rustProfile.library_profile) ||
+      normalizeLibraryProfile(triageData.iocs.compiler_artifacts?.library_profile),
   }
   const recommendationSuffix =
     rustProfile.analysis_priorities.length > 0
@@ -583,15 +989,15 @@ function augmentWithRustProfile(
                   ...rustProfile.runtime_hints,
                 ]),
                 library_profile:
-                  triageData.inference.tooling_assessment.library_profile ||
-                  rustProfile.library_profile,
+                  normalizeLibraryProfile(triageData.inference.tooling_assessment.library_profile) ||
+                  normalizeLibraryProfile(rustProfile.library_profile),
               }
             : {
                 help_text_detected: false,
                 cli_surface_detected: false,
                 framework_hints: rustProfile.crate_hints,
                 toolchain_markers: rustProfile.runtime_hints,
-                library_profile: rustProfile.library_profile,
+                library_profile: normalizeLibraryProfile(rustProfile.library_profile),
               },
         }
       : triageData.inference,
@@ -973,6 +1379,7 @@ function createMinimalDotnetFallback(
   provenance?: z.infer<typeof AnalysisProvenanceSchema>,
   ghidraExecution?: z.infer<typeof GhidraExecutionSummarySchema> | null,
   evidenceScope: 'all' | 'latest' | 'session' = 'all',
+  detailLevel: 'compact' | 'full' = 'compact',
   binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>,
   rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
 ): WorkerResult {
@@ -989,6 +1396,36 @@ function createMinimalDotnetFallback(
   return {
     ok: true,
     data: {
+      detail_level: detailLevel,
+      ...buildCoverageEnvelope({
+        coverageLevel: 'quick',
+        completionState: 'degraded',
+        sampleSizeTier: 'small',
+        analysisBudgetProfile: 'balanced',
+        coverageGaps: [
+          {
+            domain: 'triage',
+            status: 'degraded',
+            reason: 'Dotnet-specific summarize path is unavailable and triage fallback failed.',
+          },
+          {
+            domain: 'dotnet_structure',
+            status: 'missing',
+            reason: 'No .NET-specific reconstruction or export data is present in this fallback result.',
+          },
+        ],
+        knownFindings: ['Dotnet-specific summarize mode is currently unavailable.'],
+        unverifiedAreas: ['Behavior, structure, and validation remain largely unverified in this minimal fallback.'],
+        upgradePaths: [
+          {
+            tool: 'workflow.reconstruct',
+            purpose: 'Recover structure through the main reconstruction workflow.',
+            closes_gaps: ['dotnet_structure'],
+            expected_coverage_gain: 'Adds managed export artifacts and deeper structure than the placeholder fallback.',
+            cost_tier: 'high',
+          },
+        ],
+      }),
       summary:
         '[dotnet fallback] Dotnet-specific summarize pipeline is unavailable and triage fallback failed. Returning minimal placeholder report.',
       confidence: 0.2,
@@ -1019,6 +1456,11 @@ function createMinimalDotnetFallback(
       },
       recommendation:
         `Re-run after ensuring workspace/original sample file exists, then use workflow.reconstruct or dotnet.reconstruct.export for .NET-specific structure.${binaryProfile?.analysis_priorities?.length ? ` Binary role priorities: ${binaryProfile.analysis_priorities.join(', ')}.` : ''}${rustProfile?.analysis_priorities?.length ? ` Rust recovery priorities: ${rustProfile.analysis_priorities.join(', ')}.` : ''}`,
+      recommended_next_tools: ['workflow.summarize', 'artifact.read', 'workflow.reconstruct'],
+      next_actions: [
+        'Use workflow.summarize for staged reporting once deeper analysis artifacts exist.',
+        'Use workflow.reconstruct or dotnet.reconstruct.export for .NET-specific structure.',
+      ],
     },
     warnings,
     errors: triageErrors.length > 0 ? triageErrors : undefined,
@@ -1034,6 +1476,7 @@ function createDynamicEvidenceFallback(
   provenance?: z.infer<typeof AnalysisProvenanceSchema>,
   ghidraExecution?: z.infer<typeof GhidraExecutionSummarySchema> | null,
   evidenceScope: 'all' | 'latest' | 'session' = 'all',
+  detailLevel: 'compact' | 'full' = 'compact',
   binaryProfile?: z.infer<typeof BinaryRoleProfileDataSchema>,
   rustProfile?: z.infer<typeof RustBinaryAnalyzeDataSchema>
 ): WorkerResult {
@@ -1044,6 +1487,37 @@ function createDynamicEvidenceFallback(
   return {
     ok: true,
     data: {
+      detail_level: detailLevel,
+      ...buildCoverageEnvelope({
+        coverageLevel: 'quick',
+        completionState: 'degraded',
+        sampleSizeTier: 'small',
+        analysisBudgetProfile: 'balanced',
+        coverageGaps: [
+          {
+            domain: 'static_triage',
+            status: 'degraded',
+            reason: 'Static triage failed, so this report is driven by imported runtime evidence only.',
+          },
+          {
+            domain: 'function_attribution',
+            status: 'missing',
+            reason: 'Runtime evidence has not yet been mapped to precise function ownership.',
+          },
+        ],
+        knownFindings: dynamicEvidence.evidence.slice(0, 4),
+        suspectedFindings: dynamicEvidence.stages.map((item) => `Runtime stage observed: ${item}`),
+        unverifiedAreas: ['Full static attribution and code-level ownership remain unverified in the runtime-evidence fallback.'],
+        upgradePaths: [
+          {
+            tool: 'workflow.reconstruct',
+            purpose: 'Correlate imported runtime evidence with reconstructed ownership.',
+            closes_gaps: ['function_attribution'],
+            expected_coverage_gain: 'Adds plan and export artifacts that tie runtime signals back to concrete code locations.',
+            cost_tier: 'high',
+          },
+        ],
+      }),
       summary:
         `Triage pipeline failed, but imported runtime evidence is available. ${buildEvidenceLayerHeadline(evidenceLineage)} ${dynamicEvidence.summary}${binaryProfile ? ` ${buildBinaryProfileSummary(binaryProfile)}` : ''}${rustProfile ? ` ${buildRustProfileSummary(rustProfile)}` : ''}`,
       confidence: dynamicEvidence.executed ? 0.66 : 0.5,
@@ -1091,6 +1565,11 @@ function createDynamicEvidenceFallback(
       },
       recommendation:
         `Correlate imported runtime evidence with code.functions.search, code.functions.reconstruct, and code.reconstruct.export to assign concrete function ownership.${binaryProfile?.analysis_priorities?.length ? ` Binary role priorities: ${binaryProfile.analysis_priorities.join(', ')}.` : ''}${rustProfile?.analysis_priorities?.length ? ` Rust recovery priorities: ${rustProfile.analysis_priorities.join(', ')}.` : ''}`,
+      recommended_next_tools: ['workflow.summarize', 'artifact.read', 'workflow.reconstruct'],
+      next_actions: [
+        'Use workflow.summarize for staged reporting once deeper analysis artifacts are available.',
+        'Correlate imported runtime evidence with reconstruct/export tooling for concrete ownership.',
+      ],
     },
     warnings: [
       'Triage pipeline failed; returned imported runtime-evidence fallback.',
@@ -1099,6 +1578,550 @@ function createDynamicEvidenceFallback(
     errors: triageResult.errors,
     metrics: toolMetrics(startTime),
   }
+}
+
+function parseDbCallees(raw: string | null): string[] {
+  if (!raw) {
+    return []
+  }
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed)
+      ? parsed.filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      : []
+  } catch {
+    return []
+  }
+}
+
+function normalizeFunctionsForExplanationGraphs(functions: DbFunction[]) {
+  return functions
+    .slice()
+    .sort((left, right) => (right.score || 0) - (left.score || 0))
+    .map((func) => ({
+      address: func.address,
+      name: func.name || func.address,
+      size: func.size || 0,
+      score: func.score || 0,
+      callerCount: func.caller_count || 0,
+      calleeCount: func.callee_count || 0,
+      callees: parseDbCallees(func.callees),
+      calledApis: parseDbCallees(func.callees),
+      referencedStrings: [],
+    }))
+}
+
+async function buildPersistedExplanationGraphs(params: {
+  workspaceManager: WorkspaceManager
+  database: DatabaseManager
+  sampleId: string
+  sessionTag?: string | null
+  functions: DbFunction[]
+  persistedStateVisibility?: {
+    persisted_run_id?: string | null
+    loaded_run_stages?: string[]
+    deferred_requirements?: string[]
+  }
+  coverage: z.infer<typeof CoverageEnvelopeSchema>
+}): Promise<{
+  graphs: ExplanationGraphDigest[]
+  artifactRefs: ArtifactRef[]
+}> {
+  const graphs: ExplanationGraphDigest[] = []
+  const artifactRefs: ArtifactRef[] = []
+  const normalizedFunctions = normalizeFunctionsForExplanationGraphs(params.functions)
+
+  if (normalizedFunctions.length > 0) {
+    const callGraph = generateCallGraph(normalizedFunctions, {
+      sampleId: params.sampleId,
+      maxNodes: 12,
+    })
+    const callGraphArtifact = await persistExplanationGraphArtifact(
+      params.workspaceManager,
+      params.database,
+      params.sampleId,
+      {
+        schema_version: 1,
+        sample_id: params.sampleId,
+        created_at: new Date().toISOString(),
+        ...callGraph.explanation,
+        nodes: callGraph.nodes.map((node) => ({
+          id: node.id,
+          label: `${node.name} (${node.address})`,
+          kind: node.isSuspicious ? 'suspicious_function' : 'function',
+          confidence_state: node.confidence_state,
+        })),
+        edges: callGraph.edges.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+          relation: 'calls',
+          label: String(edge.callCount),
+          confidence_state: edge.confidence_state,
+        })),
+        serializers: {
+          json: true,
+        },
+      },
+      {
+        sessionTag: params.sessionTag,
+        filePrefix: 'call_graph',
+      }
+    )
+    graphs.push(attachExplanationArtifactRef(callGraph.explanation, callGraphArtifact))
+    artifactRefs.push(callGraphArtifact)
+
+    const dataFlow = generateDataFlow(normalizedFunctions, {
+      sampleId: params.sampleId,
+      maxNodes: 8,
+    })
+    const dataFlowArtifact = await persistExplanationGraphArtifact(
+      params.workspaceManager,
+      params.database,
+      params.sampleId,
+      {
+        schema_version: 1,
+        sample_id: params.sampleId,
+        created_at: new Date().toISOString(),
+        ...dataFlow.explanation,
+        nodes: dataFlow.nodes.map((node) => ({
+          id: node.id,
+          label: node.dataType ? `${node.name} (${node.dataType})` : node.name,
+          kind: node.type,
+          confidence_state: node.confidence_state,
+        })),
+        edges: dataFlow.edges.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+          relation: edge.dataType,
+          label: edge.label,
+          confidence_state: edge.confidence_state,
+        })),
+        serializers: {
+          json: true,
+        },
+      },
+      {
+        sessionTag: params.sessionTag,
+        filePrefix: 'data_flow',
+      }
+    )
+    graphs.push(attachExplanationArtifactRef(dataFlow.explanation, dataFlowArtifact))
+    artifactRefs.push(dataFlowArtifact)
+  }
+
+  const cryptoSelection = await loadCryptoPlanningArtifactSelection<{
+    algorithms?: unknown[]
+  }>(
+    params.workspaceManager,
+    params.database,
+    params.sampleId,
+    CRYPTO_IDENTIFICATION_ARTIFACT_TYPE,
+    {
+      scope: 'latest',
+      sessionTag: params.sessionTag || undefined,
+    }
+  )
+  const cryptoAlgorithms = Array.isArray(cryptoSelection.latest_payload?.algorithms)
+    ? cryptoSelection.latest_payload.algorithms
+        .map((item) => CryptoFindingSchema.safeParse(item))
+        .filter((item) => item.success)
+        .map((item) => item.data)
+    : []
+  if (cryptoAlgorithms.length > 0) {
+    const cryptoGraph = generateCryptoFlow(
+      cryptoAlgorithms.map((item) => ({
+        algorithm: item.algorithm_name || item.algorithm_family,
+        confidence: item.confidence,
+        functions:
+          item.function || item.address
+            ? [
+                {
+                  address: item.address || 'unknown',
+                  name: item.function || item.address || 'unknown',
+                  apis: item.source_apis,
+                },
+              ]
+            : [],
+      })),
+      {
+        sampleId: params.sampleId,
+        maxNodes: 6,
+      }
+    )
+    const cryptoGraphArtifact = await persistExplanationGraphArtifact(
+      params.workspaceManager,
+      params.database,
+      params.sampleId,
+      {
+        schema_version: 1,
+        sample_id: params.sampleId,
+        created_at: new Date().toISOString(),
+        ...cryptoGraph.explanation,
+        provenance: [
+          ...cryptoGraph.explanation.provenance,
+          ...(cryptoSelection.latest_artifact
+            ? [
+                {
+                  kind: 'artifact' as const,
+                  label: 'latest_crypto_identification_artifact',
+                  detail: cryptoSelection.scope_note,
+                  artifact_ref: cryptoSelection.latest_artifact,
+                },
+              ]
+            : []),
+        ],
+        nodes: cryptoGraph.nodes.map((node) => ({
+          id: node.id,
+          label: node.label,
+          kind: node.type,
+          confidence_state: node.confidence_state,
+        })),
+        edges: cryptoGraph.edges.map((edge) => ({
+          source: edge.source,
+          target: edge.target,
+          relation: edge.type,
+          label: edge.label,
+          confidence_state: edge.confidence_state,
+        })),
+        serializers: {
+          json: true,
+        },
+      },
+      {
+        sessionTag: params.sessionTag,
+        filePrefix: 'crypto_flow',
+      }
+    )
+    graphs.push(attachExplanationArtifactRef(cryptoGraph.explanation, cryptoGraphArtifact))
+    artifactRefs.push(cryptoGraphArtifact)
+  }
+
+  const runtimeGraph = buildRuntimeStageExplanationGraph({
+    sample_id: params.sampleId,
+    completed_stages: params.persistedStateVisibility?.loaded_run_stages || [],
+    deferred_requirements: params.persistedStateVisibility?.deferred_requirements || [],
+    recommended_next_tools: ['workflow.analyze.status', 'workflow.analyze.promote', 'workflow.summarize'],
+    coverage_gaps: (params.coverage.coverage_gaps || []).reduce<
+      Array<{ domain: string; status: string; reason: string }>
+    >((acc, item) => {
+      if (
+        item &&
+        typeof item.domain === 'string' &&
+        typeof item.status === 'string' &&
+        typeof item.reason === 'string'
+      ) {
+        acc.push({
+          domain: item.domain,
+          status: item.status,
+          reason: item.reason,
+        })
+      }
+      return acc
+    }, []),
+  })
+  const runtimeArtifact = await persistExplanationGraphArtifact(
+    params.workspaceManager,
+    params.database,
+    params.sampleId,
+    runtimeGraph,
+    {
+      sessionTag: params.sessionTag,
+      filePrefix: 'runtime_stage',
+    }
+  )
+  graphs.push(attachExplanationArtifactRef(runtimeGraph, runtimeArtifact))
+  artifactRefs.push(runtimeArtifact)
+
+  return {
+    graphs,
+    artifactRefs,
+  }
+}
+
+function buildCompactReportData(params: {
+  sampleId: string
+  detailLevel: 'compact' | 'full'
+  triageData: TriageSummaryData
+  evidenceScope: 'all' | 'latest' | 'session'
+  provenance?: z.infer<typeof AnalysisProvenanceSchema>
+  ghidraExecution?: z.infer<typeof GhidraExecutionSummarySchema> | null
+  selectionDiffs?: z.infer<typeof AnalysisSelectionDiffSchema>
+  functionExplanations: Array<z.infer<typeof FunctionExplanationSummarySchema>>
+  explanationGraphs: ExplanationGraphDigest[]
+  artifactRefs: {
+    supporting: ArtifactRef[]
+    runtime?: ArtifactRef[]
+    static_capabilities?: ArtifactRef[]
+    pe_structure?: ArtifactRef[]
+    compiler_packer?: ArtifactRef[]
+    semantic_explanations?: ArtifactRef[]
+    explanation_graphs?: ArtifactRef[]
+  }
+}) {
+  const evidenceLineage =
+    params.triageData.evidence_lineage || buildEvidenceLineage(undefined)
+  const confidenceSemantics =
+    params.triageData.confidence_semantics ||
+    buildAssessmentConfidencePayload(params.triageData.confidence, params.evidenceScope, evidenceLineage)
+  const triageCoverageCandidate = CoverageEnvelopeSchema.safeParse(params.triageData)
+  const triageCoverage = triageCoverageCandidate.success ? triageCoverageCandidate.data : undefined
+  const triageDigest = buildTriageStageDigest({
+    sample_id: params.sampleId,
+    summary: params.triageData.summary,
+    confidence: params.triageData.confidence,
+    threat_level: params.triageData.threat_level,
+    iocs: params.triageData.iocs,
+    evidence: params.triageData.evidence,
+    evidence_lineage: evidenceLineage,
+    confidence_semantics: confidenceSemantics,
+    recommendation: params.triageData.recommendation,
+    source_artifact_refs: params.artifactRefs.supporting,
+    coverage: triageCoverage,
+  })
+
+  const staticDigest = buildStaticStageDigest({
+    sample_id: params.sampleId,
+    binary_profile_summary: buildBinaryProfileDigest(params.triageData.binary_profile),
+    rust_profile_summary: buildRustProfileDigest(params.triageData.rust_profile),
+    static_capability_summary: buildStaticCapabilityDigest(params.triageData.static_capabilities),
+    pe_structure_summary: buildPEStructureDigest(params.triageData.pe_structure),
+    compiler_packer_summary: buildCompilerPackerDigest(params.triageData.compiler_packer),
+    semantic_explanation_summary: buildSemanticExplanationDigest(params.functionExplanations),
+    key_findings: dedupe([
+      buildBinaryProfileDigest(params.triageData.binary_profile)?.summary || '',
+      buildRustProfileDigest(params.triageData.rust_profile)?.summary || '',
+      buildStaticCapabilityDigest(params.triageData.static_capabilities)?.summary || '',
+      buildPEStructureDigest(params.triageData.pe_structure)?.summary || '',
+      buildCompilerPackerDigest(params.triageData.compiler_packer)?.summary || '',
+      buildSemanticExplanationDigest(params.functionExplanations)?.summary || '',
+    ]),
+    recommendation: params.triageData.recommendation,
+    source_artifact_refs: params.artifactRefs.supporting,
+    coverage: triageCoverage
+      ? buildCoverageEnvelope({
+          coverageLevel: 'static_core',
+          completionState: triageCoverage.completion_state === 'completed' ? 'bounded' : triageCoverage.completion_state,
+          sampleSizeTier: triageCoverage.sample_size_tier,
+          analysisBudgetProfile: triageCoverage.analysis_budget_profile,
+          downgradeReasons: triageCoverage.downgrade_reasons,
+          coverageGaps: [
+            ...triageCoverage.coverage_gaps,
+            {
+              domain: 'reconstruction_export',
+              status: 'missing',
+              reason: 'Compact report mode stops before source-like reconstruction export.',
+            },
+          ],
+          confidenceByDomain: triageCoverage.confidence_by_domain,
+          knownFindings: triageCoverage.known_findings,
+          suspectedFindings: triageCoverage.suspected_findings,
+          unverifiedAreas: triageCoverage.unverified_areas,
+          upgradePaths: triageCoverage.upgrade_paths,
+        })
+      : undefined,
+  })
+  const coverage = buildCoverageEnvelope({
+    coverageLevel: staticDigest.coverage_level,
+    completionState: staticDigest.completion_state,
+    sampleSizeTier: staticDigest.sample_size_tier,
+    analysisBudgetProfile: staticDigest.analysis_budget_profile,
+    downgradeReasons: [
+      ...triageDigest.downgrade_reasons,
+      ...staticDigest.downgrade_reasons,
+    ],
+    coverageGaps: [
+      ...triageDigest.coverage_gaps,
+      ...staticDigest.coverage_gaps,
+    ],
+    confidenceByDomain: {
+      ...triageDigest.confidence_by_domain,
+      ...staticDigest.confidence_by_domain,
+    },
+    knownFindings: [
+      ...triageDigest.known_findings,
+      ...staticDigest.known_findings,
+    ],
+    suspectedFindings: [
+      ...triageDigest.suspected_findings,
+      ...staticDigest.suspected_findings,
+    ],
+    unverifiedAreas: [
+      ...triageDigest.unverified_areas,
+      ...staticDigest.unverified_areas,
+    ],
+    upgradePaths: [
+      ...triageDigest.upgrade_paths,
+      ...staticDigest.upgrade_paths,
+    ],
+  })
+
+  const recommendedNextTools = [
+    'workflow.summarize',
+    'artifact.read',
+    'artifacts.list',
+    'ghidra.analyze',
+    'workflow.reconstruct',
+  ]
+  const nextActions = [
+    'Use workflow.summarize for staged triage/static/deep/final reporting instead of requesting one monolithic final payload.',
+    'Use artifact.read or artifacts.list on artifact_refs when you need deeper supporting detail, including persisted explanation graph artifacts.',
+    'Continue with ghidra.analyze and workflow.reconstruct when you need code-level reverse engineering instead of a bounded report digest.',
+  ]
+
+  return {
+    detail_level: params.detailLevel,
+    ...coverage,
+    summary: triageDigest.summary,
+    confidence: triageDigest.confidence,
+    threat_level: triageDigest.threat_level,
+    iocs: triageDigest.iocs,
+    evidence: triageDigest.evidence,
+    evidence_lineage: triageDigest.evidence_lineage,
+    confidence_semantics: triageDigest.confidence_semantics,
+    binary_profile_summary: staticDigest.binary_profile_summary,
+    rust_profile_summary: staticDigest.rust_profile_summary,
+    static_capability_summary: staticDigest.static_capability_summary,
+    pe_structure_summary: staticDigest.pe_structure_summary,
+    compiler_packer_summary: staticDigest.compiler_packer_summary,
+    semantic_explanation_summary: staticDigest.semantic_explanation_summary,
+    provenance: params.provenance,
+    ghidra_execution: params.ghidraExecution,
+    selection_diffs:
+      params.selectionDiffs && Object.keys(params.selectionDiffs).length > 0
+        ? params.selectionDiffs
+        : undefined,
+    explanation_graphs: params.explanationGraphs,
+    artifact_refs: params.artifactRefs,
+    truncation: {
+      ...(triageDigest.truncation || {}),
+      ...(staticDigest.truncation || {}),
+    },
+    recommendation: triageDigest.recommendation,
+    recommended_next_tools: recommendedNextTools,
+    next_actions: nextActions,
+  }
+}
+
+function estimateJsonChars(value: unknown): number {
+  try {
+    return JSON.stringify(value).length
+  } catch {
+    return Number.MAX_SAFE_INTEGER
+  }
+}
+
+function stripArtifactRefMetadata(ref: z.infer<typeof SummaryArtifactRefSchema>) {
+  return {
+    id: ref.id,
+    type: ref.type,
+    path: ref.path,
+    sha256: ref.sha256,
+    mime: ref.mime,
+  }
+}
+
+function boundArtifactRefGroup(
+  refs: z.infer<typeof SummaryArtifactRefSchema>[] | undefined
+): {
+  refs?: z.infer<typeof SummaryArtifactRefSchema>[]
+  budget?: z.infer<typeof DigestTruncationSchema>[string]
+} {
+  if (!refs || refs.length === 0) {
+    return {}
+  }
+  const limited = limitArray('stage_artifacts', refs, (ref) => stripArtifactRefMetadata(ref))
+  return {
+    refs: limited.values,
+    budget: limited.budget,
+  }
+}
+
+function boundInlineReportPayload(data: ReportSummarizeData): {
+  data: ReportSummarizeData
+  warnings: string[]
+} {
+  let bounded: ReportSummarizeData = { ...data }
+  if (estimateJsonChars(bounded) <= REPORT_INLINE_PAYLOAD_BUDGET_CHARS) {
+    return { data: bounded, warnings: [] }
+  }
+
+  const warnings: string[] = []
+  const omittedFields: string[] = []
+  const heavyFieldOrder: Array<keyof ReportSummarizeData> = [
+    'static_capabilities',
+    'pe_structure',
+    'compiler_packer',
+    'function_explanations',
+    'selection_diffs',
+    'ghidra_execution',
+    'binary_profile',
+    'rust_profile',
+    'provenance',
+  ]
+
+  for (const field of heavyFieldOrder) {
+    if (bounded[field] === undefined) {
+      continue
+    }
+    if (estimateJsonChars(bounded) <= REPORT_INLINE_PAYLOAD_BUDGET_CHARS) {
+      break
+    }
+    omittedFields.push(String(field))
+    delete bounded[field]
+  }
+
+  if (bounded.artifact_refs) {
+    const artifactBudgets: Array<[string, z.infer<typeof DigestTruncationSchema>[string] | undefined]> = []
+    const supporting = boundArtifactRefGroup(bounded.artifact_refs.supporting)
+    const runtime = boundArtifactRefGroup(bounded.artifact_refs.runtime)
+    const staticCapabilities = boundArtifactRefGroup(bounded.artifact_refs.static_capabilities)
+    const peStructure = boundArtifactRefGroup(bounded.artifact_refs.pe_structure)
+    const compilerPacker = boundArtifactRefGroup(bounded.artifact_refs.compiler_packer)
+    const semanticExplanations = boundArtifactRefGroup(bounded.artifact_refs.semantic_explanations)
+    const explanationGraphs = boundArtifactRefGroup(bounded.artifact_refs.explanation_graphs)
+    bounded = {
+      ...bounded,
+      artifact_refs: {
+        supporting: supporting.refs || [],
+        runtime: runtime.refs,
+        static_capabilities: staticCapabilities.refs,
+        pe_structure: peStructure.refs,
+        compiler_packer: compilerPacker.refs,
+        semantic_explanations: semanticExplanations.refs,
+        explanation_graphs: explanationGraphs.refs,
+      },
+    }
+    artifactBudgets.push(['artifact_refs_supporting', supporting.budget])
+    artifactBudgets.push(['artifact_refs_runtime', runtime.budget])
+    artifactBudgets.push(['artifact_refs_static_capabilities', staticCapabilities.budget])
+    artifactBudgets.push(['artifact_refs_pe_structure', peStructure.budget])
+    artifactBudgets.push(['artifact_refs_compiler_packer', compilerPacker.budget])
+    artifactBudgets.push(['artifact_refs_semantic_explanations', semanticExplanations.budget])
+    artifactBudgets.push(['artifact_refs_explanation_graphs', explanationGraphs.budget])
+    const truncation = {
+      ...(bounded.truncation || {}),
+      ...Object.fromEntries(artifactBudgets.filter(([, value]) => Boolean(value))),
+    }
+    bounded.truncation = Object.keys(truncation).length > 0 ? truncation : bounded.truncation
+  }
+
+  if (omittedFields.length > 0 || estimateJsonChars(bounded) > REPORT_INLINE_PAYLOAD_BUDGET_CHARS) {
+    bounded.truncation = {
+      ...(bounded.truncation || {}),
+      inline_payload_budget: {
+        total: heavyFieldOrder.length,
+        kept: heavyFieldOrder.length - omittedFields.length,
+        limit: heavyFieldOrder.length,
+        truncated: omittedFields.length > 0,
+        omitted: omittedFields.length,
+      },
+    }
+    warnings.push(
+      `Inline report payload was bounded to stay within transport limits. ${omittedFields.length > 0 ? `Omitted heavy fields: ${omittedFields.join(', ')}. ` : ''}Use artifact.read on artifact_refs or workflow.summarize for staged detail.`
+    )
+  }
+
+  return { data: bounded, warnings }
 }
 
 export function createReportSummarizeHandler(
@@ -1124,44 +2147,134 @@ export function createReportSummarizeHandler(
     const startTime = Date.now()
 
     try {
-      const input = ReportSummarizeInputSchema.parse(args)
-      const sample = database.findSample(input.sample_id)
+      const parsedInput = ReportSummarizeInputSchema.parse(args)
+      const sample = database.findSample(parsedInput.sample_id)
       if (!sample) {
         return {
           ok: false,
-          errors: [`Sample not found: ${input.sample_id}`],
+          errors: [`Sample not found: ${parsedInput.sample_id}`],
         }
       }
+      const sampleSizeTier = classifySampleSizeTier(sample.size)
+      const effectiveDetailLevel =
+        parsedInput.detail_level === 'full' &&
+        (sampleSizeTier === 'large' || sampleSizeTier === 'oversized')
+          ? 'compact'
+          : parsedInput.detail_level
+      const input =
+        effectiveDetailLevel === parsedInput.detail_level
+          ? parsedInput
+          : {
+              ...parsedInput,
+              detail_level: effectiveDetailLevel,
+            }
       const warnings: string[] = []
+      if (effectiveDetailLevel !== parsedInput.detail_level) {
+        warnings.push(
+          `detail_level=${parsedInput.detail_level} was downgraded to compact because sample_size_tier=${sampleSizeTier} should stay artifact-first and bounded.`
+        )
+      }
       const analyses = database.findAnalysesBySample(input.sample_id)
+      const latestRun = database
+        .findAnalysisRunsBySample(input.sample_id)
+        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))[0] || null
+      const parseRunStagePayload = (stageName: string): Record<string, unknown> | null => {
+        if (!latestRun) {
+          return null
+        }
+        const stage = database.findAnalysisRunStage(latestRun.id, stageName)
+        if (!stage?.result_json) {
+          return null
+        }
+        try {
+          const parsed = JSON.parse(stage.result_json) as Record<string, unknown>
+          return parsed && typeof parsed === 'object' ? parsed : null
+        } catch {
+          return null
+        }
+      }
 
       const dynamicEvidence = await loadDynamicTraceEvidence(workspaceManager, database, input.sample_id, {
         evidenceScope: input.evidence_scope,
         sessionTag: input.evidence_session_tag,
       })
-      const binaryRoleProfileResult = await binaryRoleProfileHandler({ sample_id: input.sample_id })
-      const binaryProfile =
-        binaryRoleProfileResult.ok && binaryRoleProfileResult.data
-          ? (binaryRoleProfileResult.data as z.infer<typeof BinaryRoleProfileDataSchema>)
-          : undefined
-      if (!binaryRoleProfileResult.ok) {
+      if (input.force_refresh) {
         warnings.push(
-          `binary.role.profile unavailable: ${(binaryRoleProfileResult.errors || ['unknown error']).join('; ')}`
+          'report.summarize is persisted-state only in the converged runtime; force_refresh does not trigger fresh heavy analysis.'
         )
-      } else if (binaryRoleProfileResult.warnings?.length) {
-        warnings.push(...binaryRoleProfileResult.warnings.map((item) => `binary.role.profile: ${item}`))
       }
-      const rustBinaryAnalyzeResult = await rustBinaryAnalyzeHandler({ sample_id: input.sample_id })
+      const fastProfilePayload = parseRunStagePayload('fast_profile')
+      const enrichStaticPayload = parseRunStagePayload('enrich_static')
+      const reusedStageNames = [
+        fastProfilePayload ? 'fast_profile' : null,
+        enrichStaticPayload ? 'enrich_static' : null,
+      ].filter((item): item is string => Boolean(item))
+      const persistedStateVisibility = PersistedStateVisibilitySchema.parse({
+        persisted_only: true,
+        persisted_run_id: latestRun?.id || null,
+        reused_stage_names: reusedStageNames,
+        deferred_requirements: [
+          ...(enrichStaticPayload ? [] : ['enrich_static: persisted static enrichment is not available yet.']),
+          ...(parseRunStagePayload('function_map') ? [] : ['function_map: function-level attribution has not been persisted yet.']),
+          ...(parseRunStagePayload('reconstruct') ? [] : ['reconstruct: source-like reconstruction/export remains deferred.']),
+        ],
+      })
+      const stageStatePayloads = [
+        fastProfilePayload,
+        enrichStaticPayload,
+        parseRunStagePayload('function_map'),
+        parseRunStagePayload('reconstruct'),
+        parseRunStagePayload('dynamic_plan'),
+        parseRunStagePayload('dynamic_execute'),
+        parseRunStagePayload('summarize'),
+      ].filter((item): item is Record<string, unknown> => Boolean(item))
+      const latestStatePayloads = stageStatePayloads.slice().reverse()
+      const packedState = latestStatePayloads
+        .map((payload) => PackedStateSchema.safeParse(payload.packed_state))
+        .find((parsed) => parsed.success)?.data
+      const unpackState = latestStatePayloads
+        .map((payload) => UnpackStateSchema.safeParse(payload.unpack_state))
+        .find((parsed) => parsed.success)?.data
+      const unpackConfidence = latestStatePayloads
+        .map((payload) => payload.unpack_confidence)
+        .find((value): value is number => typeof value === 'number')
+      const debugState = latestStatePayloads
+        .map((payload) => DebugStateSchema.safeParse(payload.debug_state))
+        .find((parsed) => parsed.success)?.data
+      const unpackDebugDiffSelection = await loadUnpackDebugArtifactSelection<unknown>(
+        workspaceManager,
+        database,
+        input.sample_id,
+        ANALYSIS_DIFF_DIGEST_ARTIFACT_TYPE,
+        {
+          scope: input.evidence_session_tag ? 'session' : 'latest',
+          sessionTag: input.evidence_session_tag,
+        }
+      )
+      const unpackDebugDiffs = unpackDebugDiffSelection.artifacts
+        .map((item) => AnalysisDiffDigestSchema.safeParse(item.payload))
+        .filter((parsed): parsed is z.SafeParseSuccess<z.infer<typeof AnalysisDiffDigestSchema>> => parsed.success)
+        .map((parsed) => parsed.data)
+        .slice(0, 4)
+      const enrichStageOutputs =
+        enrichStaticPayload?.stage_outputs && typeof enrichStaticPayload.stage_outputs === 'object'
+          ? (enrichStaticPayload.stage_outputs as Record<string, unknown>)
+          : {}
+      const fastRawResults =
+        fastProfilePayload?.raw_results && typeof fastProfilePayload.raw_results === 'object'
+          ? (fastProfilePayload.raw_results as Record<string, unknown>)
+          : {}
+      const binaryProfile =
+        (enrichStageOutputs.binary_role as z.infer<typeof BinaryRoleProfileDataSchema> | undefined) ||
+        (fastRawResults.binary_role as z.infer<typeof BinaryRoleProfileDataSchema> | undefined)
       const rustProfile =
-        rustBinaryAnalyzeResult.ok && rustBinaryAnalyzeResult.data
-          ? (rustBinaryAnalyzeResult.data as z.infer<typeof RustBinaryAnalyzeDataSchema>)
-          : undefined
-      if (!rustBinaryAnalyzeResult.ok) {
-        warnings.push(
-          `rust_binary.analyze unavailable: ${(rustBinaryAnalyzeResult.errors || ['unknown error']).join('; ')}`
-        )
-      } else if (rustBinaryAnalyzeResult.warnings?.length) {
-        warnings.push(...rustBinaryAnalyzeResult.warnings.map((item) => `rust_binary.analyze: ${item}`))
+        (enrichStageOutputs.rust as z.infer<typeof RustBinaryAnalyzeDataSchema> | undefined) ||
+        undefined
+      if (!binaryProfile) {
+        warnings.push('No persisted binary role profile was available for this sample.')
+      }
+      if (!rustProfile) {
+        warnings.push('No persisted Rust-aware analysis state was available for this sample.')
       }
       const functionExplanationBundle = await loadFunctionExplanationSummaries(
         workspaceManager,
@@ -1173,10 +2286,18 @@ export function createReportSummarizeHandler(
         }
       )
       const functionExplanations = functionExplanationBundle.summaries
-      const triageResult = await triageHandler({
-        sample_id: input.sample_id,
-        force_refresh: input.force_refresh,
-      })
+      const triageResult: WorkerResult = fastProfilePayload
+        ? {
+            ok: true,
+            data: fastProfilePayload,
+            warnings: ['Reused persisted fast_profile stage from analysis run state.'],
+          }
+        : {
+            ok: false,
+            errors: [
+              `No persisted fast_profile stage is available for ${input.sample_id}. Start analysis with workflow.analyze.start or workflow.triage before requesting report.summarize.`,
+            ],
+          }
       const staticSelections = await loadStaticAnalysisSelections(
         workspaceManager,
         database,
@@ -1218,6 +2339,29 @@ export function createReportSummarizeHandler(
         ),
       }
       const ghidraExecution = buildGhidraExecutionSummary(analyses)
+      const persistedCoverage = CoverageEnvelopeSchema.safeParse(fastProfilePayload || {})
+      const explanationGraphSelection = await buildPersistedExplanationGraphs({
+        workspaceManager,
+        database,
+        sampleId: input.sample_id,
+        sessionTag: input.semantic_session_tag || input.static_session_tag || input.evidence_session_tag || null,
+        functions: database.findFunctions(input.sample_id),
+        persistedStateVisibility: {
+          persisted_run_id: persistedStateVisibility.persisted_run_id,
+          loaded_run_stages: persistedStateVisibility.reused_stage_names,
+          deferred_requirements: persistedStateVisibility.deferred_requirements,
+        },
+        coverage: persistedCoverage.success
+          ? persistedCoverage.data
+          : buildCoverageEnvelope({
+              coverageLevel: 'quick',
+              completionState: 'bounded',
+              sampleSizeTier,
+              analysisBudgetProfile:
+                sampleSizeTier === 'large' || sampleSizeTier === 'oversized' ? 'quick' : 'balanced',
+            }),
+      })
+      const allArtifacts = database.findArtifacts(input.sample_id)
       const selectionDiffs: z.infer<typeof AnalysisSelectionDiffSchema> = {}
       if (input.compare_evidence_scope) {
         const baselineDynamicEvidence = await loadDynamicTraceEvidence(
@@ -1313,6 +2457,7 @@ export function createReportSummarizeHandler(
               provenance,
               ghidraExecution,
               input.evidence_scope,
+              input.detail_level,
               binaryProfile,
               rustProfile
             )
@@ -1352,42 +2497,133 @@ export function createReportSummarizeHandler(
           rustEnrichedTriageData,
           functionExplanations
         )
+        const artifactRefs = buildReportArtifactRefs(allArtifacts, {
+          runtimeIds: provenance.runtime.artifact_ids,
+          staticCapabilityIds: provenance.static_capabilities.artifact_ids,
+          peStructureIds: provenance.pe_structure.artifact_ids,
+          compilerPackerIds: provenance.compiler_packer.artifact_ids,
+          semanticIds: provenance.semantic_explanations.artifact_ids,
+        })
+        const unpackDebugArtifactRefs = unpackDebugDiffSelection.artifact_refs.map((ref) =>
+          buildArtifactRefFromParts({
+            id: ref.id,
+            type: ref.type,
+            path: ref.path,
+            sha256: ref.sha256,
+            mime: ref.mime,
+            metadata: ref.metadata,
+          })
+        )
+        const compactReportData = buildCompactReportData({
+          sampleId: input.sample_id,
+          detailLevel: input.detail_level,
+          triageData: enrichedTriageData,
+          evidenceScope: input.evidence_scope,
+          provenance,
+          ghidraExecution,
+          selectionDiffs,
+          functionExplanations,
+          explanationGraphs: explanationGraphSelection.graphs,
+          artifactRefs: {
+            ...artifactRefs,
+            supporting: dedupeArtifactRefs([
+              ...artifactRefs.supporting,
+              ...unpackDebugArtifactRefs,
+            ]),
+            ...(explanationGraphSelection.artifactRefs.length > 0
+              ? { explanation_graphs: explanationGraphSelection.artifactRefs }
+              : {}),
+          },
+        })
+        const fullCompatibleData =
+          input.detail_level === 'full'
+            ? {
+                detail_level: input.detail_level,
+                tool_surface_role: 'compatibility',
+                preferred_primary_tools: ['workflow.summarize'],
+                coverage_level: compactReportData.coverage_level,
+                completion_state: compactReportData.completion_state,
+                sample_size_tier: compactReportData.sample_size_tier,
+                analysis_budget_profile: compactReportData.analysis_budget_profile,
+                downgrade_reasons: compactReportData.downgrade_reasons,
+                coverage_gaps: compactReportData.coverage_gaps,
+                confidence_by_domain: compactReportData.confidence_by_domain,
+                known_findings: compactReportData.known_findings,
+                suspected_findings: compactReportData.suspected_findings,
+                unverified_areas: compactReportData.unverified_areas,
+                upgrade_paths: compactReportData.upgrade_paths,
+                summary: compactReportData.summary,
+                confidence: compactReportData.confidence,
+                threat_level: compactReportData.threat_level,
+                iocs: compactReportData.iocs,
+                evidence: compactReportData.evidence,
+                evidence_lineage: compactReportData.evidence_lineage,
+                confidence_semantics: compactReportData.confidence_semantics,
+                binary_profile_summary: compactReportData.binary_profile_summary,
+                rust_profile_summary: compactReportData.rust_profile_summary,
+                static_capability_summary: compactReportData.static_capability_summary,
+                pe_structure_summary: compactReportData.pe_structure_summary,
+                compiler_packer_summary: compactReportData.compiler_packer_summary,
+                semantic_explanation_summary: compactReportData.semantic_explanation_summary,
+                provenance: compactReportData.provenance,
+                persisted_state_visibility: persistedStateVisibility,
+                packed_state: packedState,
+                unpack_state: unpackState,
+                unpack_confidence: unpackConfidence,
+                debug_state: debugState,
+                unpack_debug_diffs: unpackDebugDiffs.length > 0 ? unpackDebugDiffs : undefined,
+                ghidra_execution: compactReportData.ghidra_execution,
+                selection_diffs: compactReportData.selection_diffs,
+                explanation_graphs: compactReportData.explanation_graphs,
+                artifact_refs: compactReportData.artifact_refs,
+                truncation: compactReportData.truncation,
+                recommendation: enrichedTriageData.recommendation,
+                recommended_next_tools: compactReportData.recommended_next_tools,
+                next_actions: compactReportData.next_actions,
+              }
+            : compactReportData
+        const fullDetailFields =
+          input.detail_level === 'full'
+            ? {
+                binary_profile: enrichedTriageData.binary_profile,
+                rust_profile: enrichedTriageData.rust_profile,
+                static_capabilities: enrichedTriageData.static_capabilities,
+                pe_structure: enrichedTriageData.pe_structure,
+                compiler_packer: enrichedTriageData.compiler_packer,
+                function_explanations: enrichedTriageData.function_explanations,
+                evidence_weights: enrichedTriageData.evidence_weights,
+                inference: enrichedTriageData.inference,
+              }
+            : {
+                evidence_weights: enrichedTriageData.evidence_weights,
+                inference: enrichedTriageData.inference,
+              }
+        const inlinePayload = boundInlineReportPayload({
+          ...fullCompatibleData,
+          persisted_state_visibility: persistedStateVisibility,
+          packed_state: packedState,
+          unpack_state: unpackState,
+          unpack_confidence: unpackConfidence,
+          debug_state: debugState,
+          unpack_debug_diffs: unpackDebugDiffs.length > 0 ? unpackDebugDiffs : undefined,
+          ...fullDetailFields,
+        } as ReportSummarizeData)
         return {
           ok: true,
           data: {
-            summary: enrichedTriageData.summary,
-            confidence: enrichedTriageData.confidence,
-            threat_level: enrichedTriageData.threat_level,
-            iocs: enrichedTriageData.iocs,
-            evidence: enrichedTriageData.evidence,
-            evidence_lineage: enrichedTriageData.evidence_lineage || buildEvidenceLineage(dynamicEvidence),
-            confidence_semantics: buildAssessmentConfidencePayload(
-              enrichedTriageData.confidence,
-              input.evidence_scope,
-              enrichedTriageData.evidence_lineage || buildEvidenceLineage(dynamicEvidence)
-            ),
-            binary_profile: enrichedTriageData.binary_profile,
-            rust_profile: enrichedTriageData.rust_profile,
-            static_capabilities: enrichedTriageData.static_capabilities,
-            pe_structure: enrichedTriageData.pe_structure,
-            compiler_packer: enrichedTriageData.compiler_packer,
-            provenance,
-            ghidra_execution: ghidraExecution,
-            selection_diffs:
-              Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
-            function_explanations: enrichedTriageData.function_explanations,
-            evidence_weights: enrichedTriageData.evidence_weights,
-            inference: enrichedTriageData.inference,
-            recommendation: enrichedTriageData.recommendation,
+            ...inlinePayload.data,
+            tool_surface_role: 'compatibility',
+            preferred_primary_tools: ['workflow.summarize'],
           },
           warnings: dynamicEvidence
             ? dedupe([
               ...warnings,
               ...(triageResult.warnings || []),
+                ...inlinePayload.warnings,
                 `Merged imported runtime evidence from ${dynamicEvidence.artifact_count} artifact(s) using scope=${input.evidence_scope}${input.evidence_session_tag ? ` selector=${input.evidence_session_tag}` : ''}.`,
                 dynamicEvidence.scope_note || '',
               ])
-            : dedupe([...warnings, ...(triageResult.warnings || [])]),
+            : dedupe([...warnings, ...(triageResult.warnings || []), ...inlinePayload.warnings]),
           errors: triageResult.errors,
           metrics: toolMetrics(startTime),
         }
@@ -1402,6 +2638,7 @@ export function createReportSummarizeHandler(
             provenance,
             ghidraExecution,
             input.evidence_scope,
+            input.detail_level,
             binaryProfile,
             rustProfile
           )
@@ -1412,6 +2649,34 @@ export function createReportSummarizeHandler(
         return {
           ok: true,
           data: {
+            detail_level: input.detail_level,
+            tool_surface_role: 'compatibility',
+            preferred_primary_tools: ['workflow.summarize'],
+            ...buildCoverageEnvelope({
+              coverageLevel: 'quick',
+              completionState: 'degraded',
+              sampleSizeTier: 'small',
+              analysisBudgetProfile: 'balanced',
+              coverageGaps: [
+                {
+                  domain: 'dotnet_structure',
+                  status: 'missing',
+                  reason: 'Dotnet-specific summarize mode is not implemented, so this path falls back to triage-compatible output.',
+                },
+              ],
+              knownFindings: triageData.evidence.slice(0, 4),
+              suspectedFindings: triageData.inference?.hypotheses || [],
+              unverifiedAreas: ['Managed-code structure remains unverified until workflow.reconstruct or dotnet.reconstruct.export runs.'],
+              upgradePaths: [
+                {
+                  tool: 'workflow.reconstruct',
+                  purpose: 'Recover .NET-aware structure through the main reconstruction workflow.',
+                  closes_gaps: ['dotnet_structure'],
+                  expected_coverage_gain: 'Adds managed export artifacts and structure beyond the triage-compatible fallback.',
+                  cost_tier: 'high',
+                },
+              ],
+            }),
             summary:
               `[dotnet fallback] ${triageData.summary}. ` +
               'Dotnet-specific summarize pipeline is not implemented yet; returning triage-compatible summary.',
@@ -1431,6 +2696,7 @@ export function createReportSummarizeHandler(
             binary_profile: binaryProfile,
             rust_profile: rustProfile,
             provenance,
+            persisted_state_visibility: persistedStateVisibility,
             ghidra_execution: ghidraExecution,
             selection_diffs:
               Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
@@ -1440,6 +2706,11 @@ export function createReportSummarizeHandler(
             recommendation:
               `${triageData.recommendation}; additionally run runtime.detect plus ` +
               'dotnet.reconstruct.export / workflow.reconstruct for .NET-specific structure.',
+            recommended_next_tools: ['workflow.summarize', 'artifact.read', 'workflow.reconstruct'],
+            next_actions: [
+              'Use workflow.summarize for staged compact reporting.',
+              'Use runtime.detect plus dotnet.reconstruct.export or workflow.reconstruct for .NET-specific structure.',
+            ],
           },
           warnings: [
             ...warnings,
@@ -1456,6 +2727,18 @@ export function createReportSummarizeHandler(
         metrics: toolMetrics(startTime),
       }
     } catch (error) {
+      if (error instanceof z.ZodError) {
+        const invalidMode = error.issues.find(
+          (issue) => issue.path[0] === 'mode' && issue.code === z.ZodIssueCode.invalid_enum_value
+        )
+        if (invalidMode) {
+          return {
+            ok: false,
+            errors: [`Unsupported mode: ${(args as { mode?: unknown }).mode}`],
+            metrics: toolMetrics(startTime),
+          }
+        }
+      }
       return {
         ok: false,
         errors: [(error as Error).message],

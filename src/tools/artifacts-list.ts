@@ -166,6 +166,7 @@ function artifactValueScore(type: string, artifactPath: string): number {
     'manifest',
     'gaps',
     'report',
+    'summary',
     'triage',
     'reconstruct',
     'trace',

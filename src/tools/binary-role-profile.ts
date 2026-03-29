@@ -4,8 +4,9 @@ import type { ToolArgs, ToolDefinition, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
 import type { DatabaseManager } from '../database.js'
 import type { CacheManager } from '../cache-manager.js'
+import type { JobQueue } from '../job-queue.js'
 import { generateCacheKey } from '../cache-manager.js'
-import { lookupCachedResult, formatCacheWarning } from './cache-observability.js'
+import { formatCacheWarning } from './cache-observability.js'
 import { createPEExportsExtractHandler } from './pe-exports-extract.js'
 import { createPEImportsExtractHandler } from './pe-imports-extract.js'
 import { createStringsExtractHandler } from './strings-extract.js'
@@ -16,6 +17,19 @@ import {
   formatMissingOriginalError,
   resolvePrimarySamplePath,
 } from '../sample-workspace.js'
+import {
+  buildDeferredToolResponse,
+  shouldDeferLargeSample,
+} from '../nonblocking-analysis.js'
+import {
+  AnalysisEvidenceStateSchema,
+  buildDeferredEvidenceState,
+  buildFreshEvidenceState,
+  buildResolvedEvidenceState,
+  buildEvidenceReuseWarnings,
+  persistCanonicalEvidence,
+  resolveCanonicalEvidenceOrCache,
+} from '../analysis-evidence.js'
 
 const TOOL_NAME = 'binary.role.profile'
 const TOOL_VERSION = '0.2.0'
@@ -23,6 +37,10 @@ const CACHE_TTL_MS = 7 * 24 * 60 * 60 * 1000
 
 export const BinaryRoleProfileInputSchema = z.object({
   sample_id: z.string().describe('Sample ID (format: sha256:<hex>)'),
+  mode: z
+    .enum(['fast', 'full'])
+    .default('fast')
+    .describe('fast reuses preview strings and bounded heuristics. Start with fast on medium or larger samples. full requests complete supporting evidence and may be deferred to the background queue.'),
   max_exports: z
     .number()
     .int()
@@ -41,6 +59,10 @@ export const BinaryRoleProfileInputSchema = z.object({
     .boolean()
     .default(false)
     .describe('Bypass cache lookup and recompute from source sample'),
+  defer_if_slow: z
+    .boolean()
+    .default(true)
+    .describe('When true, mode=full may be deferred to the background queue instead of blocking the MCP request.'),
 })
 
 export const ExportSurfaceSchema = z.object({
@@ -128,7 +150,18 @@ export const BinaryRoleProfileDataSchema = z.object({
 
 export const BinaryRoleProfileOutputSchema = z.object({
   ok: z.boolean(),
-  data: BinaryRoleProfileDataSchema.optional(),
+  data: BinaryRoleProfileDataSchema.partial()
+    .extend({
+      status: z.enum(['ready', 'queued', 'partial']).optional(),
+      result_mode: z.enum(['fast', 'full']).optional(),
+      execution_state: z.enum(['inline', 'queued', 'partial', 'completed']).optional(),
+      job_id: z.string().optional(),
+      polling_guidance: z.any().optional(),
+      evidence_state: z.array(AnalysisEvidenceStateSchema).optional(),
+      recommended_next_tools: z.array(z.string()).optional(),
+      next_actions: z.array(z.string()).optional(),
+    })
+    .optional(),
   warnings: z.array(z.string()).optional(),
   errors: z.array(z.string()).optional(),
   metrics: z
@@ -148,7 +181,7 @@ export const BinaryRoleProfileOutputSchema = z.object({
 export const binaryRoleProfileToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
   description:
-    'Summarize Windows PE role, export surface, DLL/COM/service/plugin indicators, and analysis priorities for EXE/DLL-like samples.',
+    'Summarize Windows PE role, export surface, DLL/COM/service/plugin indicators, and analysis priorities for EXE/DLL-like samples. Start with mode=fast for normal or large samples, then escalate to mode=full only when export/import/string correlation must be complete.',
   inputSchema: BinaryRoleProfileInputSchema,
   outputSchema: BinaryRoleProfileOutputSchema,
 }
@@ -320,7 +353,9 @@ export function createBinaryRoleProfileHandler(
   workspaceManager: WorkspaceManager,
   database: DatabaseManager,
   cacheManager: CacheManager,
-  dependencies?: BinaryRoleProfileDependencies
+  dependencies?: BinaryRoleProfileDependencies,
+  jobQueue?: JobQueue,
+  options: { allowDeferred?: boolean } = {}
 ) {
   const exportsHandler =
     dependencies?.exportsHandler ||
@@ -372,6 +407,7 @@ export function createBinaryRoleProfileHandler(
         toolName: TOOL_NAME,
         toolVersion: TOOL_VERSION,
         args: {
+          mode: input.mode,
           max_exports: input.max_exports,
           max_strings: input.max_strings,
           original_filename: originalFilename,
@@ -379,24 +415,80 @@ export function createBinaryRoleProfileHandler(
       })
 
       if (!input.force_refresh) {
-        const cachedLookup = await lookupCachedResult(cacheManager, cacheKey)
-        if (cachedLookup) {
+        const resolved = await resolveCanonicalEvidenceOrCache(database, cacheManager, cacheKey, {
+          sample,
+          evidenceFamily: 'binary_role',
+          backend: TOOL_NAME,
+          mode: input.mode,
+          args: {
+            max_exports: input.max_exports,
+            max_strings: input.max_strings,
+            original_filename: originalFilename,
+          },
+        })
+        if (resolved) {
           return {
             ok: true,
-            data: cachedLookup.data,
-            warnings: ['Result from cache', formatCacheWarning(cachedLookup.metadata)],
+            data: {
+              ...(resolved.record.result as Record<string, unknown>),
+              status: 'ready',
+              result_mode: input.mode,
+              execution_state: 'completed',
+              evidence_state: [buildResolvedEvidenceState(resolved)],
+            },
+            warnings:
+              resolved.source === 'cache' && resolved.cache
+                ? [...buildEvidenceReuseWarnings(resolved), formatCacheWarning(resolved.cache.metadata)]
+                : buildEvidenceReuseWarnings(resolved),
             metrics: {
               elapsed_ms: Date.now() - startTime,
               tool: TOOL_NAME,
-              cached: true,
-              cache_key: cachedLookup.metadata.key,
-              cache_tier: cachedLookup.metadata.tier,
-              cache_created_at: cachedLookup.metadata.createdAt,
-              cache_expires_at: cachedLookup.metadata.expiresAt,
-              cache_hit_at: cachedLookup.metadata.fetchedAt,
+              cached: resolved.source === 'cache',
+              cache_key: resolved.cache?.metadata.key,
+              cache_tier: resolved.cache?.metadata.tier,
+              cache_created_at: resolved.cache?.metadata.createdAt,
+              cache_expires_at: resolved.cache?.metadata.expiresAt,
+              cache_hit_at: resolved.cache?.metadata.fetchedAt,
             },
           }
         }
+      }
+
+      if (
+        input.mode === 'full' &&
+        input.defer_if_slow !== false &&
+        jobQueue &&
+        options.allowDeferred !== false &&
+        shouldDeferLargeSample(sample, 'full')
+      ) {
+        return buildDeferredToolResponse({
+          jobQueue,
+          tool: TOOL_NAME,
+          sampleId: input.sample_id,
+          args: {
+            ...input,
+            defer_if_slow: false,
+          },
+          timeoutMs: 5 * 60 * 1000,
+          summary:
+            'Full binary role profiling was deferred because it needs complete supporting strings and heuristic passes on a medium or larger sample.',
+          nextTools: ['task.status', 'dll.export.profile', 'com.role.profile'],
+          nextActions: [
+            'Use mode=fast for an immediate role hint.',
+            'Poll task.status with the returned job_id before requesting the same full role profile again.',
+          ],
+          metadata: {
+            evidence_state: [
+              buildDeferredEvidenceState({
+                evidenceFamily: 'binary_role',
+                backend: TOOL_NAME,
+                mode: input.mode,
+                reason:
+                  'Full binary role profiling was deferred because the requested sample size exceeds the synchronous heuristic budget.',
+              }),
+            ],
+          },
+        })
       }
 
       const [exportsResult, importsResult, stringsResult, runtimeResult, packerResult] =
@@ -409,9 +501,11 @@ export function createBinaryRoleProfileHandler(
           }),
           stringsHandler({
             sample_id: input.sample_id,
+            mode: input.mode === 'fast' ? 'preview' : 'full',
             category_filter: 'all',
             max_strings: input.max_strings,
             force_refresh: input.force_refresh,
+            defer_if_slow: false,
           }),
           runtimeHandler({ sample_id: input.sample_id, force_refresh: input.force_refresh }),
           packerHandler({ sample_id: input.sample_id, force_refresh: input.force_refresh }),
@@ -699,10 +793,43 @@ export function createBinaryRoleProfileHandler(
       }
 
       await cacheManager.setCachedResult(cacheKey, payload, CACHE_TTL_MS, sample.sha256)
+      persistCanonicalEvidence(database, {
+        sample,
+        evidenceFamily: 'binary_role',
+        backend: TOOL_NAME,
+        mode: input.mode,
+        args: {
+          max_exports: input.max_exports,
+          max_strings: input.max_strings,
+          original_filename: originalFilename,
+        },
+        result: payload,
+        metadata: {
+          cache_key: cacheKey,
+          original_filename: originalFilename,
+        },
+        provenance: {
+          tool: TOOL_NAME,
+          tool_version: TOOL_VERSION,
+          precedence: ['analysis_run_stage', 'analysis_evidence', 'artifact', 'cache'],
+        },
+      })
 
       return {
         ok: true,
-        data: payload,
+        data: {
+          ...payload,
+          status: 'ready',
+          result_mode: input.mode,
+          execution_state: 'completed',
+          evidence_state: [
+            buildFreshEvidenceState({
+              evidenceFamily: 'binary_role',
+              backend: TOOL_NAME,
+              mode: input.mode,
+            }),
+          ],
+        },
         warnings: warnings.length > 0 ? warnings : undefined,
         metrics: {
           elapsed_ms: Date.now() - startTime,

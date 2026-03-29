@@ -215,6 +215,47 @@ function normalizeTextFindings(stdout: string, stderr: string): z.infer<typeof A
   return findings
 }
 
+function parseLooseJsonOutput(stdout: string): unknown | null {
+  const trimmed = stdout.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  const candidates = new Set<string>()
+  candidates.add(trimmed)
+
+  const lines = trimmed.split(/\r?\n/)
+  const jsonStartIndex = lines.findIndex((line) => {
+    const normalized = line.trim()
+    return /^(?:\{|\[(?!\!))/.test(normalized)
+  })
+  if (jsonStartIndex >= 0) {
+    candidates.add(lines.slice(jsonStartIndex).join('\n').trim())
+  }
+
+  const objectStart = trimmed.indexOf('{')
+  const objectEnd = trimmed.lastIndexOf('}')
+  if (objectStart >= 0 && objectEnd > objectStart) {
+    candidates.add(trimmed.slice(objectStart, objectEnd + 1).trim())
+  }
+
+  const arrayStart = trimmed.search(/\[(?!\!)/)
+  const arrayEnd = trimmed.lastIndexOf(']')
+  if (arrayStart >= 0 && arrayEnd > arrayStart) {
+    candidates.add(trimmed.slice(arrayStart, arrayEnd + 1).trim())
+  }
+
+  for (const candidate of candidates) {
+    try {
+      return JSON.parse(candidate)
+    } catch {
+      // Try the next candidate.
+    }
+  }
+
+  return null
+}
+
 function partitionFindings(findings: z.infer<typeof AttributionFindingSchema>[]) {
   const pick = (category: z.infer<typeof AttributionFindingSchema>['category']) =>
     findings.filter((item) => item.category === category)
@@ -269,6 +310,7 @@ export function createCompilerPackerDetectHandler(
 
   return async (args: ToolArgs): Promise<WorkerResult> => {
     const startTime = Date.now()
+    const warnings: string[] = []
 
     try {
       const input = compilerPackerDetectInputSchema.parse(args)
@@ -314,7 +356,16 @@ export function createCompilerPackerDetectHandler(
       const execution = await executeBackend(backend.path, samplePath, input.timeout_sec)
       const findings =
         execution.format === 'json'
-          ? normalizeJsonFindings(JSON.parse(execution.stdout || '{}'))
+          ? (() => {
+              const parsed = parseLooseJsonOutput(execution.stdout)
+              if (parsed !== null) {
+                return normalizeJsonFindings(parsed)
+              }
+              warnings.push(
+                'Detect It Easy emitted non-JSON output while JSON mode was requested; fell back to text normalization.'
+              )
+              return normalizeTextFindings(execution.stdout, execution.stderr)
+            })()
           : normalizeTextFindings(execution.stdout, execution.stderr)
       const deduped = new Map<string, z.infer<typeof AttributionFindingSchema>>()
       for (const finding of findings) {
@@ -414,6 +465,7 @@ export function createCompilerPackerDetectHandler(
             stderr: execution.stderr,
           },
         },
+        warnings: warnings.length > 0 ? warnings : undefined,
         artifacts: artifacts.length > 0 ? artifacts : undefined,
         metrics: { elapsed_ms: Date.now() - startTime, tool: TOOL_NAME },
       }

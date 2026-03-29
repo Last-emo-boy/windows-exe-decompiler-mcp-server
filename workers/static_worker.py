@@ -4,6 +4,8 @@ Static Worker - PE 瑙ｆ瀽銆佸瓧绗︿覆鎻愬彇銆乊ARA 鎵弿
 瀹炵幇涓?Node.js 鐨勮繘绋嬮棿閫氫俊锛坰tdin/stdout JSON锛?
 """
 
+from __future__ import annotations
+
 import sys
 import json
 import os
@@ -16,7 +18,7 @@ import subprocess
 import importlib.metadata
 import traceback
 import warnings
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import datetime, timezone
 
@@ -2727,6 +2729,8 @@ print(json.dumps(payload))
         context_window_bytes = args.get('context_window_bytes', 1024)
         max_context_windows = args.get('max_context_windows', 12)
         category_filter = args.get('category_filter', 'all')
+        scan_mode = args.get('scan_mode', 'full')
+        max_scan_bytes = args.get('max_scan_bytes')
         
         # 楠岃瘉鍙傛暟
         if min_len < 1:
@@ -2734,6 +2738,9 @@ print(json.dumps(payload))
         
         if encoding_filter not in ['ascii', 'unicode', 'all']:
             raise ValueError(f"Invalid encoding: {encoding_filter}. Must be 'ascii', 'unicode', or 'all'")
+
+        if scan_mode not in ['preview', 'full']:
+            raise ValueError("scan_mode must be 'preview' or 'full'")
 
         if max_strings is None:
             max_strings = 500
@@ -2754,6 +2761,10 @@ print(json.dumps(payload))
             max_context_windows = 12
         if not isinstance(max_context_windows, int) or max_context_windows < 1:
             raise ValueError("max_context_windows must be a positive integer")
+
+        if max_scan_bytes is not None:
+            if not isinstance(max_scan_bytes, int) or max_scan_bytes < 65536:
+                raise ValueError("max_scan_bytes must be an integer >= 65536")
 
         valid_category_filters = [
             'all',
@@ -2778,27 +2789,30 @@ print(json.dumps(payload))
         except Exception as e:
             raise Exception(f"Failed to read file: {str(e)}")
         
+        segment_specs = self._build_string_scan_segments(data, scan_mode, max_scan_bytes)
+        scan_bytes = sum(len(segment_data) for _, segment_data in segment_specs)
         strings_list = []
-        
-        # 鎻愬彇 ASCII 瀛楃涓?
-        if encoding_filter in ['ascii', 'all']:
-            ascii_strings = self._extract_ascii_strings(data, min_len)
-            strings_list.extend(ascii_strings)
-        
-        # 鎻愬彇 Unicode (UTF-16LE) 瀛楃涓?
-        if encoding_filter in ['unicode', 'all']:
-            unicode_strings = self._extract_unicode_strings(data, min_len)
-            strings_list.extend(unicode_strings)
-        
-        # 濡傛灉 encoding='all'锛屽皾璇曞叾浠栫紪鐮?
-        if encoding_filter == 'all':
-            # 鎻愬彇 UTF-8 瀛楃涓?
-            utf8_strings = self._extract_utf8_strings(data, min_len)
-            strings_list.extend(utf8_strings)
+
+        for base_offset, segment_data in segment_specs:
+            # 鎻愬彇 ASCII 瀛楃涓?
+            if encoding_filter in ['ascii', 'all']:
+                ascii_strings = self._extract_ascii_strings(segment_data, min_len)
+                strings_list.extend(self._offset_extracted_strings(ascii_strings, base_offset))
             
-            # 鎻愬彇 GBK 瀛楃涓诧紙涓枃缂栫爜锛?
-            gbk_strings = self._extract_gbk_strings(data, min_len)
-            strings_list.extend(gbk_strings)
+            # 鎻愬彇 Unicode (UTF-16LE) 瀛楃涓?
+            if encoding_filter in ['unicode', 'all']:
+                unicode_strings = self._extract_unicode_strings(segment_data, min_len)
+                strings_list.extend(self._offset_extracted_strings(unicode_strings, base_offset))
+            
+            # 濡傛灉 encoding='all'锛屽皾璇曞叾浠栫紪鐮?
+            if encoding_filter == 'all':
+                # 鎻愬彇 UTF-8 瀛楃涓?
+                utf8_strings = self._extract_utf8_strings(segment_data, min_len)
+                strings_list.extend(self._offset_extracted_strings(utf8_strings, base_offset))
+                
+                # 鎻愬彇 GBK 瀛楃涓诧紙涓枃缂栫爜锛?
+                gbk_strings = self._extract_gbk_strings(segment_data, min_len)
+                strings_list.extend(self._offset_extracted_strings(gbk_strings, base_offset))
         
         # 鎸夊亸绉婚噺鎺掑簭骞跺幓閲?
         all_strings = self._deduplicate_strings(strings_list)
@@ -2833,8 +2847,78 @@ print(json.dumps(payload))
             "min_len": min_len,
             "encoding_filter": encoding_filter,
             "category_filter": category_filter,
+            "scan_mode": scan_mode,
+            "scan_bytes": scan_bytes,
+            "sampled": scan_bytes < len(data),
             "summary": summary
         }
+
+    def _offset_extracted_strings(self, strings: List[Dict[str, Any]], base_offset: int) -> List[Dict[str, Any]]:
+        """
+        Apply segment base offsets so preview scanning can sample file regions
+        while still reporting original file offsets.
+        """
+        if base_offset <= 0:
+            return strings
+        adjusted = []
+        for item in strings:
+            cloned = dict(item)
+            cloned["offset"] = int(cloned.get("offset", 0)) + base_offset
+            adjusted.append(cloned)
+        return adjusted
+
+    def _build_string_scan_segments(
+        self,
+        data: bytes,
+        scan_mode: str,
+        max_scan_bytes: Optional[int]
+    ) -> List[Tuple[int, bytes]]:
+        """
+        Build bounded scan segments for preview mode so string extraction does
+        not always read and regex-scan the full sample before truncation.
+        """
+        total_size = len(data)
+        if scan_mode != 'preview':
+            return [(0, data)]
+        if max_scan_bytes is None:
+            max_scan_bytes = 1024 * 1024
+        if total_size <= max_scan_bytes:
+            return [(0, data)]
+
+        budget = max(65536, min(max_scan_bytes, total_size))
+        if budget <= 256 * 1024:
+            return [(0, data[:budget])]
+
+        head_size = max(65536, budget // 3)
+        tail_size = max(65536, budget // 3)
+        middle_size = max(65536, budget - head_size - tail_size)
+
+        if head_size + middle_size + tail_size >= total_size:
+            return [(0, data)]
+
+        middle_start = max(head_size, (total_size // 2) - (middle_size // 2))
+        tail_start = max(middle_start + middle_size, total_size - tail_size)
+
+        segments = [
+            (0, head_size),
+            (middle_start, middle_start + middle_size),
+            (tail_start, total_size),
+        ]
+
+        merged_segments = []
+        for start, end in segments:
+            start = max(0, min(start, total_size))
+            end = max(start, min(end, total_size))
+            if not merged_segments:
+                merged_segments.append([start, end])
+                continue
+            prev_start, prev_end = merged_segments[-1]
+            if start <= prev_end:
+                merged_segments[-1][1] = max(prev_end, end)
+            else:
+                merged_segments.append([start, end])
+
+        return [(start, data[start:end]) for start, end in merged_segments if end > start]
     
     def _extract_ascii_strings(self, data: bytes, min_len: int) -> List[Dict[str, Any]]:
         """

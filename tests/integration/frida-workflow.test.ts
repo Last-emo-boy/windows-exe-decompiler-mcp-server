@@ -79,8 +79,8 @@ describe('Frida Integration Tests', () => {
   async function ingestTestSample(peBuffer: Buffer): Promise<string> {
     const ingestHandler = createSampleIngestHandler(workspaceManager, database, policyGuard)
     const result = await ingestHandler({
-      path: 'test-sample.exe',
       bytes_b64: peBuffer.toString('base64'),
+      filename: 'test-sample.exe',
       source: 'integration-test',
     })
 
@@ -88,7 +88,7 @@ describe('Frida Integration Tests', () => {
       throw new Error('Failed to ingest test sample')
     }
 
-    return result.data.sample_id
+    return (result.data as { sample_id: string }).sample_id
   }
 
   describe('Frida Runtime Instrument', () => {

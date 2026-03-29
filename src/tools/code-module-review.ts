@@ -17,6 +17,12 @@ import { createCodeModuleReviewApplyHandler } from './code-module-review-apply.j
 
 const TOOL_NAME = 'code.module.review'
 
+/**
+ * @deprecated Use `llm.analyze` with task='review' instead.
+ * This tool will be removed in a future version.
+ * Migration guide: docs/MIGRATION.md
+ */
+
 const ReviewModuleSchema = z.object({
   module_name: z.string().min(1).max(120),
   refined_name: z.string().min(1).max(120).optional(),
@@ -284,6 +290,16 @@ function buildSamplingRequest(
   input: z.infer<typeof codeModuleReviewInputSchema>,
   taskPrompt: string
 ): CreateMessageRequest['params'] {
+  const invariantSystemPrompt = [
+    'You are an evidence-grounded reverse-engineering assistant.',
+    'Return strict JSON only.',
+    'Do not wrap the response in markdown, code fences, or commentary.',
+    'Do not call tools.',
+    'Use only the supplied evidence bundle.',
+    'Preserve uncertainty explicitly.',
+    'Prefer empty results or conservative review guidance over hallucinated precision.',
+  ].join(' ')
+
   return {
     messages: [
       {
@@ -294,9 +310,9 @@ function buildSamplingRequest(
         },
       },
     ],
-    systemPrompt:
-      input.system_prompt ||
-      'You are an evidence-grounded reverse-engineering assistant. Return strict JSON only.',
+    systemPrompt: input.system_prompt
+      ? `${invariantSystemPrompt}\n\nAdditional task constraints:\n${input.system_prompt}`
+      : invariantSystemPrompt,
     includeContext: input.include_context,
     maxTokens: input.max_tokens,
     temperature: input.temperature,

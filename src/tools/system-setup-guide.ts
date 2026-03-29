@@ -5,7 +5,10 @@ import {
   SetupActionSchema,
   buildAllSetupActions,
   buildBaselinePythonSetupActions,
+  buildCoreLinuxToolchainSetupActions,
   buildDynamicDependencySetupActions,
+  buildDynamicDependencyRequiredUserInputs,
+  buildHeavyBackendSetupActions,
   buildStaticAnalysisRequiredUserInputs,
   buildStaticAnalysisSetupActions,
   buildJavaRequiredUserInputs,
@@ -56,6 +59,7 @@ export function createSystemSetupGuideHandler() {
     let setupActions = buildAllSetupActions(input.include_optional)
     let requiredUserInputs = mergeRequiredUserInputs(
       buildStaticAnalysisRequiredUserInputs(),
+      buildDynamicDependencyRequiredUserInputs(),
       buildGhidraRequiredUserInputs(),
       buildJavaRequiredUserInputs()
     )
@@ -64,6 +68,9 @@ export function createSystemSetupGuideHandler() {
       'When Ghidra launch fails, verify JAVA_HOME points to Java 21 or newer before retrying.',
       'Configure CAPA_RULES_PATH when static capability triage reports that capa rules are missing.',
       'Set DIE_PATH or place diec.exe on PATH when compiler/packer attribution requires Detect It Easy.',
+      'Set QILING_ROOTFS to a mounted Windows rootfs if you want Qiling-backed automated dynamic analysis.',
+      'ANGR_PYTHON can point at an isolated Python interpreter that has angr installed.',
+      'RetDec is heavy and artifact-first by design; prefer reading generated files instead of inlining large decompiler payloads.',
       'If your MCP client can read the local filesystem, prefer sample.ingest(path=...) over bytes_b64.',
     ]
 
@@ -73,7 +80,9 @@ export function createSystemSetupGuideHandler() {
     } else if (input.focus === 'static') {
       setupActions = mergeSetupActions(
         buildBaselinePythonSetupActions(),
-        buildStaticAnalysisSetupActions()
+        buildStaticAnalysisSetupActions(),
+        input.include_optional ? buildCoreLinuxToolchainSetupActions() : [],
+        input.include_optional ? buildHeavyBackendSetupActions() : []
       )
       requiredUserInputs = mergeRequiredUserInputs(buildStaticAnalysisRequiredUserInputs())
     } else if (input.focus === 'dynamic') {
@@ -81,7 +90,9 @@ export function createSystemSetupGuideHandler() {
         buildBaselinePythonSetupActions(),
         input.include_optional ? buildDynamicDependencySetupActions() : []
       )
-      requiredUserInputs = []
+      requiredUserInputs = mergeRequiredUserInputs(
+        input.include_optional ? buildDynamicDependencyRequiredUserInputs() : []
+      )
     } else if (input.focus === 'java') {
       setupActions = mergeSetupActions(buildJavaSetupActions())
       requiredUserInputs = mergeRequiredUserInputs(buildJavaRequiredUserInputs())

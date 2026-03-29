@@ -4,8 +4,12 @@
 # Note: the PyPI package named `speakeasy` is an unrelated metrics server.
 # Use `speakeasy-emulator`, which provides the `speakeasy` malware-emulation module.
 # Unicorn still imports `pkg_resources`, so keep setuptools below 81 for now.
+# Qiling is installed via a dedicated isolated environment because it requires
+# unicorn>=2 while Speakeasy still pins unicorn==1.0.2.
 
 speakeasy-emulator==1.5.11
 setuptools<81
 frida==17.8.0
+frida-tools==14.6.1
 psutil==7.2.2
+pandare==1.8.83

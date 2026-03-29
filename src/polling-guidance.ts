@@ -28,11 +28,16 @@ function roundToWholeSeconds(ms: number): number {
 
 export function buildPollingGuidance(input: {
   tool?: string | null
-  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled'
+  status: 'queued' | 'running' | 'completed' | 'failed' | 'cancelled' | 'interrupted'
   progress?: number | null
   timeout_ms?: number | null
 }): PollingGuidance | null {
-  if (input.status === 'completed' || input.status === 'failed' || input.status === 'cancelled') {
+  if (
+    input.status === 'completed' ||
+    input.status === 'failed' ||
+    input.status === 'cancelled' ||
+    input.status === 'interrupted'
+  ) {
     return null
   }
 

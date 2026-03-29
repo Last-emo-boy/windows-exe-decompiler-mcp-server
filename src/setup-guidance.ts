@@ -4,7 +4,7 @@ import type { WorkerResult } from './types.js'
 export const SetupActionSchema = z.object({
   id: z.string(),
   required: z.boolean(),
-  kind: z.enum(['pip_install', 'set_env', 'provide_path', 'verify_install']),
+  kind: z.enum(['pip_install', 'install_package', 'set_env', 'provide_path', 'verify_install']),
   title: z.string(),
   summary: z.string(),
   command: z.string().nullable().optional(),
@@ -49,6 +49,16 @@ const WINDOWS_DIE_EXAMPLES = [
 const WINDOWS_FRIDA_EXAMPLES = [
   'pip install frida',
   'pip install frida-tools',
+]
+
+const LINUX_QILING_ROOTFS_EXAMPLES = [
+  '/opt/qiling-rootfs/windows_x86_64',
+  '/mnt/qiling-rootfs',
+]
+
+const LINUX_RETDEC_EXAMPLES = [
+  '/opt/retdec/bin/retdec-decompiler',
+  '/usr/local/bin/retdec-decompiler',
 ]
 
 export function mergeSetupActions(...groups: SetupAction[][]): SetupAction[] {
@@ -215,6 +225,81 @@ export function buildStaticAnalysisSetupActions(): SetupAction[] {
   ]
 }
 
+export function buildCoreLinuxToolchainSetupActions(): SetupAction[] {
+  return [
+    {
+      id: 'install_graphviz_package',
+      required: false,
+      kind: 'install_package',
+      title: 'Install Graphviz',
+      summary:
+        'Install Graphviz so CFG and call-graph exports can render SVG or PNG artifacts from DOT input.',
+      command: 'apt-get update && apt-get install -y graphviz',
+      examples: ['apt-get update && apt-get install -y graphviz', 'brew install graphviz'],
+      applies_to: ['code.function.cfg', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_rizin_package',
+      required: false,
+      kind: 'install_package',
+      title: 'Install Rizin',
+      summary:
+        'Install Rizin for lightweight disassembly, Xref, graph, and fallback binary-inspection workflows.',
+      command:
+        'curl -fsSL https://github.com/rizinorg/rizin/releases/download/v0.8.2/rizin-v0.8.2-static-x86_64.tar.xz | tar -xJf - -C /opt/rizin --strip-components=1',
+      examples: [
+        'curl -fsSL https://github.com/rizinorg/rizin/releases/download/v0.8.2/rizin-v0.8.2-static-x86_64.tar.xz | tar -xJf - -C /opt/rizin --strip-components=1',
+      ],
+      applies_to: ['system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_yarax_package',
+      required: false,
+      kind: 'pip_install',
+      title: 'Install YARA-X',
+      summary:
+        'Install YARA-X alongside legacy YARA so future scans can use the newer engine without removing yara-python.',
+      command: 'python -m pip install yara-x',
+      examples: ['python -m pip install yara-x'],
+      applies_to: ['yara.scan', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_upx_package',
+      required: false,
+      kind: 'install_package',
+      title: 'Install UPX',
+      summary: 'Install UPX for common packed-sample inspection and unpack-helper workflows.',
+      command:
+        'curl -fsSL https://github.com/upx/upx/releases/download/v5.1.1/upx-5.1.1-amd64_linux.tar.xz | tar -xJf - -C /opt/upx --strip-components=1',
+      examples: [
+        'curl -fsSL https://github.com/upx/upx/releases/download/v5.1.1/upx-5.1.1-amd64_linux.tar.xz | tar -xJf - -C /opt/upx --strip-components=1',
+      ],
+      applies_to: ['packer.detect', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_wine_package',
+      required: false,
+      kind: 'install_package',
+      title: 'Install Wine and winedbg',
+      summary:
+        'Install Wine plus winedbg for Linux-hosted Windows user-mode execution and debugger-style troubleshooting.',
+      command: 'apt-get update && apt-get install -y wine wine64',
+      examples: ['apt-get update && apt-get install -y wine wine64'],
+      applies_to: ['dynamic.dependencies', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_frida_tools_cli',
+      required: false,
+      kind: 'pip_install',
+      title: 'Install Frida CLI tools',
+      summary: 'Install frida-tools so frida-ps, frida-trace, and other CLI helpers are available on PATH.',
+      command: 'python -m pip install frida-tools',
+      examples: ['python -m pip install frida-tools'],
+      applies_to: ['dynamic.dependencies', 'system.health', 'system.setup.guide'],
+    },
+  ]
+}
+
 export function buildDynamicDependencySetupActions(): SetupAction[] {
   return [
     {
@@ -267,6 +352,89 @@ export function buildDynamicDependencySetupActions(): SetupAction[] {
       command: 'python -m pip install psutil',
       examples: ['python -m pip install psutil'],
       applies_to: ['dynamic.dependencies'],
+    },
+    {
+      id: 'install_qiling_runtime',
+      required: false,
+      kind: 'pip_install',
+      title: 'Install Qiling',
+      summary:
+        'Install Qiling for Windows API emulation, hookable user-mode execution, and automated dynamic analysis workflows.',
+      command: 'python -m pip install qiling',
+      examples: ['python -m pip install qiling'],
+      applies_to: ['dynamic.dependencies', 'sandbox.execute', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'set_qiling_rootfs',
+      required: false,
+      kind: 'set_env',
+      title: 'Set QILING_ROOTFS',
+      summary:
+        'Set QILING_ROOTFS to a mounted Windows rootfs directory. Qiling does not ship Windows DLLs or registry hives for you.',
+      env_var: 'QILING_ROOTFS',
+      value_hint: 'Absolute path to a mounted Qiling Windows rootfs directory',
+      examples: LINUX_QILING_ROOTFS_EXAMPLES.map((example) => `export QILING_ROOTFS="${example}"`),
+      applies_to: ['dynamic.dependencies', 'sandbox.execute', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_angr_runtime',
+      required: false,
+      kind: 'pip_install',
+      title: 'Install angr',
+      summary:
+        'Install angr, ideally in an isolated Python environment, for symbolic execution, CFG recovery, and path exploration.',
+      command: 'python -m venv /opt/angr-venv && /opt/angr-venv/bin/pip install angr',
+      examples: ['python -m venv /opt/angr-venv && /opt/angr-venv/bin/pip install angr'],
+      applies_to: ['dynamic.dependencies', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'set_angr_python',
+      required: false,
+      kind: 'set_env',
+      title: 'Set ANGR_PYTHON',
+      summary:
+        'Point ANGR_PYTHON at the isolated Python interpreter used to import angr so future advanced-analysis tools can invoke it consistently.',
+      env_var: 'ANGR_PYTHON',
+      value_hint: 'Absolute path to the Python interpreter with angr installed',
+      examples: ['export ANGR_PYTHON="/opt/angr-venv/bin/python"'],
+      applies_to: ['dynamic.dependencies', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'install_panda_runtime',
+      required: false,
+      kind: 'pip_install',
+      title: 'Install PANDA Python bindings',
+      summary:
+        'Install pandare so record/replay-oriented PANDA workflows are available to helper tooling and future integrations.',
+      command: 'python -m pip install pandare',
+      examples: ['python -m pip install pandare'],
+      applies_to: ['dynamic.dependencies', 'system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'set_panda_python',
+      required: false,
+      kind: 'set_env',
+      title: 'Set PANDA_PYTHON',
+      summary:
+        'Optionally point PANDA_PYTHON at the interpreter that has pandare installed when it differs from the server default Python.',
+      env_var: 'PANDA_PYTHON',
+      value_hint: 'Absolute path to the Python interpreter with pandare installed',
+      examples: ['export PANDA_PYTHON="/usr/local/bin/python3"'],
+      applies_to: ['dynamic.dependencies', 'system.health', 'system.setup.guide'],
+    },
+  ]
+}
+
+export function buildDynamicDependencyRequiredUserInputs(): RequiredUserInput[] {
+  return [
+    {
+      key: 'qiling_rootfs_path',
+      label: 'Qiling rootfs directory',
+      summary:
+        'Provide a mounted Windows rootfs directory for Qiling. This should contain the Windows DLL and registry snapshot expected by the emulated sample.',
+      required: false,
+      env_vars: ['QILING_ROOTFS'],
+      examples: LINUX_QILING_ROOTFS_EXAMPLES,
     },
   ]
 }
@@ -340,6 +508,48 @@ export function buildFridaSetupActions(): SetupAction[] {
       value_hint: 'Absolute path to a directory containing Frida scripts',
       examples: WINDOWS_FRIDA_EXAMPLES.map(() => `$env:FRIDA_SCRIPT_ROOT = "C:\\tools\\frida-scripts"`),
       applies_to: ['frida.script.inject', 'system.health'],
+    },
+  ]
+}
+
+export function buildHeavyBackendSetupActions(): SetupAction[] {
+  return [
+    {
+      id: 'install_retdec_backend',
+      required: false,
+      kind: 'install_package',
+      title: 'Install RetDec',
+      summary:
+        'Install the RetDec release bundle when you want an additional heavy decompiler/fileinfo backend beyond Ghidra and compiler/packer triage.',
+      command:
+        'curl -fsSL https://github.com/avast/retdec/releases/download/v5.0/RetDec-v5.0-Linux-Release.tar.xz | tar -xJf - -C /opt/retdec --strip-components=1',
+      examples: [
+        'curl -fsSL https://github.com/avast/retdec/releases/download/v5.0/RetDec-v5.0-Linux-Release.tar.xz | tar -xJf - -C /opt/retdec --strip-components=1',
+      ],
+      applies_to: ['system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'set_retdec_path',
+      required: false,
+      kind: 'set_env',
+      title: 'Set RETDEC_PATH',
+      summary:
+        'Set RETDEC_PATH to the retdec-decompiler executable when it is installed outside the default PATH layout.',
+      env_var: 'RETDEC_PATH',
+      value_hint: 'Absolute path to retdec-decompiler',
+      examples: LINUX_RETDEC_EXAMPLES.map((example) => `export RETDEC_PATH="${example}"`),
+      applies_to: ['system.health', 'system.setup.guide'],
+    },
+    {
+      id: 'verify_retdec_install',
+      required: false,
+      kind: 'verify_install',
+      title: 'Verify RetDec installation',
+      summary:
+        'Confirm that retdec-decompiler and retdec-fileinfo launch successfully before using them in artifact-first workflows.',
+      command: 'retdec-decompiler --help && retdec-fileinfo --help',
+      examples: ['retdec-decompiler --help', 'retdec-fileinfo --help'],
+      applies_to: ['system.health', 'system.setup.guide'],
     },
   ]
 }
@@ -509,9 +719,11 @@ export function buildAllSetupActions(includeOptional = true): SetupAction[] {
   return mergeSetupActions(
     buildBaselinePythonSetupActions(),
     buildStaticAnalysisSetupActions(),
+    includeOptional ? buildCoreLinuxToolchainSetupActions() : [],
     buildDynamicDependencySetupActions(),
     buildJavaSetupActions(),
     buildGhidraSetupActions(),
+    includeOptional ? buildHeavyBackendSetupActions() : [],
     includeOptional ? buildPyGhidraSetupActions() : [],
     includeOptional ? buildFridaSetupActions() : []
   )
@@ -534,7 +746,7 @@ function inferSetupGuidanceFromMessages(messages: string[]) {
     setupActions = mergeSetupActions(setupActions, buildPyGhidraSetupActions())
   }
   if (
-    /python worker|module not found|modulenotfounderror|no module named|yara-python|flare-floss|flare-capa|capa rules|pefile|lief|detect it easy|diec|speakeasy|frida|psutil|pip install/i.test(
+    /python worker|module not found|modulenotfounderror|no module named|yara-python|yara-x|flare-floss|flare-capa|capa rules|pefile|lief|detect it easy|diec|speakeasy|frida|psutil|qiling|angr|pandare|panda|retdec|rizin|graphviz|upx|wine|winedbg|pip install/i.test(
       combined
     )
   ) {
@@ -547,12 +759,19 @@ function inferSetupGuidanceFromMessages(messages: string[]) {
       requiredUserInputs,
       buildStaticAnalysisRequiredUserInputs()
     )
-    if (/speakeasy|frida|psutil/i.test(combined)) {
+    if (/graphviz|rizin|yara-x|upx|wine|winedbg/i.test(combined)) {
+      setupActions = mergeSetupActions(setupActions, buildCoreLinuxToolchainSetupActions())
+    }
+    if (/speakeasy|frida|psutil|qiling|angr|pandare|panda|wine|winedbg/i.test(combined)) {
       setupActions = mergeSetupActions(setupActions, buildDynamicDependencySetupActions())
+      requiredUserInputs = mergeRequiredUserInputs(requiredUserInputs, buildDynamicDependencyRequiredUserInputs())
     }
     if (/frida/i.test(combined)) {
       setupActions = mergeSetupActions(setupActions, buildFridaSetupActions())
       requiredUserInputs = mergeRequiredUserInputs(requiredUserInputs, buildFridaRequiredUserInputs())
+    }
+    if (/retdec/i.test(combined)) {
+      setupActions = mergeSetupActions(setupActions, buildHeavyBackendSetupActions())
     }
   }
 

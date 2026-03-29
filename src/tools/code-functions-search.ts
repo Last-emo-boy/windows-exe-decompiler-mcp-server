@@ -22,7 +22,8 @@ export type CodeFunctionsSearchInput = z.infer<typeof codeFunctionsSearchInputSc
 export const codeFunctionsSearchToolDefinition: ToolDefinition = {
   name: 'code.functions.search',
   description:
-    'Search functions by referenced API names or string literals. Uses Ghidra when available for string-to-function mapping and falls back to function-index API search otherwise.',
+    'Search functions by referenced API names or string literals. Uses Ghidra when available for string-to-function mapping and falls back to function-index API search otherwise. ' +
+    'Use code.xrefs.analyze when you need bounded inbound/outbound relationship summaries instead of a simple function match list.',
   inputSchema: codeFunctionsSearchInputSchema,
 }
 

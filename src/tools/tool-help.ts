@@ -1,5 +1,14 @@
 import { z } from 'zod'
 import type { ToolArgs, ToolDefinition, WorkerResult } from '../types.js'
+import {
+  ToolSurfaceRoleSchema,
+  buildPreferredPrimaryTools,
+} from '../tool-surface-guidance.js'
+import {
+  rewriteToolReferencesInValue,
+  rewriteToolReferencesInText,
+  toTransportToolName,
+} from '../tool-name-normalization.js'
 
 const TOOL_NAME = 'tool.help'
 
@@ -39,6 +48,8 @@ export const toolHelpOutputSchema = z.object({
       z.object({
         name: z.string(),
         description: z.string(),
+        surface_role: ToolSurfaceRoleSchema,
+        preferred_primary_tools: z.array(z.string()).optional(),
         usage_notes: z.array(z.string()).optional(),
         input: ToolSchemaSummarySchema.optional(),
         output: ToolSchemaSummarySchema.optional(),
@@ -51,9 +62,61 @@ export const toolHelpOutputSchema = z.object({
 export const toolHelpToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
   description:
-    'Query normalized schema/help for registered MCP tools, including enum values, defaults, and field descriptions.',
+    'Query normalized schema/help for registered MCP tools, including enum values, defaults, field descriptions, and primary-versus-compatibility surface roles.',
   inputSchema: toolHelpInputSchema,
   outputSchema: toolHelpOutputSchema,
+}
+
+function classifyToolSurfaceRole(toolName: string): z.infer<typeof ToolSurfaceRoleSchema> {
+  if (
+    [
+      'workflow.analyze.start',
+      'workflow.analyze.status',
+      'workflow.analyze.promote',
+      'workflow.summarize',
+      'sample.ingest',
+      'sample.request_upload',
+    ].includes(toolName)
+  ) {
+    return 'primary'
+  }
+
+  if (['report.generate'].includes(toolName)) {
+    return 'export_only'
+  }
+
+  if (['graphviz.render'].includes(toolName)) {
+    return 'renderer_helper'
+  }
+
+  if (
+    [
+      'workflow.triage',
+      'task.status',
+      'report.summarize',
+    ].includes(toolName)
+  ) {
+    return 'compatibility'
+  }
+
+  return 'primary'
+}
+
+function preferredPrimaryToolsFor(toolName: string) {
+  switch (toolName) {
+    case 'workflow.triage':
+      return ['workflow.analyze.start', 'workflow.analyze.status', 'workflow.analyze.promote']
+    case 'task.status':
+      return ['workflow.analyze.status']
+    case 'report.summarize':
+      return ['workflow.summarize']
+    case 'report.generate':
+      return ['workflow.summarize', 'report.summarize']
+    case 'graphviz.render':
+      return ['code.function.cfg', 'workflow.summarize', 'report.summarize']
+    default:
+      return []
+  }
 }
 
 type FieldSummary = z.infer<typeof ToolFieldSchema>
@@ -168,6 +231,7 @@ function collectSchemaFields(schema: z.ZodTypeAny, prefix = '', toolName?: strin
 }
 
 function buildFieldHelpHint(path: string, toolName?: string): string | null {
+  const suffix = path.split('.').pop() || path
   if (toolName === 'sample.ingest') {
     if (path === 'path') {
       return 'Preferred for local files. Pass an absolute path when the MCP client can read the same filesystem as the MCP server.'
@@ -178,9 +242,187 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
     if (path === 'filename') {
       return 'Optional display/original filename. Useful when ingesting from bytes_b64 because there is no source path-derived filename.'
     }
+    if (path === 'upload_url') {
+      return 'Compatibility-only path. Prefer reading sample_id directly from the HTTP upload response and only pass upload_url here for legacy finalize flows.'
+    }
+  }
+
+  if (toolName === 'sample.request_upload') {
+    if (path === 'filename') {
+      return 'Optional original filename used to label the upload session and improve later sample display metadata.'
+    }
+    if (path === 'ttl_seconds') {
+      return 'Short-lived upload-session lifetime in seconds. Increase only when the client cannot upload immediately after requesting the URL.'
+    }
+  }
+
+  if (toolName === 'report.summarize') {
+    if (path === 'detail_level') {
+      return 'compact is the default AI-facing digest mode and the preferred choice for normal or large samples. Use full only for targeted smaller-sample review; it is still bounded and may omit heavyweight inline fields.'
+    }
+  }
+
+  if (toolName === 'workflow.summarize') {
+    if (path === 'through_stage') {
+      return 'Stop after triage/static/deep when you want bounded staged digests, especially for medium or large samples. Use final for the full compact analyst summary workflow.'
+    }
+    if (path === 'synthesis_mode') {
+      return 'auto prefers client-mediated sampling only when supported. deterministic always uses staged digests without client sampling.'
+    }
+    if (path === 'session_tag') {
+      return 'Optional summary-digest session tag used to persist and later reuse a coherent staged summary set.'
+    }
+  }
+
+  if (toolName === 'workflow.analyze.auto') {
+    if (path === 'goal') {
+      return 'Use triage for quick profiling, static for queued deep static analysis, reverse for source-like reconstruction, dynamic for readiness plus safe simulation, and report for staged summary synthesis.'
+    }
+    if (path === 'depth') {
+      return 'safe minimizes automatic corroboration, balanced enables bounded safe enrichments, and deep is the most aggressive artifact-first corroboration mode. Prefer safe/balanced first on medium or larger samples; deep is best after a smaller sample or an existing persisted run already established a stable baseline.'
+    }
+    if (path === 'backend_policy') {
+      return 'auto selects corroborating backends only when baseline quality is weak, prefer_new is more eager to use newly installed backends, legacy_only suppresses them, and strict avoids opportunistic escalation.'
+    }
+    if (path === 'raw_result_mode') {
+      return 'Keep compact for ordinary analysis and all large-sample triage. Use full only for targeted smaller-sample debugging when you truly need child tool payloads inline.'
+    }
+    if (path === 'allow_transformations') {
+      return 'This does not auto-unpack or mutate the sample. It only prevents the router from choosing future transform-capable paths by surprise when false.'
+    }
+    if (path === 'allow_live_execution') {
+      return 'Dynamic routing still starts with readiness and safe simulation. Wine remains manual-only and still requires approved=true even when this flag is true.'
+    }
+  }
+
+  if (
+    toolName === 'workflow.analyze.start' ||
+    toolName === 'workflow.analyze.status' ||
+    toolName === 'workflow.analyze.promote' ||
+    toolName === 'workflow.summarize' ||
+    toolName === 'report.summarize'
+  ) {
+    if (path.endsWith('unpack_plan.strategy')) {
+      return 'This names the unpack branch the runtime selected, for example none_needed, upx_decompress, guided_memory_dump, or manual_debug_rebuild.'
+    }
+    if (path.endsWith('unpack_plan.next_safe_step')) {
+      return 'Use this as the safe-next-step boundary. It tells you whether the runtime expects preview-only work, dump-oriented progression, rebuild-oriented debugging, or an approval-gated branch.'
+    }
+  }
+
+  if (suffix === 'coverage_level') {
+    return 'Read this first on workflow-style outputs. It tells you whether the result is only a quick profile, static-core digest, deep static pass, reconstruction-level output, or a dynamic-verified result.'
+  }
+  if (suffix === 'completion_state') {
+    return 'Use this instead of guessing from prose. queued means not finished, bounded means intentionally partial, degraded means a deeper stage failed or fell back, and completed means this workflow reached its intended boundary.'
+  }
+  if (suffix === 'coverage_gaps') {
+    return 'Each entry names a domain that is still missing, queued, skipped, blocked, or degraded. Prefer this over free-form warnings when choosing the next step.'
+  }
+  if (suffix === 'sample_size_tier') {
+    return 'Large or oversized samples may trigger bounded workflows first. This field explains part of that cost decision.'
+  }
+  if (suffix === 'analysis_budget_profile') {
+    return 'quick, balanced, and deep describe the cost envelope that shaped the workflow result. A bounded result may still be correct within that budget.'
+  }
+  if (suffix === 'execution_bucket') {
+    return 'This names the scheduler lane that admitted or deferred the work, for example preview-static, enrich-static, deep-attribution, dynamic-plan, or manual-execution.'
+  }
+  if (suffix === 'cost_class') {
+    return 'cheap, moderate, expensive, and manual-only describe how aggressively the runtime will try to admit this work under current budget pressure.'
+  }
+  if (suffix === 'worker_family') {
+    return 'This identifies the pooled backend family or isolated execution family that handled the request. Repeated same-sample requests may reuse a warm compatible family.'
+  }
+  if (suffix === 'budget_deferral_reason') {
+    return 'When present, this explains why the scheduler deferred the work instead of running it immediately.'
+  }
+  if (suffix === 'warm_reuse') {
+    return 'True means the runtime reused a warm compatible worker instead of cold-starting a fresh helper.'
+  }
+  if (suffix === 'cold_start') {
+    return 'True means no compatible warm worker was available, so the runtime paid a fresh startup cost for this request.'
+  }
+  if (suffix === 'known_findings') {
+    return 'Treat these as the currently strongest evidence-backed conclusions within the completed workflow boundary.'
+  }
+  if (suffix === 'suspected_findings') {
+    return 'These are plausible but still heuristic conclusions. They should not be restated as confirmed behavior without a deeper upgrade.'
+  }
+  if (suffix === 'unverified_areas') {
+    return 'These are the main domains the current workflow did not actually cover. Mention them when summarizing to avoid over-claiming.'
+  }
+  if (suffix === 'upgrade_paths') {
+    return 'This is the machine-readable next-step contract. Each path says which gap it closes, what coverage gain it provides, and whether it is ready, blocked, or manual-only.'
+  }
+  if (suffix === 'packed_state') {
+    return 'Read this before assuming the original binary is suitable for deep reconstruction. suspected_packed or confirmed_packed means unpack/debug-aware planning is still relevant.'
+  }
+  if (suffix === 'unpack_state') {
+    return 'This is the unpack lifecycle state, not a generic success flag. approval_gated, unpack_planned, rebuild_required, or unpack_failed_recoverable all mean there is still a bounded next step before treating the sample as fully unpacked.'
+  }
+  if (suffix === 'unpack_confidence') {
+    return 'This is the runtime confidence that packing or unpack progression is real enough to justify the unpack/debug branch. Use it together with packed_state and unpack_state before escalating.'
+  }
+  if (suffix === 'unpack_plan') {
+    return 'This is the machine-readable unpack plan. Read strategy, next_safe_step, proposed_backends, and expected_artifacts instead of improvising a packed-sample workflow.'
+  }
+  if (suffix === 'debug_state') {
+    return 'This names the persisted debug progression. planned or armed means the runtime only prepared a session; captured or correlated means bounded trace evidence already exists.'
+  }
+  if (suffix === 'debug_session') {
+    return 'This is the persisted debug-session envelope. Use its session_tag, guidance, and artifact_refs to continue a session-aware dynamic workflow instead of chaining one-off debug tools.'
+  }
+  if (suffix === 'diff_digests' || suffix === 'unpack_debug_diffs') {
+    return 'These are bounded before/after digests for packed-versus-unpacked or dynamic pre/post changes. Prefer them over raw dump or trace trees when summarizing for AI clients.'
+  }
+
+  if (toolName === 'crypto.identify') {
+    if (path === 'include_runtime_evidence') {
+      return 'Enable this when imported Frida, sandbox, or memory-trace evidence exists and you want static crypto findings strengthened by observed runtime APIs.'
+    }
+    if (path === 'runtime_evidence_scope') {
+      return 'latest is the normal AI-facing mode. Use session only when you need one specific imported runtime session, and all only when comparing multiple trace imports.'
+    }
+    if (path === 'max_findings') {
+      return 'Keep this low for compact AI-facing results. Increase it only when a crypto-heavy sample likely contains multiple distinct routines or algorithm families.'
+    }
+    if (path === 'max_constants') {
+      return 'This caps inline key, IV, S-box, round-constant, or KDF hints. Larger or noisier constant material stays artifact-first.'
+    }
+  }
+
+  if (toolName === 'breakpoint.smart') {
+    if (path === 'max_candidates') {
+      return 'Use a small shortlist first. The tool is a planner, not an execution step, so compact high-confidence candidates are usually better than a broad noisy set.'
+    }
+    if (path === 'include_runtime_evidence') {
+      return 'Enable this when imported dynamic evidence exists and you want observed crypto or sensitive API hits to boost breakpoint confidence.'
+    }
+  }
+
+  if (toolName === 'trace.condition') {
+    if (path === 'breakpoint_index') {
+      return 'Used only when breakpoint is omitted. It selects a candidate from the latest smart breakpoint artifact, with 0 meaning the top-ranked recommendation.'
+    }
+    if (path === 'breakpoint') {
+      return 'Pass this when you already know the exact planner candidate and do not want trace.condition to look up a breakpoint artifact first.'
+    }
+    if (path === 'condition') {
+      return 'This is a bounded planning DSL, not arbitrary JavaScript. Use predicates over registers, arguments, hit counts, and module/function identity only.'
+    }
+    if (path === 'capture') {
+      return 'Use this to refine registers, arguments, stack bytes, and bounded memory slices. The tool will still cap the total serialized scope to honor max_memory_bytes.'
+    }
+    if (path === 'max_memory_bytes') {
+      return 'This is the total serialization budget across stack capture and bounded memory slices. Oversized capture requests are reduced instead of silently accepted.'
+    }
   }
 
   if (toolName === 'binary.role.profile') {
+    if (path === 'mode') {
+      return 'Use mode=fast first for normal or large samples. Escalate to mode=full only when export/import/string correlation must be complete.'
+    }
     if (path === 'max_exports') {
       return 'Controls how many exports/forwarders are surfaced in the summarized DLL or EXE export map.'
     }
@@ -207,6 +449,24 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
     }
   }
 
+  if (toolName === 'strings.extract') {
+    if (path === 'mode') {
+      return 'Use mode=preview first for ordinary and large-sample triage. Escalate to mode=full only when a later stage explicitly needs complete extraction.'
+    }
+  }
+
+  if (toolName === 'analysis.context.link') {
+    if (path === 'mode') {
+      return 'Use mode=preview first for indicator-to-function triage, especially on medium or larger samples. Escalate to mode=full only when FLOSS plus function-aware Xref context is worth the extra cost.'
+    }
+  }
+
+  if (toolName === 'crypto.identify') {
+    if (path === 'mode') {
+      return 'Use mode=preview first for normal and large-sample crypto triage. Escalate to mode=full only when decoded/context correlation is directly needed for breakpoint planning or deeper validation.'
+    }
+  }
+
   if (toolName === 'ghidra.analyze') {
     if (path === 'options.processor') {
       return 'Use this when you want analyzeHeadless to force a specific processor/language family. Prefer options.language_id when you already know the exact Ghidra language ID.'
@@ -219,6 +479,90 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
     }
     if (path === 'options.script_paths') {
       return 'Appends additional post-script directories to the default Ghidra script path. Useful for custom Rust-aware extraction scripts.'
+    }
+  }
+
+  if (toolName === 'code.function.cfg') {
+    if (path === 'format') {
+      return 'json returns a bounded structural preview; dot and mermaid return compact inline text previews plus artifact refs for the full graph.'
+    }
+    if (path === 'render') {
+      return 'svg and png are artifact-first only. The rendered asset is written to reports and returned as an artifact ref; it is not inlined into the MCP response.'
+    }
+    if (path === 'include_call_relationships') {
+      return 'Enable this when you want a bounded local caller/callee graph around the same function. It is not a whole-program call graph.'
+    }
+    if (path === 'call_relationship_depth') {
+      return 'Use depth=1 for direct callers/callees and depth=2 for one extra hop. Higher values are intentionally capped to keep payloads bounded.'
+    }
+    if (path === 'call_relationship_limit') {
+      return 'Caps returned call-graph edges so related-call previews stay compact for MCP clients.'
+    }
+    if (path === 'preview_max_chars') {
+      return 'Controls the inline dot/mermaid preview only. Read the returned graph artifact when you need the full text export.'
+    }
+    if (path === 'persist_artifacts') {
+      return 'Keep this enabled for normal analyst workflows so full graph text and rendered assets can be read later via artifact.read.'
+    }
+  }
+
+  if (toolName === 'graphviz.render') {
+    if (path === 'graph_text') {
+      return 'Pass DOT source here. For CFG exports, code.function.cfg already produces DOT artifacts; use graphviz.render when you want a direct backend render step.'
+    }
+    if (path === 'format') {
+      return 'svg is usually the best default for artifact-first graph viewing. png is useful when the downstream client expects a raster image.'
+    }
+    if (path === 'persist_artifact') {
+      return 'Keep this enabled so the rendered graph is written to reports/backend_tools and can be read later via artifact.read.'
+    }
+  }
+
+  if (toolName === 'rizin.analyze') {
+    if (path === 'operation') {
+      return 'Use info, sections, imports, or strings for quick file triage; functions is the heaviest option because it asks Rizin to analyze function boundaries first.'
+    }
+  }
+
+  if (toolName === 'yara_x.scan') {
+    if (path === 'rules_text') {
+      return 'Use inline rules_text for ad hoc rule experiments from the MCP client. Provide rules_path instead when the rules already exist on the same filesystem as the MCP server.'
+    }
+    if (path === 'rules_path') {
+      return 'This should be a server-readable absolute file path. It is best for reusing a checked-in or mounted YARA-X rule file.'
+    }
+  }
+
+  if (toolName === 'upx.inspect') {
+    if (path === 'operation') {
+      return 'test checks whether UPX can validate the sample, list prints packing metadata, and decompress writes an unpacked binary artifact.'
+    }
+  }
+
+  if (toolName === 'retdec.decompile') {
+    if (path === 'output_format') {
+      return 'plain returns C-like output; json-human returns a heavier JSON-oriented output file. plain is usually easier for quick analyst review.'
+    }
+  }
+
+  if (toolName === 'angr.analyze') {
+    if (path === 'analysis') {
+      return 'cfg_fast is the bounded default and the only currently exposed angr analysis mode in MCP.'
+    }
+  }
+
+  if (toolName === 'qiling.inspect') {
+    if (path === 'operation') {
+      return 'Use preflight first. rootfs_probe is for checking whether the mounted Windows rootfs looks usable before trying any emulation-oriented workflow.'
+    }
+  }
+
+  if (toolName === 'wine.run') {
+    if (path === 'mode') {
+      return 'preflight never launches the sample. run uses Wine, debug uses winedbg, and both require approved=true.'
+    }
+    if (path === 'approved') {
+      return 'This must be true before MCP will attempt to start the sample under Wine or winedbg.'
     }
   }
 
@@ -329,10 +673,10 @@ function buildFieldHelpHint(path: string, toolName?: string): string | null {
 
   if (toolName === 'system.setup.guide') {
     if (path === 'focus') {
-      return 'Use all for a first-run bootstrap guide, java when you need JVM setup for Ghidra, ghidra for install path/project-root guidance, and dynamic when you only need runtime-analysis extras.'
+      return 'Use all for a first-run bootstrap guide, static for PE/graph/toolchain extras such as Graphviz/Rizin/YARA-X/RetDec, ghidra for install path/project-root guidance, and dynamic for runtime-analysis extras such as Frida/Qiling/angr/PANDA/Wine.'
     }
     if (path === 'include_optional') {
-      return 'When false, only required setup steps are returned. Leave true to include optional extras such as PyGhidra and dynamic-analysis components.'
+      return 'When false, only required setup steps are returned. Leave true to include optional extras such as PyGhidra, Graphviz/Rizin/RetDec, and dynamic-analysis components like Qiling/angr/PANDA.'
     }
   }
 
@@ -369,6 +713,9 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     notes.push(
       'Use this before first-run or after a degraded health probe when the MCP client needs exact pip install commands and required user-supplied paths such as JAVA_HOME, GHIDRA_PATH, or GHIDRA_PROJECT_ROOT.'
     )
+    notes.push(
+      'For Docker-heavy environments, use focus=static to review Graphviz/Rizin/YARA-X/RetDec setup and focus=dynamic to review Frida/Qiling/angr/PANDA/Wine guidance.'
+    )
   }
   if (
     definition.name === 'dynamic.dependencies' ||
@@ -380,6 +727,9 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     )
   }
   const inputFields = buildSchemaSummary(definition.inputSchema, definition.name).fields.map((item) => item.path)
+  const outputFields = definition.outputSchema
+    ? buildSchemaSummary(definition.outputSchema, definition.name).fields.map((item) => item.path)
+    : []
 
   const hasEvidenceScope = inputFields.includes('evidence_scope')
   const hasStaticScope = inputFields.includes('static_scope')
@@ -418,6 +768,15 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     )
   }
 
+  if (
+    outputFields.includes('data.coverage_level') ||
+    outputFields.includes('coverage_level')
+  ) {
+    notes.push(
+      'On workflow-style outputs, read coverage_level, completion_state, coverage_gaps, known_findings, suspected_findings, unverified_areas, and upgrade_paths before treating the result as complete.'
+    )
+  }
+
   if (definition.name === 'artifacts.list') {
     notes.push(
       'Use session_tag, path_prefix, or latest_only to narrow artifact views before reading or diffing files.'
@@ -434,11 +793,17 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     notes.push(
       'Query this tool first when an MCP client needs exact enum values, defaults, or scope/session usage guidance before calling another tool.'
     )
+    notes.push(
+      'For explicit backend requests, inspect graphviz.render, rizin.analyze, yara_x.scan, upx.inspect, retdec.decompile, angr.analyze, qiling.inspect, panda.inspect, and wine.run.'
+    )
   }
 
   if (definition.name === 'task.status') {
     notes.push(
       'For queued or running jobs, inspect polling_guidance and prefer one client-side sleep/wait before the next status check instead of repeated immediate polling.'
+    )
+    notes.push(
+      'Read execution_bucket, cost_class, worker_family, warm_reuse, cold_start, and budget_deferral_reason to understand whether the job is waiting on lane capacity, approval, or cold-start overhead.'
     )
   }
 
@@ -448,6 +813,358 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
     )
     notes.push(
       'When both path and bytes_b64 are provided, path wins. Passing an absolute file path is the most reliable option for local VS Code/Copilot clients.'
+    )
+    notes.push(
+      'For host-machine files outside the container, prefer sample.request_upload and read sample_id directly from the HTTP upload response instead of calling sample.ingest(path).'
+    )
+  }
+
+  if (definition.name === 'sample.request_upload') {
+    notes.push(
+      'Use this as the primary host-file ingest entrypoint when the MCP worker cannot read the host path directly.'
+    )
+    notes.push(
+      'The usual follow-up is HTTP POST to upload_url, then continue analysis with the returned sample_id. sample.ingest(upload_url) is compatibility-only.'
+    )
+  }
+
+  if (definition.name === 'workflow.triage') {
+    notes.push(
+      'This is a bounded fast-profile facade over the persisted staged runtime, not the final reverse-engineering step.'
+    )
+    notes.push(
+      'If the user only asked to analyze a sample without naming a workflow, prefer workflow.analyze.auto first so the server can route by intent.'
+    )
+    notes.push(
+      'Use workflow.triage directly mainly for small/medium samples or when the user explicitly asks for a quick profile. For large samples, prefer workflow.analyze.start or workflow.analyze.auto so the result can persist and queue deeper stages.'
+    )
+    notes.push(
+      'Use coverage_gaps and upgrade_paths instead of prose to decide whether you still need workflow.analyze.promote, analysis.context.link, crypto.identify, or workflow.reconstruct.'
+    )
+  }
+
+  if (definition.name === 'workflow.analyze.start') {
+    notes.push(
+      'This starts or reuses a persisted staged analysis run. Only the fast_profile stage executes inline; heavier stages are queued by default.'
+    )
+    notes.push(
+      'Use workflow.analyze.status to monitor run progress and workflow.analyze.promote to queue deeper stages without rerunning completed work.'
+    )
+    notes.push(
+      'Large or expensive samples benefit from this nonblocking pattern. The run persists stage completion, artifact refs, and reuse metadata.'
+    )
+    notes.push(
+      'Practical pattern: small samples may go start -> summarize quickly, but medium/large samples should usually go start -> status -> promote instead of jumping straight to heavyweight tools.'
+    )
+    notes.push(
+      'Use workflow.analyze.status to inspect scheduler bucket, worker-family reuse, and deferred-stage reasons instead of treating queued work as a generic FIFO backlog.'
+    )
+    notes.push(
+      'On packed samples, fast_profile now emits packed_state, unpack_state, and unpack_plan. Treat that as the first-class unpack routing contract instead of jumping straight into Ghidra or reconstruction.'
+    )
+    notes.push(
+      'allow_transformations only enables later safe unpack attempts such as UPX decompress; it does not mutate the sample during workflow.analyze.start itself.'
+    )
+  }
+
+  if (definition.name === 'workflow.analyze.status') {
+    notes.push(
+      'Query this to inspect deferred jobs, completed stages, and reusable artifact refs for a persisted analysis run.'
+    )
+    notes.push(
+      'Use the returned recommended_next_tools and next_actions instead of repeating the same start call.'
+    )
+    notes.push(
+      'Read recovery_state, recoverable_stages, evidence_state, and provenance_visibility before assuming the persisted run is complete after a worker restart or interrupted queue job.'
+    )
+    notes.push(
+      'Stage rows now include execution_bucket, cost_class, worker_family, warm_reuse, and budget_deferral_reason so you can tell whether a result came from a warm preview lane or was deferred behind deeper work.'
+    )
+    notes.push(
+      'Read expected_rss_mb, current_rss_mb, memory_limit_mb, and control_plane_headroom_mb when large-sample work is deferred. Those fields explain whether the runtime protected the MCP control plane from OOM.'
+    )
+    notes.push(
+      'On medium/large samples, this is the normal next call after workflow.analyze.start or workflow.analyze.promote. Do not repeat the original start/triage call while the run is already queued or partial.'
+    )
+    notes.push(
+      'For packed or dynamically planned samples, read packed_state, unpack_state, debug_state, unpack_plan, debug_session, and diff_digests before assuming the original sample is ready for deeper static reconstruction.'
+    )
+  }
+
+  if (definition.name === 'workflow.analyze.promote') {
+    notes.push(
+      'Use this to promote an existing run to deeper stages (enrich_static, function_map, reconstruct, etc.) without rerunning the fast_profile stage.'
+    )
+    notes.push(
+      'Pass stages to promote specific stages, or through_stage to promote through a target stage boundary.'
+    )
+    notes.push(
+      'Promoted stages are scheduler-governed. Deep stages may remain deferred while cheaper preview or artifact-only lanes are draining.'
+    )
+    notes.push(
+      'If a large-sample stage is deferred for memory headroom, do not retry it immediately. Wait for workflow.analyze.status to show earlier heavy work cleared, then promote again only if the deeper stage is still needed.'
+    )
+    notes.push(
+      'Typical large-sample order is enrich_static first, then function_map, then reconstruct only when code-level output is actually needed.'
+    )
+    notes.push(
+      'For packed samples, prefer promoting into dynamic_plan first so the server can persist debug-session guidance and safe unpack preparation before any heavier execution-oriented stage.'
+    )
+    notes.push(
+      'Only promote dynamic_execute when the run was created with the required transformation or live-execution policy and status still says the unpack/debug branch is needed.'
+    )
+  }
+
+  if (definition.name === 'strings.extract') {
+    notes.push(
+      'mode=preview is bounded and safe for synchronous MCP use. mode=full scans the complete sample and may be deferred to the background queue for large samples.'
+    )
+    notes.push(
+      'Use mode=preview when you only need a bounded first-pass IOC and noise-filtered string view. Promote to mode=full when FLOSS or complete string extraction is required.'
+    )
+    notes.push(
+      'Small samples can often tolerate mode=full when strings are the main question. Medium/large samples should stay in mode=preview unless a later stage explicitly needs complete extraction.'
+    )
+    notes.push(
+      'Large-sample full results may return a bounded inline digest plus chunk_manifest and persisted chunk artifacts. Use artifact.read instead of expecting one monolithic inline payload.'
+    )
+  }
+
+  if (definition.name === 'binary.role.profile') {
+    notes.push(
+      'mode=fast reuses preview strings and bounded heuristics. mode=full requests complete supporting evidence and may be deferred.'
+    )
+    notes.push(
+      'Use mode=fast for an immediate role hint. Promote to mode=full when you need complete export/import/string correlation.'
+    )
+    notes.push(
+      'On larger DLLs or plugin-style samples, keep this in mode=fast during the first pass and only escalate after the persisted run proves the deeper correlation is worth the budget.'
+    )
+  }
+
+  if (definition.name === 'analysis.context.link') {
+    notes.push(
+      'mode=preview provides string-level context without waiting on Ghidra-backed attribution. mode=full includes FLOSS and function-aware Xref correlation.'
+    )
+    notes.push(
+      'Use mode=preview for first-pass indicator-to-function context. Promote to mode=full when you need merged FLOSS output and deeper Xref attribution.'
+    )
+    notes.push(
+      'Check evidence_state to tell whether the compact context came from fresh correlation, canonical reuse, or a deferred full pass.'
+    )
+    notes.push(
+      'For larger samples, use preview first and wait for function-level readiness before escalating. full is most useful after persisted function attribution or when the current question is explicitly about merged FLOSS plus Xref context.'
+    )
+    notes.push(
+      'Large-sample full outputs may be chunked. Treat chunk_manifest plus artifact refs as the authoritative continuation path instead of reissuing the same full request.'
+    )
+  }
+
+  if (definition.name === 'crypto.identify') {
+    notes.push(
+      'mode=preview is the bounded default and avoids full decoded/context correlation on larger samples. mode=full may defer to the queue when the sample exceeds the synchronous budget.'
+    )
+    notes.push(
+      'Use evidence_state to distinguish fresh crypto correlation from persisted artifact reuse or deferred full execution.'
+    )
+    notes.push(
+      'For larger samples, preview is the normal planning pass. Escalate to full only when crypto findings directly drive breakpoint planning or you need stronger constant/context corroboration.'
+    )
+    notes.push(
+      'Full crypto results on larger samples may return only a bounded inline digest plus chunked persisted findings. Follow chunk_manifest or workflow.analyze.status rather than retrying immediately.'
+    )
+  }
+
+  if (definition.name === 'workflow.dynamic.analyze') {
+    notes.push(
+      'Staged dynamic behavior analysis with simulation-first defaults.'
+    )
+    notes.push(
+      'Use mode=safe_simulation for non-executing behavioral analysis, or mode=auto_frida for automated Frida instrumentation.'
+    )
+    notes.push(
+      'The auto_frida mode automatically generates Frida scripts based on static capability analysis and correlates results to functions.'
+    )
+    notes.push(
+      'Stages: preflight → simulation → trace_capture → correlation → digest'
+    )
+  }
+
+  if (definition.name === 'workflow.analyze.auto') {
+    notes.push(
+      'Prefer this when the user asks for analysis, reverse engineering, dynamic checks, or reporting without naming a specific workflow or backend.'
+    )
+    notes.push(
+      'This router now translates intent into workflow.analyze.start and workflow.analyze.promote operations instead of launching legacy heavyweight chains directly.'
+    )
+    notes.push(
+      'Execution-capable backends such as wine.run remain manual-only. allow_live_execution does not bypass approved=true.'
+    )
+    notes.push(
+      'Large or expensive samples may intentionally downshift to a bounded persisted profile first. Check run_id, sample_size_tier, analysis_budget_profile, downgrade_reasons, and upgrade_paths before escalating.'
+    )
+    notes.push(
+      'Practical playbook: for small samples, auto(goal=triage, depth=balanced) is usually fine. For medium/large samples, use auto(goal=triage, depth=safe|balanced), keep outputs compact, then continue with workflow.analyze.status and workflow.analyze.promote.'
+    )
+  }
+
+  if (definition.name === 'workflow.triage') {
+    notes.push(
+      'workflow.triage is a compatibility quick-profile surface. The primary staged analysis path is workflow.analyze.start followed by workflow.analyze.status and workflow.analyze.promote.'
+    )
+  }
+
+  if (definition.name === 'task.status') {
+    notes.push(
+      'task.status is the raw job-state view. Prefer workflow.analyze.status when you have a run_id and want the primary staged-runtime view.'
+    )
+  }
+
+  if (definition.name === 'report.generate') {
+    notes.push(
+      'report.generate is export-oriented. Use workflow.summarize or report.summarize for AI-facing analysis synthesis, and treat this tool as an archival/export helper.'
+    )
+  }
+
+  if (definition.name === 'llm.analyze') {
+    notes.push(
+      'Unified LLM analysis interface. Use this instead of the deprecated 3-step tools (code.function.rename.*, code.function.explain.*, code.module.review.*).'
+    )
+    notes.push(
+      'Supports 4 task types: summarize (concise summaries), explain (clear explanations), recommend (actionable recommendations), review (critical review).'
+    )
+    notes.push(
+      'Automatically handles context management, smart triggering, and token tracking through MCP Client sampling.'
+    )
+    notes.push(
+      'Migration: See docs/MIGRATION-LLM-TOOLS.md for examples of migrating from old 3-step API to new unified interface.'
+    )
+  }
+
+  if (definition.name === 'system.health') {
+    notes.push(
+      'Use this after setup_required or degraded-environment failures. In a healthy environment, continue with analysis workflows instead of repeatedly calling health probes.'
+    )
+    notes.push(
+      'In the full Docker image, this probe also reports Graphviz, Rizin, YARA-X, UPX, Wine/winedbg, Frida CLI, Qiling, angr, PANDA, and RetDec readiness together with their caveats.'
+    )
+  }
+
+  if (definition.name === 'dynamic.dependencies') {
+    notes.push(
+      'This probe is broader than Speakeasy/Frida. It also surfaces Frida CLI, Qiling, angr, PANDA, and Wine/winedbg readiness plus QILING_ROOTFS caveats.'
+    )
+  }
+
+  if (definition.name === 'workflow.deep_static' || definition.name === 'workflow.reconstruct') {
+    notes.push(
+      'If the user has not explicitly chosen this workflow, prefer workflow.analyze.auto so the server can select the appropriate workflow by intent first.'
+    )
+    notes.push(
+      'Inspect completion_state and coverage_gaps before assuming queued, bounded, or degraded results contain the same depth as a fully completed run.'
+    )
+  }
+
+  if (definition.name === 'workflow.summarize' || definition.name === 'report.summarize') {
+    notes.push(
+      'These summary surfaces restate the current analysis boundary. Use known_findings, suspected_findings, and unverified_areas instead of flattening everything into one confidence claim.'
+    )
+    notes.push(
+      'Read persisted_state_visibility to see which run stages were reused and which deeper prerequisites remain deferred instead of assuming the report backfilled missing analysis.'
+    )
+    notes.push(
+      'When packed_state, unpack_state, debug_state, or unpack_debug_diffs are present, summarize them explicitly. They explain whether the current conclusion is still based on the original packed binary, an unpacked derivative, or bounded debug-session artifacts.'
+    )
+    if (definition.name === 'workflow.summarize') {
+      notes.push(
+        'Prefer workflow.summarize for medium/large samples or whenever analysis already progressed through queued stages. It keeps the final output staged and compact.'
+      )
+    } else {
+      notes.push(
+        'Prefer report.summarize(detail_level=compact) for quick deterministic snapshots. Avoid detail_level=full on large samples; use workflow.summarize plus artifact.read instead.'
+      )
+    }
+  }
+
+  if (
+    definition.name === 'frida.runtime.instrument' ||
+    definition.name === 'frida.script.inject' ||
+    definition.name === 'frida.trace.capture'
+  ) {
+    notes.push(
+      'The full Docker image also bundles frida-tools CLI, but these MCP tools remain the primary entrypoints when a user explicitly asks for Frida-driven tracing or instrumentation.'
+    )
+  }
+
+  if (definition.name === 'graphviz.render') {
+    notes.push(
+      'graphviz.render is a renderer/export helper over an existing graph. Use it when an MCP client explicitly asks for Graphviz rendering; it is not itself a deeper analysis step.'
+    )
+    notes.push(
+      'For Ghidra-backed CFG semantics, code.function.cfg remains the main upstream graph surface and Graphviz is only the render target.'
+    )
+  }
+
+  if (definition.name === 'rizin.analyze') {
+    notes.push(
+      'This is the direct Rizin wrapper. Use it when the user explicitly requests Rizin output or when you want a lightweight second opinion before deeper Ghidra work.'
+    )
+    notes.push(
+      'Rizin is often the better first static backend for medium/large samples when you need fast sections/imports/strings/functions previews before escalating to Ghidra.'
+    )
+  }
+
+  if (definition.name === 'ghidra.analyze') {
+    notes.push(
+      'Use Ghidra after fast triage or Rizin-backed preview when function attribution, decompilation, or source-like reconstruction is actually needed. It is usually not the best first call for large samples.'
+    )
+  }
+
+  if (definition.name === 'yara_x.scan') {
+    notes.push(
+      'Use this when the user explicitly asks for YARA-X or when you want to compare newer-engine matches with the legacy yara.scan output.'
+    )
+  }
+
+  if (definition.name === 'upx.inspect') {
+    notes.push(
+      'Use this when the user explicitly asks for UPX validation or unpacking. decompress writes an unpacked artifact instead of modifying the original sample in place.'
+    )
+    notes.push(
+      'This is the preferred safe unpack probe for suspected or confirmed UPX samples. Use test or list first, then decompress only when the packed-sample plan already points to a bounded UPX path.'
+    )
+    notes.push(
+      'After a successful decompress artifact is produced, continue analysis from the unpacked artifact or unpacked sample_id and use the packed-vs-unpacked diff digest instead of comparing raw trees inline.'
+    )
+  }
+
+  if (definition.name === 'retdec.decompile') {
+    notes.push(
+      'Use this when the user explicitly asks for RetDec output or wants an alternate decompiler artifact to compare against Ghidra.'
+    )
+  }
+
+  if (definition.name === 'angr.analyze') {
+    notes.push(
+      'Use this when the user explicitly asks for angr or when you want a bounded CFGFast pass as a cross-check for function recovery.'
+    )
+  }
+
+  if (definition.name === 'qiling.inspect') {
+    notes.push(
+      'Use this when the user explicitly asks about Qiling or when you need to confirm QILING_ROOTFS readiness before any emulation-oriented workflow.'
+    )
+  }
+
+  if (definition.name === 'panda.inspect') {
+    notes.push(
+      'Use this when the user explicitly asks about PANDA. It confirms bindings and caveats, but guest images and trace assets still live outside the MCP server.'
+    )
+  }
+
+  if (definition.name === 'wine.run') {
+    notes.push(
+      'Use this only for explicit Wine or winedbg requests. preflight is safe; run and debug require approved=true because they attempt to launch the sample.'
     )
   }
 
@@ -569,6 +1286,60 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
   }
 
   if (
+    definition.name === 'analysis.context.link' ||
+    definition.name === 'code.xrefs.analyze'
+  ) {
+    notes.push(
+      'Use these before workflow.reconstruct when you want bounded indicator-to-function correlation without paying for full export or module reconstruction.'
+    )
+  }
+
+  if (definition.name === 'strings.extract') {
+    notes.push(
+      'strings.extract is now compact-first and enriched with runtime-noise, IOC-like, and encoded-candidate labels. Prefer analysis.context.link when you need merged FLOSS output and function-aware attribution.'
+    )
+  }
+
+  if (definition.name === 'strings.floss.decode') {
+    notes.push(
+      'Use this when stack/tight/decoded strings matter. analysis.context.link can merge FLOSS output with raw extraction and xref-derived function context.'
+    )
+  }
+
+  if (definition.name === 'crypto.identify') {
+    notes.push(
+      'This is a correlation layer over imports, enriched strings, compact xrefs, capability hints, and optional imported runtime evidence. It does not require live execution.'
+    )
+    notes.push(
+      'Use it before breakpoint.smart when static capability triage says cryptography is present but you still need concrete functions, addresses, and bounded constant summaries.'
+    )
+  }
+
+  if (definition.name === 'breakpoint.smart') {
+    notes.push(
+      'This tool is planning-only. It ranks likely crypto and sensitive API breakpoint sites but does not start or attach to any process.'
+    )
+    notes.push(
+      'Use trace.condition after this to turn a top candidate into a bounded Frida-oriented trace plan with capture limits and readiness guidance.'
+    )
+    notes.push(
+      'For packed or session-aware dynamic analysis, treat this as the bridge from unpack planning into a persisted debug session. It should refine what to capture, not start live instrumentation immediately.'
+    )
+  }
+
+  if (definition.name === 'trace.condition') {
+    notes.push(
+      'trace.condition consumes either an explicit breakpoint candidate or the latest smart breakpoint artifact and turns it into a bounded normalized trace plan.'
+    )
+    notes.push(
+      'It does not execute instrumentation. Instead it tells you which existing runtime tool to invoke next and keeps setup_required boundaries explicit when Frida is not ready.'
+    )
+    notes.push(
+      'Use the returned plan as a debug-session artifact. The normal follow-up is workflow.analyze.status, explicit Frida capture, or another approved execution surface, not an ad hoc one-off trace command.'
+    )
+  }
+
+  if (
     definition.name === 'ghidra.analyze' ||
     definition.name === 'workflow.deep_static' ||
     definition.name === 'workflow.reconstruct' ||
@@ -584,6 +1355,17 @@ function buildUsageNotes(definition: ToolDefinition): string[] {
   if (definition.name === 'ghidra.analyze') {
     notes.push(
       'For Rust or other hard-to-index binaries, combine ghidra.analyze with pe.pdata.extract or code.functions.smart_recover. When auto-detection is weak, set options.language_id, options.cspec, or options.script_paths explicitly.'
+    )
+  }
+
+  if (
+    definition.name === 'sample.request_upload' ||
+    definition.name === 'sample.ingest' ||
+    definition.name === 'workflow.triage' ||
+    definition.name === 'system.health'
+  ) {
+    notes.push(
+      'These tools return explicit next-step guidance fields. Prefer those machine-readable hints before inventing a custom follow-up sequence.'
     )
   }
 
@@ -605,8 +1387,11 @@ export function createToolHelpHandler(
     try {
       const input = toolHelpInputSchema.parse(args)
       const definitions = getDefinitions()
+      const nameMappings = definitions.map((item) => [item.name, toTransportToolName(item.name)] as const)
       const filtered = input.tool_name
-        ? definitions.filter((item) => item.name === input.tool_name)
+        ? definitions.filter(
+            (item) => item.name === input.tool_name || toTransportToolName(item.name) === input.tool_name
+          )
         : definitions
 
       if (input.tool_name && filtered.length === 0) {
@@ -616,23 +1401,32 @@ export function createToolHelpHandler(
         }
       }
 
+      const toolData = {
+        count: filtered.length,
+        tools: filtered.map((definition) => ({
+          name: toTransportToolName(definition.name),
+          description: definition.description,
+          surface_role: classifyToolSurfaceRole(definition.name),
+          preferred_primary_tools: buildPreferredPrimaryTools(
+            classifyToolSurfaceRole(definition.name),
+            preferredPrimaryToolsFor(definition.name)
+          ).map((item) => toTransportToolName(item)),
+          usage_notes: buildUsageNotes(definition).map((item) =>
+            rewriteToolReferencesInText(item, nameMappings)
+          ),
+          input: input.include_fields
+            ? buildSchemaSummary(definition.inputSchema, definition.name)
+            : undefined,
+          output:
+            input.include_fields && input.include_output_schema && definition.outputSchema
+              ? buildSchemaSummary(definition.outputSchema, definition.name)
+              : undefined,
+        })),
+      }
+
       return {
         ok: true,
-        data: {
-          count: filtered.length,
-          tools: filtered.map((definition) => ({
-            name: definition.name,
-            description: definition.description,
-            usage_notes: buildUsageNotes(definition),
-            input: input.include_fields
-              ? buildSchemaSummary(definition.inputSchema, definition.name)
-              : undefined,
-            output:
-              input.include_fields && input.include_output_schema && definition.outputSchema
-                ? buildSchemaSummary(definition.outputSchema, definition.name)
-                : undefined,
-          })),
-        },
+        data: rewriteToolReferencesInValue(toolData, nameMappings) as z.infer<typeof toolHelpOutputSchema>['data'],
       }
     } catch (error) {
       return {

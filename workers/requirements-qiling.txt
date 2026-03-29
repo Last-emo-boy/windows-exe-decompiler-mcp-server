@@ -1,0 +1,5 @@
+# Isolated Qiling runtime requirements.
+# Keep this separate from workers/requirements-dynamic.txt because Qiling needs
+# unicorn>=2 while Speakeasy still depends on unicorn==1.0.2.
+
+qiling==1.4.6

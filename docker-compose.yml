@@ -1,0 +1,227 @@
+# =============================================================================
+# Docker Compose - Windows EXE Decompiler MCP Server
+# =============================================================================
+# Usage:
+#   docker-compose up -d              # Start in background
+#   docker-compose logs -f            # Follow logs
+#   docker-compose down               # Stop and remove containers
+#   docker-compose exec mcp-server bash  # Enter container
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # MCP Server (Main Service)
+  # ---------------------------------------------------------------------------
+  mcp-server:
+    image: windows-exe-decompiler:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        CAPA_RULES_VERSION: v9.3.1
+        CAPA_VERSION: "9.3.1"
+        DIE_VERSION: "3.10"
+        DIE_RELEASE_CHANNEL: "3.10"
+        UPX_VERSION: "5.1.1"
+        RIZIN_VERSION: "0.8.2"
+        RETDEC_VERSION: "5.0"
+        ANGR_VERSION: "9.2.205"
+    container_name: windows-exe-decompiler-mcp
+
+    # Keep container running for stdio mode
+    stdin_open: true
+    tty: true
+
+    # Security hardening
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    read_only: true
+
+    # Temporary filesystem for runtime files
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=512m
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          memory: 8G
+          cpus: '2'
+        reservations:
+          memory: 2G
+
+    # Volume mounts
+    volumes:
+      # Sample files (read-only) - update path as needed
+      - ./samples:/samples:ro
+
+      # Persistent data (read-write) - update to your actual data directory
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/workspaces:/app/workspaces:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/data:/app/data:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/cache:/app/cache:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/ghidra-projects:/ghidra-projects:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/ghidra-logs:/ghidra-logs:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/logs:/app/logs:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/qiling-rootfs:/opt/qiling-rootfs:ro"
+      
+      # API storage volume (for direct uploads and MCP upload sessions)
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/storage:/app/storage:rw"
+
+      # Create /root/.windows-exe-decompiler-mcp-server directory
+      - type: volume
+        source: root-config
+        target: /root/.windows-exe-decompiler-mcp-server
+
+      # Optional: Custom config (read-only)
+      # - ./config.json:/app/config.json:ro
+
+    # Environment variables
+    environment:
+      - NODE_ENV=production
+      - PYTHONUNBUFFERED=1
+      - WORKSPACE_ROOT=/app/workspaces
+      - DB_PATH=/app/data/database.db
+      - CACHE_ROOT=/app/cache
+      - CAPA_PATH=/usr/local/bin/capa
+      - CAPA_RULES_PATH=/opt/capa-rules
+      - DIE_PATH=/usr/bin/diec
+      - GRAPHVIZ_DOT_PATH=/usr/bin/dot
+      - RIZIN_PATH=/opt/rizin/bin/rizin
+      - UPX_PATH=/usr/local/bin/upx
+      - WINE_PATH=/usr/bin/wine
+      - WINEDBG_PATH=/usr/bin/winedbg
+      - YARAX_PYTHON=/usr/local/bin/python3
+      - QILING_PYTHON=/opt/qiling-venv/bin/python
+      - QILING_ROOTFS=/opt/qiling-rootfs
+      - ANGR_PYTHON=/opt/angr-venv/bin/python
+      - PANDA_PYTHON=/usr/local/bin/python3
+      - RETDEC_PATH=/opt/retdec/bin/retdec-decompiler
+      - RETDEC_INSTALL_DIR=/opt/retdec
+      - AUDIT_LOG_PATH=/app/logs/audit.log
+      - XDG_CONFIG_HOME=/app/logs/.config
+      - XDG_CACHE_HOME=/app/cache/xdg
+      - GHIDRA_PROJECT_ROOT=/ghidra-projects
+      - GHIDRA_LOG_ROOT=/ghidra-logs
+      - LOG_LEVEL=info
+      
+      # API File Server - Enabled by default, API_KEY auto-generated
+      - API_ENABLED=true
+      - API_PORT=18080
+      # - API_KEY=your-secret-key-here  # Uncomment to use a fixed API key
+      - API_STORAGE_ROOT=/app/storage
+      - API_MAX_FILE_SIZE=524288000  # 500MB
+      - API_RETENTION_DAYS=30
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "node", "-e", "console.log('healthy')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Port mappings (optional - for API access and durable upload sessions)
+    ports:
+      - "18080:18080"  # API File Server + MCP upload sessions
+      
+    # Extra hosts for host.docker.internal support
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+    # Restart policy
+    restart: unless-stopped
+
+    # Labels for organization
+    labels:
+      - "app=windows-exe-decompiler"
+      - "component=mcp-server"
+      - "security.isolation=high"
+
+  # ---------------------------------------------------------------------------
+  # Optional: Ghidra Service (for distributed architecture)
+  # ---------------------------------------------------------------------------
+  # Uncomment to use separate Ghidra service instead of bundled Ghidra
+  # ghidra-service:
+  #   image: windows-exe-decompiler:ghidra
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.ghidra
+  #   container_name: windows-exe-decompiler-ghidra
+  #   volumes:
+  #     - ghidra-projects:/ghidra-projects
+  #     - ghidra-logs:/ghidra-logs
+  #   environment:
+  #     - GHIDRA_INSTALL_DIR=/opt/ghidra
+  #     - JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64
+  #   networks:
+  #     - analysis-net
+  #   deploy:
+  #     resources:
+  #       limits:
+  #         memory: 8G
+  #         cpus: '4'
+
+  # ---------------------------------------------------------------------------
+  # Optional: Web UI (future extension)
+  # ---------------------------------------------------------------------------
+  # web-ui:
+  #   image: windows-exe-decompiler:webui
+  #   ports:
+  #     - "3000:3000"
+  #   environment:
+  #     - MCP_SERVER_URL=http://mcp-server:3000
+  #   depends_on:
+  #     - mcp-server
+  #   networks:
+  #     - analysis-net
+
+# =============================================================================
+# Networks
+# =============================================================================
+networks:
+  # Internal network for service communication (if using distributed mode)
+  analysis-net:
+    driver: bridge
+    internal: true
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  # Persistent volumes for Ghidra (if using separate Ghidra service)
+  ghidra-projects:
+    driver: local
+  ghidra-logs:
+    driver: local
+  # Volume for /root/.windows-exe-decompiler-mcp-server
+  root-config:
+    driver: local
+  # Volume for API storage
+  storage:
+    driver: local
+
+# =============================================================================
+# Usage Examples
+# =============================================================================
+#
+# 1. Start MCP Server for local development:
+#    docker-compose up -d mcp-server
+#
+# 2. View logs:
+#    docker-compose logs -f mcp-server
+#
+# 3. Enter container for debugging:
+#    docker-compose exec mcp-server bash
+#
+# 4. Run one-off analysis:
+#    docker-compose run --rm mcp-server node dist/index.js < request.json
+#
+# 5. Stop and cleanup:
+#    docker-compose down
+#
+# 6. Stop and remove volumes (WARNING: deletes all data):
+#    docker-compose down -v
+#
+# =============================================================================

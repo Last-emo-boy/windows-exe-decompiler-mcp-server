@@ -120,6 +120,30 @@ describe('DatabaseManager', () => {
       ]);
     });
 
+    it('should create upload_sessions table with correct schema', () => {
+      const db = dbManager.getDatabase();
+      const tableInfo = db.pragma('table_info(upload_sessions)') as any[];
+
+      expect(tableInfo).toHaveLength(15);
+      expect(tableInfo.map((col: any) => col.name)).toEqual([
+        'id',
+        'token',
+        'status',
+        'filename',
+        'source',
+        'created_at',
+        'expires_at',
+        'uploaded_at',
+        'staged_path',
+        'size',
+        'sha256',
+        'md5',
+        'sample_id',
+        'error',
+        'metadata_json',
+      ]);
+    });
+
     it('should create indexes for samples table', () => {
       const db = dbManager.getDatabase();
       const indexes = db
@@ -161,6 +185,18 @@ describe('DatabaseManager', () => {
 
       const indexNames = indexes.map((idx: any) => idx.name);
       expect(indexNames).toContain('idx_artifacts_sample_type');
+    });
+
+    it('should create indexes for upload_sessions table', () => {
+      const db = dbManager.getDatabase();
+      const indexes = db
+        .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='upload_sessions'")
+        .all();
+
+      const indexNames = indexes.map((idx: any) => idx.name);
+      expect(indexNames).toContain('idx_upload_sessions_token');
+      expect(indexNames).toContain('idx_upload_sessions_status');
+      expect(indexNames).toContain('idx_upload_sessions_expires_at');
     });
 
     it('should enable foreign keys', () => {
@@ -350,6 +386,75 @@ describe('DatabaseManager', () => {
     it('should return undefined for non-existent sample', () => {
       const sample = dbManager.findSample('sha256:nonexistent');
       expect(sample).toBeUndefined();
+    });
+  });
+
+  describe('Upload Session Operations', () => {
+    it('should create and fetch an upload session', () => {
+      const session = dbManager.createUploadSession({
+        filename: 'sample.exe',
+        source: 'mcp_upload',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      });
+
+      const fetched = dbManager.findUploadSessionByToken(session.token);
+      expect(fetched).toBeDefined();
+      expect(fetched?.status).toBe('pending');
+      expect(fetched?.filename).toBe('sample.exe');
+      expect(fetched?.source).toBe('mcp_upload');
+    });
+
+    it('should update and finalize upload session lifecycle state', () => {
+      const session = dbManager.createUploadSession({
+        filename: 'sample.dll',
+        source: 'mcp_upload',
+        expires_at: '2099-01-01T00:00:00.000Z',
+      });
+
+      dbManager.insertSample({
+        id: 'sha256:abc123',
+        sha256: 'abc123',
+        md5: 'def456',
+        size: 123,
+        file_type: 'PE32',
+        created_at: '2024-01-01T00:00:00Z',
+        source: 'mcp_upload',
+      });
+
+      dbManager.markUploadSessionUploaded(session.token, {
+        staged_path: '/app/storage/uploads/session_sample.dll',
+        size: 123,
+        filename: 'sample.dll',
+      });
+      dbManager.markUploadSessionRegistered(session.token, {
+        sample_id: 'sha256:abc123',
+        size: 123,
+        sha256: 'abc123',
+        md5: 'def456',
+        clearStagedPath: true,
+      });
+
+      const fetched = dbManager.findUploadSessionByToken(session.token);
+      expect(fetched?.status).toBe('registered');
+      expect(fetched?.sample_id).toBe('sha256:abc123');
+      expect(fetched?.staged_path).toBeNull();
+      expect(fetched?.sha256).toBe('abc123');
+      expect(fetched?.md5).toBe('def456');
+    });
+
+    it('should expire pending sessions past expiration time', () => {
+      const session = dbManager.createUploadSession({
+        filename: 'old.bin',
+        source: 'mcp_upload',
+        expires_at: '2000-01-01T00:00:00.000Z',
+      });
+
+      const changes = dbManager.expireUploadSessions('2026-01-01T00:00:00.000Z');
+      const fetched = dbManager.findUploadSessionByToken(session.token);
+
+      expect(changes).toBeGreaterThan(0);
+      expect(fetched?.status).toBe('expired');
+      expect(fetched?.error).toContain('expired');
     });
   });
 

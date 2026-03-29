@@ -9,6 +9,7 @@ import { smartRecoverFunctionsFromPE } from '../pe-runtime-functions.js'
 import { createStringsExtractHandler } from './strings-extract.js'
 import { createRuntimeDetectHandler } from './runtime-detect.js'
 import { resolvePrimarySamplePath } from '../sample-workspace.js'
+import { demangleRustSymbol, normalizeSymbolList, type DemangledSymbol } from './rust-demangle.js'
 
 const TOOL_NAME = 'pe.symbols.recover'
 const TOOL_VERSION = '0.1.0'

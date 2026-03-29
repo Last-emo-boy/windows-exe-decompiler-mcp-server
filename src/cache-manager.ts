@@ -526,10 +526,10 @@ export function normalizeArgs(args: Record<string, unknown>): Record<string, unk
 
   // Sort keys and filter out null/undefined values
   const sortedKeys = Object.keys(args).sort()
-  
+
   const normalized = sortedKeys.reduce((acc, key) => {
     const value = args[key]
-    
+
     // Skip null and undefined values
     if (value === null || value === undefined) {
       return acc
@@ -548,3 +548,83 @@ export function normalizeArgs(args: Record<string, unknown>): Record<string, unk
 
   return normalized
 }
+
+/**
+ * Parameters to filter from cache key generation (unstable params)
+ * These parameters don't affect the result and should be ignored
+ * Tasks: mcp-server-optimization 1.1
+ */
+const UNSTABLE_PARAMS = new Set([
+  'timestamp',
+  'random',
+  'nonce',
+  'request_id',
+  'session_id',
+  'force_refresh',
+  'persist_artifact',
+  'register_analysis',
+  'session_tag',
+  'timeout',
+  'timeout_ms',
+  'timeout_sec',
+  'max_tokens',
+  'temperature',
+  'include_raw',
+  'verbose',
+  'debug',
+])
+
+/**
+ * Filter unstable parameters that don't affect the cache result
+ * Tasks: mcp-server-optimization 1.1
+ */
+export function filterUnstableParams(args: Record<string, unknown>): Record<string, unknown> {
+  if (!args || typeof args !== 'object') {
+    return args || {}
+  }
+
+  const filtered: Record<string, unknown> = {}
+  
+  for (const [key, value] of Object.entries(args)) {
+    if (!UNSTABLE_PARAMS.has(key)) {
+      filtered[key] = value
+    }
+  }
+  
+  return filtered
+}
+
+/**
+ * Generate cache key with intelligent parameter filtering
+ * Tasks: mcp-server-optimization 1.1, 1.2
+ */
+export function generateSmartCacheKey(params: CacheKeyParams): string {
+  // Filter unstable parameters from args
+  const filteredArgs = filterUnstableParams(params.args)
+  
+  // Create normalized object with sorted keys
+  const normalized = {
+    sampleSha256: params.sampleSha256,
+    toolName: params.toolName,
+    toolVersion: params.toolVersion,
+    args: normalizeArgs(filteredArgs),
+    ...(params.rulesetVersion && { rulesetVersion: params.rulesetVersion })
+  }
+
+  // Sort keys at top level to ensure deterministic order
+  const sortedKeys = Object.keys(normalized).sort()
+  const sortedNormalized = sortedKeys.reduce((acc, key) => {
+    acc[key] = normalized[key as keyof typeof normalized]
+    return acc
+  }, {} as Record<string, unknown>)
+
+  // Generate canonical JSON string
+  const keyString = JSON.stringify(sortedNormalized)
+
+  // Generate SHA256 hash
+  const hash = crypto.createHash('sha256').update(keyString).digest('hex')
+
+  return `cache:${hash}`
+}
+
+

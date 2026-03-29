@@ -15,6 +15,10 @@ import { generateCacheKey } from '../cache-manager.js'
 import { resolvePackagePath } from '../runtime-paths.js'
 import { lookupCachedResult, formatCacheWarning } from './cache-observability.js'
 import { inspectSampleWorkspace, formatMissingOriginalError, resolvePrimarySamplePath } from '../sample-workspace.js'
+import {
+  buildStaticWorkerRequest,
+  callStaticWorker as callPooledStaticWorker,
+} from './static-worker-client.js'
 
 // ============================================================================
 // Constants
@@ -285,31 +289,22 @@ export function createPackerDetectHandler(
       }
 
       // 5. Prepare worker request
-      const workerRequest: WorkerRequest = {
-        job_id: uuidv4(),
+      const workerRequest: WorkerRequest = buildStaticWorkerRequest({
         tool: TOOL_NAME,
-        sample: {
-          sample_id: input.sample_id,
-          path: samplePath,
-        },
+        sampleId: input.sample_id,
+        samplePath,
         args: {
           engines: requestEngines,
         },
-        context: {
-          request_time_utc: new Date().toISOString(),
-          policy: {
-            allow_dynamic: false,
-            allow_network: false,
-          },
-          versions: {
-            tool_version: TOOL_VERSION,
-          },
-        },
-      }
+        toolVersion: TOOL_VERSION,
+      })
 
       // 6. Call Static Worker
       // Requirements: 7.1, 7.2, 7.3, 7.4, 7.5
-      const workerResponse = await callStaticWorker(workerRequest)
+      const workerResponse = await callPooledStaticWorker(workerRequest, {
+        database,
+        family: 'static_python.preview',
+      })
 
       if (!workerResponse.ok) {
         return {
@@ -321,7 +316,14 @@ export function createPackerDetectHandler(
 
       // Extract the result from the worker response
       const responseData = workerResponse.data as { result: unknown; warnings: string[]; metrics: Record<string, unknown> }
-      const packerResult = responseData.result
+      const packerResult =
+        responseData.result && typeof responseData.result === 'object'
+          ? {
+              ...(responseData.result as Record<string, unknown>),
+              worker_pool:
+                (workerResponse.metrics as Record<string, unknown> | undefined)?.worker_pool,
+            }
+          : responseData.result
 
       // 7. Cache result
       await cacheManager.setCachedResult(cacheKey, packerResult, CACHE_TTL_MS)

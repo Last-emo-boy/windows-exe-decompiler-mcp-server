@@ -48,6 +48,8 @@ export function buildSemanticNameReviewPromptText(
     '- why',
     '- required_assumptions',
     '- evidence_used',
+    '- If no evidence-grounded rename is justified, return {"suggestions":[]} instead of inventing a precise name.',
+    '- Do not wrap the JSON in markdown or prose.',
     '',
     'The client should pass your JSON result to code.function.rename.apply.',
     '',

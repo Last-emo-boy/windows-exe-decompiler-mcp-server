@@ -11,7 +11,90 @@ An MCP server for Windows reverse engineering. It exposes PE triage, Ghidra-back
 - Observable Ghidra runs: command logs, runtime logs, staged progress, project/log roots, and parsed Java exception summaries are surfaced through high-level outputs.
 - Runtime-aware reconstruction: static evidence, trace imports, memory snapshots, and semantic review artifacts can all be correlated back into reconstruct and report workflows.
 - LLM-assisted review layers: function naming, function explanation, and module reconstruction review are exposed as structured MCP flows instead of ad hoc prompts.
-- Queue-friendly orchestration: long-running workflows return `job_id`, progress, and `polling_guidance` so MCP clients can wait efficiently instead of burning tokens on tight polling loops.
+- Queue-friendly orchestration: persisted staged runs are the primary workflow model, while low-level queued jobs remain available for raw execution inspection.
+- Full Linux analysis image: the Docker distribution now bundles Graphviz, Rizin, YARA-X, UPX, Wine/winedbg, Frida CLI, Qiling, angr, PANDA bindings, and RetDec in addition to the baseline Ghidra/capa/DIE/FLOSS stack.
+- **Staged nonblocking pipeline**: analysis is organized into explicit stages (`fast_profile`, `enrich_static`, `function_map`, `reconstruct`, `dynamic_plan`, `dynamic_execute`, `summarize`), with preview-first tool contracts and persisted run state for reuse.
+- **HTTP File Server**: Embedded HTTP API on port 18080 for direct sample uploads, artifact downloads, and upload session management with API key authentication.
+
+## New in the staged analysis pipeline
+
+This iteration introduces a unified nonblocking analysis pattern to prevent MCP
+request timeouts on large or expensive samples:
+
+- `workflow.analyze.start` initiates or reuses a persisted staged analysis run. Only the `fast_profile` stage executes inline; heavier stages are queued by default.
+- `workflow.analyze.status` queries aggregate run status, including deferred jobs, completed stages, and reusable artifact refs.
+- `workflow.analyze.promote` promotes an existing run to deeper stages without rerunning completed work.
+- Heavy tools (`strings.extract`, `binary.role.profile`, `analysis.context.link`, `crypto.identify`) now provide explicit bounded preview modes before deeper queued execution.
+- `workflow.summarize` consumes persisted run state and stage artifacts instead of rerunning hidden heavy analysis.
+- Coverage envelope fields (`coverage_level`, `completion_state`, `coverage_gaps`, `upgrade_paths`) provide machine-readable analysis boundaries and next-step guidance.
+- Run/report surfaces now expose `recovery_state`, `recoverable_stages`, `evidence_state`, `provenance_visibility`, and `persisted_state_visibility` so clients can tell what was reused, deferred, or interrupted.
+- Scheduler-aware status now exposes `execution_bucket`, `cost_class`, `worker_family`, `budget_deferral_reason`, `warm_reuse`, and `cold_start`, so clients can tell why work was admitted, deferred, or reused.
+- Memory-aware status also exposes `expected_rss_mb`, `current_rss_mb`, `peak_rss_mb`, `memory_limit_mb`, and `control_plane_headroom_mb` when heavy work is admitted, deferred, or interrupted.
+- Large-sample full evidence may now be returned as a bounded inline digest plus `chunk_manifest` and persisted chunk artifacts instead of one monolithic payload.
+- Preview helpers now prefer pooled warm execution for static Python helpers and `Rizin` preview inspection, while `Ghidra` remains on isolated deep-attribution lanes.
+
+Primary runtime docs:
+
+- [Analysis Runtime](./docs/ANALYSIS-RUNTIME.md)
+- [Async Job Pattern](./docs/ASYNC-JOB-PATTERN.md)
+- [Migration To The Staged Runtime](./docs/MIGRATION-ASYNC.md)
+
+### Explanation-first graph surfaces
+
+Graph-capable tools are now meant to help AI agents and analysts explain why a
+finding exists, not to decorate reports.
+
+- `workflow.summarize` and `report.summarize` surface bounded explanation graph artifacts instead of relying on large inline graph payloads.
+- `code.function.cfg` is the primary local navigation graph surface; Mermaid and DOT are serializer choices over the same bounded graph semantics.
+- `graphviz.render` is a renderer/export helper for existing graph artifacts, not a primary analysis workflow.
+- Explanation graph outputs now distinguish `observed`, `correlated`, and `inferred` content and carry provenance plus omission markers.
+
+### Primary vs compatibility surfaces
+
+Treat tool surfaces as role-scoped:
+
+- Primary orchestration: `workflow.analyze.start`, `workflow.analyze.status`, `workflow.analyze.promote`, `workflow.summarize`
+- Compatibility facades: `workflow.triage`, `task.status`, `report.summarize`
+- Export-only surfaces: `report.generate`
+- Renderer/export helpers: `graphviz.render`
+
+When both a primary and compatibility surface exist, prefer the primary staged-runtime path.
+
+### Recommended calling patterns
+
+**For quick triage:**
+```
+workflow.analyze.start(sample_id, goal='triage')
+→ Returns fast_profile stage result inline
+→ Check coverage_gaps and upgrade_paths for next steps
+```
+
+**For deep analysis:**
+```
+workflow.analyze.start(sample_id, goal='reverse')
+→ Returns queued status with job_id
+→ Poll workflow.analyze.status(run_id) until completed
+→ Promote to deeper stages as needed
+```
+
+**For large or oversized samples:**
+```
+workflow.analyze.start(sample_id, goal='triage')
+→ workflow.analyze.status(run_id)
+→ workflow.analyze.promote(run_id, through_stage='enrich_static')
+→ workflow.analyze.status(run_id)
+→ workflow.analyze.promote(run_id, through_stage='function_map')
+→ workflow.summarize(sample_id, through_stage='final')
+```
+
+Keep `report.summarize(detail_level='compact')` for large samples. The runtime now downshifts `detail_level='full'` back to compact when the sample tier is too large for safe inline reporting.
+
+**For summary:**
+```
+workflow.summarize(sample_id, through_stage='final')
+→ Automatically consumes any existing analysis run state
+→ Returns compact analyst-facing summary
+```
 
 ## New in the static triage foundation
 
@@ -134,17 +217,25 @@ It is designed to help MCP clients:
 
 ### Semantic review and reconstruction
 
-- `code.function.rename.prepare`
-- `code.function.rename.review`
-- `code.function.rename.apply`
-- `code.function.explain.prepare`
-- `code.function.explain.review`
-- `code.function.explain.apply`
-- `code.module.review.prepare`
-- `code.module.review`
-- `code.module.review.apply`
+- `code.function.rename.prepare` (deprecated, use `llm.analyze`)
+- `code.function.rename.review` (deprecated, use `llm.analyze`)
+- `code.function.rename.apply` (deprecated, use `llm.analyze`)
+- `code.function.explain.prepare` (deprecated, use `llm.analyze`)
+- `code.function.explain.review` (deprecated, use `llm.analyze`)
+- `code.function.explain.apply` (deprecated, use `llm.analyze`)
+- `code.module.review.prepare` (deprecated, use `llm.analyze`)
+- `code.module.review` (deprecated, use `llm.analyze`)
+- `code.module.review.apply` (deprecated, use `llm.analyze`)
 - `code.reconstruct.plan`
 - `code.reconstruct.export`
+
+### LLM-assisted analysis (NEW)
+
+- `llm.analyze` - Unified LLM analysis interface (replaces deprecated 3-step tools)
+  - `task: 'summarize'` - Concise summaries
+  - `task: 'explain'` - Clear explanations
+  - `task: 'recommend'` - Actionable recommendations
+  - `task: 'review'` - Critical review
 
 ## High-level workflows
 
@@ -152,33 +243,44 @@ These are the main orchestration entrypoints for MCP clients.
 
 ### `workflow.triage`
 
-Fast first-pass triage for PE samples. Use this when you want a quick answer before deeper recovery.
+Fast first-pass triage facade for PE samples. Use this when you want a bounded `fast_profile` view backed by the staged run model.
 
-`workflow.triage` now combines:
-
-- fingerprint and runtime hint extraction
-- import and string triage
-- YARA matches
-- static capability triage
-- canonical PE structure summary
-- compiler/packer attribution
+**Important**: Treat this as a compatibility view, not as proof that deeper static analysis already completed. Use `workflow.analyze.promote` or `workflow.analyze.status` for deeper work.
 
 ### `workflow.deep_static`
 
 Long-running static pipeline for deeper analysis and ranking. Supports async job mode.
 
+**Note**: Prefer `workflow.analyze.start` plus `workflow.analyze.promote` for the primary nonblocking client flow. Use `task.status` only when you need raw job details.
+
 ### `workflow.reconstruct`
 
 The main high-level reconstruction workflow.
 
-It can:
+**Note**: Prefer the staged run model for orchestration and reuse. `workflow.reconstruct` remains a deep workflow surface, but `workflow.analyze.status` should be your first progress lookup.
 
-- run binary preflight
-- detect Rust-oriented samples
-- profile DLL lifecycle, export dispatch, callback surface, and COM activation hints
-- auto-recover a function index when Ghidra function extraction is missing or degraded
-- export native or .NET reconstruction output
-- optionally validate build and run the generated harness
+## Run And Job Model
+
+The server now has two distinct layers:
+
+- **Run layer**: `workflow.analyze.start/status/promote`
+- **Job layer**: `task.status/task.cancel/task.sweep`
+
+Preferred client flow:
+
+**Example:**
+```typescript
+const start = await workflow.analyze.start({ sample_id: '...', goal: 'reverse' })
+const runId = start.data.run_id
+
+await workflow.analyze.promote({ run_id: runId, through_stage: 'function_map' })
+const status = await workflow.analyze.status({ run_id: runId })
+```
+
+**Documentation:**
+- [Analysis Runtime](docs/ANALYSIS-RUNTIME.md)
+- [Async Job Pattern Guide](docs/ASYNC-JOB-PATTERN.md)
+- [Migration Guide](docs/MIGRATION-ASYNC.md)
 - tune export strategy based on role-aware preflight for native Rust, DLL, and COM-oriented samples
 - return structured setup guidance when Java, Ghidra, or optional dependencies are not ready
 - expose stage-oriented progress metadata for queued and foreground runs
@@ -288,10 +390,8 @@ Use these with:
 - `task.cancel`
 - `task.sweep`
 
-Queued workflow responses and `task.status` now include `polling_guidance`.
-When a long-running Ghidra or reconstruct job is still queued/running, MCP
-clients should prefer one client-side sleep/wait using that recommendation
-instead of repeated immediate polling.
+Queued workflow responses and `task.status` include `polling_guidance`, but the primary staged orchestration surface is still `workflow.analyze.status`.
+When a long-running stage is queued/running, MCP clients should prefer run-level status first and only fall back to `task.status` for raw queue details.
 
 ## Environment bootstrap and setup guidance
 
@@ -311,6 +411,7 @@ These return structured setup actions and required user inputs so an MCP client 
 - `CAPA_RULES_PATH`
 - `DIE_PATH`
 - optional dynamic-analysis extras such as Speakeasy/Frida dependencies
+- Docker full-stack extras such as Graphviz/Rizin/YARA-X/UPX/Wine/Qiling/angr/PANDA/RetDec
 
 ### Frida Dynamic Instrumentation (Optional)
 
@@ -336,7 +437,7 @@ See [`docs/EXAMPLES.md`](./docs/EXAMPLES.md#场景 -9-frida-运行时 instrument
 
 ## Current Development Status
 
-### Latest Release: v0.1.4
+### Latest Release: v1.0.0-beta.1
 
 **Stable Features** (Production Ready):
 - PE triage and static analysis (`static.capability.triage`, `pe.structure.analyze`, `compiler.packer.detect`)
@@ -346,9 +447,9 @@ See [`docs/EXAMPLES.md`](./docs/EXAMPLES.md#场景 -9-frida-运行时 instrument
 - Source-like reconstruction with LLM-assisted review layers
 - Runtime evidence ingestion and correlation
 
-### In Development (Upcoming v0.2.0)
+### In Development (Post-beta roadmap)
 
-**Frida Dynamic Instrumentation** - Completed implementation, awaiting release:
+**Frida Dynamic Instrumentation** - Completed implementation, rolling into the v1 beta line:
 - `frida.runtime.instrument` - Spawn and attach mode instrumentation
 - `frida.script.inject` - Pre-built and custom script injection
 - `frida.trace.capture` - Canonical trace schema with filtering/aggregation
@@ -366,11 +467,21 @@ For the new static triage foundation, the most common optional requirements are:
 - a downloaded capa rules bundle referenced by `CAPA_RULES_PATH`
 - Detect It Easy CLI referenced by `DIE_PATH`
 
+The Docker image now bundles the static-analysis stack by default:
+
+- `flare-capa`
+- a container-local `capa` CLI wrapper at `/usr/local/bin/capa`
+- bundled `capa-rules` at `/opt/capa-rules`
+- bundled `capa` signatures at `/opt/capa-sigs`
+- bundled Detect It Easy CLI at `/usr/bin/diec` using the stable `3.10 Debian 12` package
+
 For Ghidra 12.0.4, the server expects Java 21+ and will report explicit Java compatibility hints through:
 
 - `ghidra.health`
 - `system.health`
 - `system.setup.guide`
+
+For Docker deployments, that means a Java 21+ JDK, not only a JRE. The containerized runtime should expose both `java` and `javac`.
 
 When Ghidra commands fail, the server now persists command logs and, when available, Ghidra runtime logs. Normalized diagnostics include Java exception summaries and remediation hints instead of only returning `exit code 1`.
 
@@ -420,6 +531,45 @@ docs/QUALITY_EVALUATION.md   evaluation checklist for regression and release rea
 
 ## Prerequisites
 
+### Option 1: Docker (Recommended - Zero Configuration)
+
+The easiest way to run the MCP server with all dependencies pre-installed:
+
+```bash
+# Build the Docker image (10-15 minutes, ~2.5GB)
+docker build -t windows-exe-decompiler:latest .
+
+# Or pull from registry (when published)
+# docker pull ghcr.io/last-emo-boy/windows-exe-decompiler-mcp-server:latest
+
+# Run with Docker Compose
+docker-compose up -d mcp-server
+
+# Or run directly
+docker run --rm -i \
+  --network=none \
+  -v ./samples:/samples:ro \
+  -v ~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces \
+  windows-exe-decompiler:latest
+```
+
+See [`docs/DOCKER.md`](./docs/DOCKER.md) for complete Docker documentation.
+
+The default Docker image is now a full Linux-side analysis stack. In addition to
+the baseline `Ghidra`, `capa`, `Detect It Easy`, `FLOSS`, `legacy YARA`, and
+`Speakeasy` components, it also bundles:
+
+- `Graphviz`, `Rizin`, `YARA-X`, `UPX`, `RetDec`
+- `frida-tools`, `Wine`, `winedbg`, `Qiling`（隔离解释器）, `angr`, `pandare`
+
+Important caveats:
+
+- `Qiling` still needs an externally mounted Windows rootfs via `QILING_ROOTFS`.
+- `Wine` and `winedbg` are useful Linux-hosted user-mode helpers, not full Windows desktop debugging replacements.
+- `RetDec` is a heavy backend and should be consumed artifact-first instead of returning oversized inline payloads.
+
+### Option 2: Local Installation
+
 Required:
 
 - Node.js 18+
@@ -435,6 +585,24 @@ Optional but strongly recommended:
 - Python worker packages from [`workers/requirements.txt`](./workers/requirements.txt)
 
 ## Local development
+
+### Option 1: Docker Development (Recommended)
+
+```bash
+# Build image
+npm run docker:build
+
+# Test toolchain
+npm run docker:test
+
+# Enter container for debugging
+npm run docker:run
+
+# Clean up Docker resources
+npm run docker:clean
+```
+
+### Option 2: Native Development
 
 Install JavaScript dependencies:
 
@@ -488,6 +656,39 @@ npm start
 }
 ```
 
+### Docker Compose plus `docker exec`
+
+For the single-container deployment model, start the daemon once with `docker compose up -d mcp-server` and point the MCP client at the running container:
+
+```json
+{
+  "mcpServers": {
+    "windows-exe-decompiler": {
+      "command": "docker",
+      "args": [
+        "exec",
+        "-i",
+        "windows-exe-decompiler-mcp",
+        "node",
+        "dist/index.js"
+      ],
+      "env": {
+        "NODE_ENV": "production",
+        "PYTHONUNBUFFERED": "1",
+        "WORKSPACE_ROOT": "/app/workspaces",
+        "DB_PATH": "/app/data/database.db",
+        "CACHE_ROOT": "/app/cache",
+        "GHIDRA_PROJECT_ROOT": "/ghidra-projects",
+        "GHIDRA_LOG_ROOT": "/ghidra-logs"
+      },
+      "timeout": 300000
+    }
+  }
+}
+```
+
+In this deployment, host-side file uploads should use `sample.request_upload` and the returned `http://localhost:18080/api/v1/uploads/<token>` URL instead of trying to pass a host filesystem path into the containerized worker.
+
 ### Local install helpers
 
 - Codex: [`install-to-codex.ps1`](./install-to-codex.ps1)
@@ -499,6 +700,7 @@ Related docs:
 - [`CODEX_INSTALLATION.md`](./CODEX_INSTALLATION.md)
 - [`COPILOT_INSTALLATION.md`](./COPILOT_INSTALLATION.md)
 - [`CLAUDE_INSTALLATION.md`](./CLAUDE_INSTALLATION.md)
+- [`docs/ANALYSIS-COVERAGE.md`](./docs/ANALYSIS-COVERAGE.md)
 
 ## Persistent storage
 
@@ -536,6 +738,37 @@ For local IDE clients such as VS Code or Copilot, prefer local file paths:
 ```
 
 Use `bytes_b64` only when the client cannot access the same filesystem as the server.
+
+## Packed samples and debug-aware analysis
+
+For suspected or confirmed packed binaries, prefer the staged unpack/debug path over immediate deep reconstruction:
+
+```text
+workflow.analyze.start
+-> workflow.analyze.status
+-> workflow.analyze.promote(dynamic_plan)
+-> workflow.analyze.status
+-> workflow.analyze.promote(dynamic_execute)
+-> workflow.summarize
+```
+
+Important runtime fields:
+
+- `packed_state`
+- `unpack_state`
+- `unpack_confidence`
+- `unpack_plan`
+- `debug_state`
+- `debug_session`
+- `diff_digests` / `unpack_debug_diffs`
+
+Practical guidance:
+
+- `upx.inspect(test|list)` is a safe unpack probe
+- `upx.inspect(decompress)` is the bounded transform path for UPX-style samples
+- `breakpoint.smart` and `trace.condition` are planning-only and help build a persisted debug session
+- `frida.trace.capture` and `wine.run` remain manual or approval-gated execution surfaces
+- `workflow.summarize` and `report.summarize(detail_level='compact')` should prefer unpack/debug diff digests over raw dump or trace trees
 
 ## Publishing to npm
 
@@ -600,20 +833,40 @@ Current non-goals:
 
 ## Using the published package
 
+The published npm package is now best treated as a thin MCP launcher, while Docker carries the heavy reverse-engineering runtime. That keeps npm and Docker separate, but intentionally strong-bound:
+
+- `npm` / `npx` provides the client-facing executable and versioned launcher
+- `docker compose up -d mcp-server` provides the persistent runtime, storage, upload API, and toolchain
+
+This does **not** remove the existing source checkout or direct Docker client paths. If you are running from a cloned repo, `node dist/index.js` and direct `docker exec ... node dist/index.js` still work.
+
+Recommended published-package flow:
+
+1. Start the daemon runtime once:
+
+```bash
+docker compose up -d mcp-server
+```
+
+2. Point the MCP client at the npm launcher:
+
 ```json
 {
   "mcpServers": {
     "windows-exe-decompiler": {
       "command": "npx",
-      "args": ["-y", "windows-exe-decompiler-mcp-server"],
-      "env": {
-        "GHIDRA_PATH": "C:/path/to/ghidra",
-        "GHIDRA_INSTALL_DIR": "C:/path/to/ghidra"
-      }
+      "args": ["-y", "windows-exe-decompiler-mcp-server", "docker-stdio"]
     }
   }
 }
 ```
+
+Optional overrides for the launcher:
+
+- `WINDOWS_EXE_DECOMPILER_DOCKER_CONTAINER`
+- `WINDOWS_EXE_DECOMPILER_DOCKER_IMAGE`
+
+For local clone/native mode instead, keep using the earlier examples in this README that call `node /absolute/path/to/dist/index.js` directly.
 
 ## License
 

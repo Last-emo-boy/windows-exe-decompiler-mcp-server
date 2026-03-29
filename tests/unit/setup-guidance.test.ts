@@ -6,6 +6,9 @@ import { describe, test, expect } from '@jest/globals'
 import {
   SetupActionSchema,
   RequiredUserInputSchema,
+  buildCoreLinuxToolchainSetupActions,
+  buildDynamicDependencyRequiredUserInputs,
+  buildHeavyBackendSetupActions,
   buildFridaSetupActions,
   buildFridaRequiredUserInputs,
   buildDynamicDependencySetupActions,
@@ -52,7 +55,7 @@ describe('SetupActionSchema', () => {
   })
 
   test('should accept all valid action kinds', () => {
-    const validKinds = ['pip_install', 'set_env', 'provide_path', 'verify_install']
+    const validKinds = ['pip_install', 'install_package', 'set_env', 'provide_path', 'verify_install']
 
     validKinds.forEach((kind) => {
       const input = {
@@ -202,6 +205,36 @@ describe('buildDynamicDependencySetupActions', () => {
   })
 })
 
+describe('buildCoreLinuxToolchainSetupActions', () => {
+  test('should include Linux core toolchain actions', () => {
+    const actions = buildCoreLinuxToolchainSetupActions()
+    const actionIds = actions.map((a) => a.id)
+
+    expect(actionIds).toContain('install_graphviz_package')
+    expect(actionIds).toContain('install_rizin_package')
+    expect(actionIds).toContain('install_yarax_package')
+    expect(actionIds).toContain('install_upx_package')
+    expect(actionIds).toContain('install_wine_package')
+    expect(actionIds).toContain('install_frida_tools_cli')
+  })
+})
+
+describe('buildDynamicDependencyRequiredUserInputs', () => {
+  test('should include Qiling rootfs input', () => {
+    const inputs = buildDynamicDependencyRequiredUserInputs()
+    expect(inputs.map((item) => item.key)).toContain('qiling_rootfs_path')
+  })
+})
+
+describe('buildHeavyBackendSetupActions', () => {
+  test('should include RetDec actions', () => {
+    const actions = buildHeavyBackendSetupActions()
+    expect(actions.map((item) => item.id)).toContain('install_retdec_backend')
+    expect(actions.map((item) => item.id)).toContain('set_retdec_path')
+    expect(actions.map((item) => item.id)).toContain('verify_retdec_install')
+  })
+})
+
 describe('mergeSetupActions', () => {
   test('should merge multiple action groups without duplicates', () => {
     const group1 = [
@@ -284,6 +317,16 @@ describe('inferSetupGuidanceFromMessages', () => {
 
     expect(result.setupActions.map((a) => a.id)).toContain('install_frida_runtime')
     expect(result.requiredUserInputs.map((i) => i.key)).toContain('frida_path')
+  })
+
+  test('should infer Linux full-stack setup actions from Docker toolchain errors', () => {
+    const messages = ['Graphviz not found', 'qiling module missing', 'retdec-decompiler unavailable']
+    const result = inferSetupGuidanceFromMessages(messages)
+
+    expect(result.setupActions.map((a) => a.id)).toContain('install_graphviz_package')
+    expect(result.setupActions.map((a) => a.id)).toContain('install_qiling_runtime')
+    expect(result.setupActions.map((a) => a.id)).toContain('install_retdec_backend')
+    expect(result.requiredUserInputs.map((i) => i.key)).toContain('qiling_rootfs_path')
   })
 
   test('should infer Ghidra setup actions from Ghidra-related messages', () => {

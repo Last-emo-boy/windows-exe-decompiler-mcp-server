@@ -91,6 +91,11 @@ export const ConfigSchema = z.object({
       capaPath: z.string().optional(),
       capaRulesPath: z.string().optional(),
       diePath: z.string().optional(),
+      graphvizDotPath: z.string().optional(),
+      rizinPath: z.string().optional(),
+      upxPath: z.string().optional(),
+      retdecPath: z.string().optional(),
+      yaraXPythonPath: z.string().optional(),
       dieTimeout: z.number().int().min(1).default(30),
       timeout: z.number().int().min(1).default(60),
     }).default({}),
@@ -101,6 +106,12 @@ export const ConfigSchema = z.object({
     }).default({}),
     sandbox: z.object({
       enabled: z.boolean().default(false),
+      winePath: z.string().optional(),
+      winedbgPath: z.string().optional(),
+      qilingPythonPath: z.string().optional(),
+      qilingRootfsPath: z.string().optional(),
+      angrPythonPath: z.string().optional(),
+      pandaPythonPath: z.string().optional(),
       timeout: z.number().int().min(1).default(120),
     }).default({}),
     frida: z.object({
@@ -120,6 +131,20 @@ export const ConfigSchema = z.object({
     pretty: z.boolean().default(false),
     auditPath: z.string().default(getDefaultAuditLogPath()),
   }).default({}),
+  api: z.object({
+    enabled: z.boolean().default(true),  // Default: enabled
+    port: z.number().int().min(1).max(65535).default(18080),
+    apiKey: z.string().optional(),  // Auto-generated if not set
+    maxFileSize: z.number().int().min(1).default(500 * 1024 * 1024), // 500MB
+    storageRoot: z.string().default('/app/storage'),
+    retentionDays: z.number().int().min(1).default(30),
+  }).default({
+    enabled: true,
+    port: 18080,
+    maxFileSize: 500 * 1024 * 1024,
+    storageRoot: '/app/storage',
+    retentionDays: 30,
+  }),
 })
 
 export type Config = z.infer<typeof ConfigSchema>
@@ -240,10 +265,65 @@ export function loadConfigFromEnv(): Record<string, any> {
     if (!config.workers.static) config.workers.static = {}
     config.workers.static.diePath = process.env.DIE_PATH
   }
+  if (process.env.GRAPHVIZ_DOT_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.static) config.workers.static = {}
+    config.workers.static.graphvizDotPath = process.env.GRAPHVIZ_DOT_PATH
+  }
+  if (process.env.RIZIN_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.static) config.workers.static = {}
+    config.workers.static.rizinPath = process.env.RIZIN_PATH
+  }
+  if (process.env.UPX_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.static) config.workers.static = {}
+    config.workers.static.upxPath = process.env.UPX_PATH
+  }
+  if (process.env.RETDEC_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.static) config.workers.static = {}
+    config.workers.static.retdecPath = process.env.RETDEC_PATH
+  }
+  if (process.env.YARAX_PYTHON) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.static) config.workers.static = {}
+    config.workers.static.yaraXPythonPath = process.env.YARAX_PYTHON
+  }
   if (process.env.DIE_TIMEOUT) {
     if (!config.workers) config.workers = {}
     if (!config.workers.static) config.workers.static = {}
     config.workers.static.dieTimeout = parseInt(process.env.DIE_TIMEOUT, 10)
+  }
+  if (process.env.WINE_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.sandbox) config.workers.sandbox = {}
+    config.workers.sandbox.winePath = process.env.WINE_PATH
+  }
+  if (process.env.WINEDBG_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.sandbox) config.workers.sandbox = {}
+    config.workers.sandbox.winedbgPath = process.env.WINEDBG_PATH
+  }
+  if (process.env.QILING_PYTHON) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.sandbox) config.workers.sandbox = {}
+    config.workers.sandbox.qilingPythonPath = process.env.QILING_PYTHON
+  }
+  if (process.env.QILING_ROOTFS) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.sandbox) config.workers.sandbox = {}
+    config.workers.sandbox.qilingRootfsPath = process.env.QILING_ROOTFS
+  }
+  if (process.env.ANGR_PYTHON) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.sandbox) config.workers.sandbox = {}
+    config.workers.sandbox.angrPythonPath = process.env.ANGR_PYTHON
+  }
+  if (process.env.PANDA_PYTHON) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.sandbox) config.workers.sandbox = {}
+    config.workers.sandbox.pandaPythonPath = process.env.PANDA_PYTHON
   }
   if (process.env.FRIDA_PATH || process.env.FRIDA_SERVER_PATH) {
     if (!config.workers) config.workers = {}
@@ -270,6 +350,32 @@ export function loadConfigFromEnv(): Record<string, any> {
   if (process.env.AUDIT_LOG_PATH) {
     if (!config.logging) config.logging = {}
     config.logging.auditPath = process.env.AUDIT_LOG_PATH
+  }
+
+  // API configuration
+  if (process.env.API_ENABLED) {
+    if (!config.api) config.api = {}
+    config.api.enabled = process.env.API_ENABLED === 'true' || process.env.API_ENABLED === '1'
+  }
+  if (process.env.API_PORT) {
+    if (!config.api) config.api = {}
+    config.api.port = parseInt(process.env.API_PORT, 10)
+  }
+  if (process.env.API_KEY) {
+    if (!config.api) config.api = {}
+    config.api.apiKey = process.env.API_KEY
+  }
+  if (process.env.API_MAX_FILE_SIZE) {
+    if (!config.api) config.api = {}
+    config.api.maxFileSize = parseInt(process.env.API_MAX_FILE_SIZE, 10)
+  }
+  if (process.env.API_STORAGE_ROOT) {
+    if (!config.api) config.api = {}
+    config.api.storageRoot = process.env.API_STORAGE_ROOT
+  }
+  if (process.env.API_RETENTION_DAYS) {
+    if (!config.api) config.api = {}
+    config.api.retentionDays = parseInt(process.env.API_RETENTION_DAYS, 10)
   }
 
   return config

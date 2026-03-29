@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'child_process'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { z } from 'zod'
 import type { ToolDefinition, ToolArgs, WorkerResult, ArtifactRef } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
@@ -410,8 +410,7 @@ export function createFridaRuntimeInstrumentHandler(
 
         await fs.writeFile(artifactPath, JSON.stringify(artifactContent, null, 2), 'utf-8')
 
-        const sha256 = (data: string) =>
-          require('crypto').createHash('sha256').update(data).digest('hex')
+        const sha256 = (data: string) => createHash('sha256').update(data).digest('hex')
         const artifactId = `frida_trace_${sha256(artifactContent.captured_at)}`
 
         artifacts.push({

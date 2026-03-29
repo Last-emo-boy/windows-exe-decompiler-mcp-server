@@ -1,6 +1,6 @@
 /**
  * Job Queue - In-memory task queue with priority support
- * 
+ *
  * Implements requirements 21.1 and 21.2:
  * - Task enqueueing with unique job_id
  * - Priority-based task ordering
@@ -9,6 +9,7 @@
 
 import { randomUUID } from 'crypto';
 import { EventEmitter } from 'events';
+import type { DatabaseManager } from './database.js';
 import type {
   Job,
   JobStatus,
@@ -28,6 +29,28 @@ export type {
   RetryPolicy,
   ArtifactRef
 } from './types.js';
+
+/**
+ * Estimated duration for common tools (in milliseconds)
+ * Used for async job pattern to provide honest time estimates
+ * Tasks: mcp-async-job-pattern 1.2
+ */
+export const TOOL_DURATION_ESTIMATES: Record<string, number> = {
+  // Ghidra tools (5-30 minutes)
+  'ghidra.analyze': 30 * 60 * 1000,
+  
+  // Workflows (10-60 minutes)
+  'workflow.reconstruct': 40 * 60 * 1000,
+  'workflow.triage': 10 * 60 * 1000,
+  'workflow.deep_static': 25 * 60 * 1000,
+  'workflow.summarize': 15 * 60 * 1000,
+  
+  // String tools (2-10 minutes)
+  'strings.floss.decode': 5 * 60 * 1000,
+  
+  // Default estimate (5 minutes)
+  'default': 5 * 60 * 1000,
+} as const;
 
 /**
  * Internal job entry with status tracking
@@ -61,6 +84,10 @@ export class JobQueue extends EventEmitter {
     retryableErrors: ['E_TIMEOUT', 'E_RESOURCE_EXHAUSTED', 'E_WORKER_UNAVAILABLE']
   };
 
+  constructor(private readonly database?: DatabaseManager) {
+    super();
+  }
+
   /**
    * Enqueue a new job
    * 
@@ -84,6 +111,16 @@ export class JobQueue extends EventEmitter {
 
     this.jobs.set(jobId, entry);
     this.queue.push(fullJob);
+    this.database?.createJob({
+      id: jobId,
+      type: fullJob.type,
+      tool: fullJob.tool,
+      sampleId: fullJob.sampleId,
+      args: fullJob.args,
+      priority: fullJob.priority,
+      timeout: fullJob.timeout,
+      estimatedDurationMs: fullJob.estimatedDurationMs,
+    })
     
     // Sort queue by priority (descending)
     this.sortQueue();
@@ -142,6 +179,7 @@ export class JobQueue extends EventEmitter {
     entry.finishedAt = new Date().toISOString();
     entry.cancelReason = reason;
     entry.error = reason ? `Cancelled: ${reason}` : 'Cancelled by user';
+    this.database?.updateJobStatus(jobId, 'cancelled', entry.progress, entry.error);
 
     this.emit('job:cancelled', jobId, reason);
     
@@ -173,16 +211,38 @@ export class JobQueue extends EventEmitter {
    * @returns Next job or undefined if queue is empty
    */
   dequeue(): Job | undefined {
-    const job = this.queue.shift();
-    if (job) {
-      const entry = this.jobs.get(job.id);
-      if (entry) {
-        entry.status = 'running';
-        entry.startedAt = new Date().toISOString();
-        this.emit('job:started', job.id);
-      }
+    const job = this.queue[0]
+    if (!job) {
+      return undefined
     }
-    return job;
+    return this.startQueuedJob(job.id)
+  }
+
+  /**
+   * Inspect queued jobs without mutating queue order.
+   */
+  listQueuedJobs(): Job[] {
+    return [...this.queue]
+  }
+
+  /**
+   * Start a specific queued job by id.
+   */
+  startQueuedJob(jobId: string): Job | undefined {
+    const index = this.queue.findIndex((job) => job.id === jobId)
+    if (index < 0) {
+      return undefined
+    }
+
+    const [job] = this.queue.splice(index, 1)
+    const entry = this.jobs.get(job.id)
+    if (entry) {
+      entry.status = 'running'
+      entry.startedAt = new Date().toISOString()
+      this.database?.updateJobStatus(job.id, 'running', 0)
+      this.emit('job:started', job.id)
+    }
+    return job
   }
 
   /**
@@ -212,6 +272,12 @@ export class JobQueue extends EventEmitter {
     
     if (!result.ok) {
       entry.error = result.errors.join('; ');
+    }
+
+    if (result.ok) {
+      this.database?.setJobResult(jobId, result);
+    } else {
+      this.database?.updateJobStatus(jobId, 'failed', entry.progress, entry.error);
     }
 
     const eventName = result.ok ? 'job:completed' : 'job:failed';
@@ -293,6 +359,7 @@ export class JobQueue extends EventEmitter {
     const entry = this.jobs.get(jobId);
     if (entry && entry.status === 'running') {
       entry.progress = Math.max(0, Math.min(100, progress));
+      this.database?.updateJobStatus(jobId, 'running', entry.progress);
       this.emit('job:progress', jobId, entry.progress);
     }
   }
@@ -335,14 +402,17 @@ export class JobQueue extends EventEmitter {
    * Get full job status list with lightweight execution context.
    */
   listStatuses(status?: JobStatusType): Array<
-    JobStatus & {
-      tool: string
-      sampleId: string
-      attempts: number
-      timeout: number
-      createdAt: string
-      cancelReason?: string
-    }
+      JobStatus & {
+        tool: string
+        sampleId: string
+        attempts: number
+        timeout: number
+        createdAt: string
+        updatedAt?: string
+        args: Record<string, unknown>
+        estimatedDurationMs?: number
+        cancelReason?: string
+      }
   > {
     const rows: Array<
       JobStatus & {
@@ -351,6 +421,9 @@ export class JobQueue extends EventEmitter {
         attempts: number
         timeout: number
         createdAt: string
+        updatedAt?: string
+        args: Record<string, unknown>
+        estimatedDurationMs?: number
         cancelReason?: string
       }
     > = []
@@ -371,6 +444,9 @@ export class JobQueue extends EventEmitter {
         attempts: entry.job.attempts,
         timeout: entry.job.timeout,
         createdAt: entry.job.createdAt,
+        updatedAt: entry.finishedAt || entry.startedAt || entry.job.createdAt,
+        args: entry.job.args,
+        estimatedDurationMs: entry.job.estimatedDurationMs,
         cancelReason: entry.cancelReason,
       })
     }
@@ -405,7 +481,12 @@ export class JobQueue extends EventEmitter {
     let cleared = 0;
 
     for (const [jobId, entry] of this.jobs.entries()) {
-      if (entry.status === 'completed' || entry.status === 'failed' || entry.status === 'cancelled') {
+      if (
+        entry.status === 'completed' ||
+        entry.status === 'failed' ||
+        entry.status === 'cancelled' ||
+        entry.status === 'interrupted'
+      ) {
         if (entry.finishedAt) {
           const finishedTime = new Date(entry.finishedAt).getTime();
           if (now - finishedTime > maxAgeMs) {
@@ -420,7 +501,7 @@ export class JobQueue extends EventEmitter {
   }
 
   /**
-   * Mark stale running jobs as failed.
+   * Mark stale running jobs as interrupted.
    * Emits `job:reaped` with affected job ids for observability.
    */
   reapStaleRunningJobs(maxRuntimeMs: number, nowMs: number = Date.now()): string[] {
@@ -438,7 +519,7 @@ export class JobQueue extends EventEmitter {
         continue
       }
 
-      entry.status = 'failed'
+      entry.status = 'interrupted'
       entry.finishedAt = new Date(nowMs).toISOString()
       entry.error = `E_TIMEOUT: stale running job reaped after ${elapsed}ms`
       if (!entry.result) {
@@ -455,6 +536,7 @@ export class JobQueue extends EventEmitter {
           },
         }
       }
+      this.database?.markJobInterrupted(jobId, entry.error, entry.result)
       reaped.push(jobId)
     }
 
@@ -489,6 +571,7 @@ export class JobQueue extends EventEmitter {
       entry.error = undefined;
       entry.startedAt = undefined;
       entry.finishedAt = undefined;
+      this.database?.updateJobStatus(job.id, 'queued', 0);
     }
 
     // Add back to queue

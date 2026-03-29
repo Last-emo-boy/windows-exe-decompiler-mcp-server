@@ -17,6 +17,12 @@ import { createCodeFunctionExplainApplyHandler } from './code-function-explain-a
 
 const TOOL_NAME = 'code.function.explain.review'
 
+/**
+ * @deprecated Use `llm.analyze` with task='explain' instead.
+ * This tool will be removed in a future version.
+ * Migration guide: docs/MIGRATION.md
+ */
+
 const ReviewExplanationSchema = z
   .object({
     address_or_function: z.string().optional(),
@@ -284,6 +290,16 @@ function buildSamplingRequest(
   input: z.infer<typeof codeFunctionExplainReviewInputSchema>,
   taskPrompt: string
 ): CreateMessageRequest['params'] {
+  const invariantSystemPrompt = [
+    'You are an evidence-grounded reverse-engineering assistant.',
+    'Return strict JSON only.',
+    'Do not wrap the response in markdown, code fences, or commentary.',
+    'Do not call tools.',
+    'Use only the supplied evidence bundle.',
+    'Preserve uncertainty explicitly.',
+    'Prefer empty results or conservative explanations over hallucinated precision.',
+  ].join(' ')
+
   return {
     messages: [
       {
@@ -294,9 +310,9 @@ function buildSamplingRequest(
         },
       },
     ],
-    systemPrompt:
-      input.system_prompt ||
-      'You are an evidence-grounded reverse-engineering assistant. Return strict JSON only.',
+    systemPrompt: input.system_prompt
+      ? `${invariantSystemPrompt}\n\nAdditional task constraints:\n${input.system_prompt}`
+      : invariantSystemPrompt,
     includeContext: input.include_context,
     maxTokens: input.max_tokens,
     temperature: input.temperature,

@@ -48,6 +48,7 @@ import {
   GhidraExecutionSummarySchema,
   buildGhidraExecutionSummary,
 } from '../ghidra-execution-summary.js';
+import { ToolSurfaceRoleSchema } from '../tool-surface-guidance.js';
 
 /**
  * Input schema for report.generate tool
@@ -141,13 +142,47 @@ export const reportGenerateInputSchema = z.object({
 
 export type ReportGenerateInput = z.infer<typeof reportGenerateInputSchema>;
 
+export const reportGenerateOutputSchema = z.object({
+  ok: z.boolean(),
+  data: z.object({
+    artifact_id: z.string(),
+    path: z.string(),
+    format: z.enum(['markdown', 'json', 'html']),
+    size: z.number(),
+    sha256: z.string(),
+    tool_surface_role: ToolSurfaceRoleSchema,
+    preferred_primary_tools: z.array(z.string()),
+    recommended_next_tools: z.array(z.string()),
+    next_actions: z.array(z.string()),
+    explanation_artifact_refs: z
+      .array(
+        z.object({
+          id: z.string(),
+          type: z.string(),
+          path: z.string(),
+          sha256: z.string(),
+          mime: z.string().optional(),
+          metadata: z.any().optional(),
+        })
+      )
+      .optional(),
+    provenance: z.any().optional(),
+    ghidra_execution: GhidraExecutionSummarySchema.nullable().optional(),
+    selection_diffs: z.any().optional(),
+  }).optional(),
+  errors: z.array(z.string()).optional(),
+});
+
 /**
  * Tool definition for report.generate
  */
 export const reportGenerateToolDefinition: ToolDefinition = {
   name: 'report.generate',
-  description: 'Generate comprehensive analysis report aggregating all analysis results. Supports Markdown, JSON, and HTML formats.',
-  inputSchema: reportGenerateInputSchema
+  description:
+    'Export a comprehensive archival report artifact in Markdown, JSON, or HTML. This is an export-only surface over already persisted analysis state, not the primary AI-facing staged summary flow. ' +
+    'Prefer workflow.summarize for staged analyst synthesis and report.summarize for deterministic compact compatibility snapshots.',
+  inputSchema: reportGenerateInputSchema,
+  outputSchema: reportGenerateOutputSchema,
 };
 
 /**
@@ -1016,6 +1051,38 @@ export function createReportGenerateHandler(
       }, 'Report generated successfully');
 
       return {
+        structuredContent: {
+          ok: true,
+          data: {
+            artifact_id: artifactId,
+            path: reportPath,
+            format,
+            size: reportContent.length,
+            sha256: reportSha256,
+            tool_surface_role: 'export_only',
+            preferred_primary_tools: ['workflow.summarize', 'report.summarize'],
+            recommended_next_tools: ['artifact.read', 'workflow.summarize', 'report.summarize'],
+            next_actions: [
+              'Use workflow.summarize for the primary staged analyst-facing synthesis flow.',
+              'Use report.summarize when you want a deterministic compact compatibility digest instead of a report export.',
+              'Use artifact.read on the generated report artifact when you need the full exported document content.',
+            ],
+            explanation_artifact_refs: database
+              .findArtifacts(input.sample_id)
+              .filter((item) => item.type === 'analysis_explanation_graph')
+              .slice(0, 6)
+              .map((item) => ({
+                id: item.id,
+                type: item.type,
+                path: item.path,
+                sha256: item.sha256,
+                ...(item.mime ? { mime: item.mime } : {}),
+              })),
+            provenance,
+            ghidra_execution: ghidraExecution,
+            selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined
+          }
+        },
         content: [{
           type: 'text',
           text: JSON.stringify({
@@ -1026,6 +1093,25 @@ export function createReportGenerateHandler(
               format,
               size: reportContent.length,
               sha256: reportSha256,
+              tool_surface_role: 'export_only',
+              preferred_primary_tools: ['workflow.summarize', 'report.summarize'],
+              recommended_next_tools: ['artifact.read', 'workflow.summarize', 'report.summarize'],
+              next_actions: [
+                'Use workflow.summarize for the primary staged analyst-facing synthesis flow.',
+                'Use report.summarize when you want a deterministic compact compatibility digest instead of a report export.',
+                'Use artifact.read on the generated report artifact when you need the full exported document content.',
+              ],
+              explanation_artifact_refs: database
+                .findArtifacts(input.sample_id)
+                .filter((item) => item.type === 'analysis_explanation_graph')
+                .slice(0, 6)
+                .map((item) => ({
+                  id: item.id,
+                  type: item.type,
+                  path: item.path,
+                  sha256: item.sha256,
+                  ...(item.mime ? { mime: item.mime } : {}),
+                })),
               provenance,
               ghidra_execution: ghidraExecution,
               selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined
@@ -1041,6 +1127,10 @@ export function createReportGenerateHandler(
       }, 'report.generate tool failed');
 
       return {
+        structuredContent: {
+          ok: false,
+          errors: [errorMessage]
+        },
         content: [{
           type: 'text',
           text: JSON.stringify({

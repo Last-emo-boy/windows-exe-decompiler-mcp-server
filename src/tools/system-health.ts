@@ -16,13 +16,17 @@ import type { CacheManager } from '../cache-manager.js'
 import { checkGhidraHealth, type GhidraHealthStatus } from '../ghidra-config.js'
 import { resolvePackagePath } from '../runtime-paths.js'
 import { lookupCachedResult } from './cache-observability.js'
-import { resolveStaticBackends } from '../static-backend-discovery.js'
+import { resolveAnalysisBackends } from '../static-backend-discovery.js'
 import {
   RequiredUserInputSchema,
   SetupActionSchema,
   buildBaselinePythonSetupActions,
+  buildCoreLinuxToolchainSetupActions,
+  buildDynamicDependencyRequiredUserInputs,
   buildStaticAnalysisRequiredUserInputs,
   buildStaticAnalysisSetupActions,
+  buildDynamicDependencySetupActions,
+  buildHeavyBackendSetupActions,
   buildJavaRequiredUserInputs,
   buildJavaSetupActions,
   buildGhidraRequiredUserInputs,
@@ -33,6 +37,7 @@ import {
   mergeRequiredUserInputs,
   mergeSetupActions,
 } from '../setup-guidance.js'
+import { ToolSurfaceRoleSchema } from '../tool-surface-guidance.js'
 
 const TOOL_NAME = 'system.health'
 
@@ -96,6 +101,11 @@ export const SystemHealthOutputSchema = z.object({
       recommendations: z.array(z.string()),
       setup_actions: z.array(SetupActionSchema),
       required_user_inputs: z.array(RequiredUserInputSchema),
+      result_mode: z.literal('environment_health'),
+      tool_surface_role: ToolSurfaceRoleSchema,
+      preferred_primary_tools: z.array(z.string()),
+      recommended_next_tools: z.array(z.string()),
+      next_actions: z.array(z.string()),
     })
     .optional(),
   warnings: z.array(z.string()).optional(),
@@ -114,7 +124,14 @@ export type SystemHealthOutput = z.infer<typeof SystemHealthOutputSchema>
 export const systemHealthToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
   description:
-    'Run aggregated environment health checks (workspace, database, Ghidra, Python static worker dependencies).',
+    'Run aggregated environment health checks for workspace, database, Ghidra, static-analysis dependencies, and cache observability. ' +
+    'Use this after setup_required results, degraded environment warnings, or repeated infrastructure-style failures. ' +
+    'Do not use this as the primary sample-analysis workflow for a healthy environment. ' +
+    '\n\nDecision guide:\n' +
+    '- Use when: a tool reports setup_required, dependency failures, readonly database symptoms, or degraded health.\n' +
+    '- Do not use when: you already have a valid sample_id and just need to continue analysis.\n' +
+    '- Typical next step: follow setup_actions and required_user_inputs, then retry the blocked analysis tool.\n' +
+    '- Common mistake: retrying the same failing analysis tool without inspecting health/setup guidance first.',
   inputSchema: SystemHealthInputSchema,
   outputSchema: SystemHealthOutputSchema,
 }
@@ -392,13 +409,25 @@ export function createSystemHealthHandler(
       if (input.include_static_worker) {
         try {
           const workerHealth = await runStaticWorkerProbe(input.timeout_ms)
-          const staticBackends = resolveStaticBackends()
+          const analysisBackends = resolveAnalysisBackends()
           const workerDependencies = (workerHealth.dependencies || {}) as Record<string, any>
-          const pefileAvailable = Boolean(workerDependencies.pefile?.available)
-          const liefAvailable = Boolean(workerDependencies.lief?.available)
-          const capaAvailable = Boolean(workerDependencies.capa?.available)
-          const fridaAvailable = Boolean(workerDependencies.frida?.available)
+          const pefileAvailable = workerDependencies.pefile?.available !== false
+          const liefAvailable = workerDependencies.lief?.available !== false
+          const capaAvailable = workerDependencies.capa?.available !== false
+          const fridaAvailable = workerDependencies.frida?.available !== false
           const staticDependencyIssues: string[] = []
+          const runningInDocker = /^(1|true|yes|on)$/i.test(process.env.RUNNING_IN_DOCKER || '')
+          const qilingRootfsConfigured = process.env.QILING_ROOTFS?.trim()
+          let qilingRootfsReady = false
+
+          if (qilingRootfsConfigured) {
+            try {
+              const stats = await fs.stat(qilingRootfsConfigured)
+              qilingRootfsReady = stats.isDirectory()
+            } catch {
+              qilingRootfsReady = false
+            }
+          }
 
           let statusRaw = String(workerHealth.status || 'degraded').toLowerCase()
           let status: z.infer<typeof ComponentSchema>['status'] =
@@ -417,14 +446,31 @@ export function createSystemHealthHandler(
           if (!capaAvailable) {
             staticDependencyIssues.push('capa unavailable')
           }
-          if (!staticBackends.capa_rules.available) {
-            staticDependencyIssues.push('capa rules unavailable')
-          }
-          if (!staticBackends.die.available) {
-            staticDependencyIssues.push('Detect It Easy unavailable')
-          }
           if (!fridaAvailable) {
             staticDependencyIssues.push('frida unavailable')
+          }
+          if (runningInDocker) {
+            const dockerRequiredBackends = [
+              ['graphviz', analysisBackends.graphviz.available],
+              ['rizin', analysisBackends.rizin.available],
+              ['yara_x', analysisBackends.yara_x.available],
+              ['upx', analysisBackends.upx.available],
+              ['wine', analysisBackends.wine.available],
+              ['winedbg', analysisBackends.winedbg.available],
+              ['frida_cli', analysisBackends.frida_cli.available],
+              ['qiling', analysisBackends.qiling.available],
+              ['angr', analysisBackends.angr.available],
+              ['panda', analysisBackends.panda.available],
+              ['retdec', analysisBackends.retdec.available],
+            ] as const
+            for (const [name, available] of dockerRequiredBackends) {
+              if (!available) {
+                staticDependencyIssues.push(`${name} unavailable`)
+              }
+            }
+            if (qilingRootfsConfigured && !qilingRootfsReady) {
+              staticDependencyIssues.push('qiling rootfs path missing')
+            }
           }
 
           if (status === 'healthy' && staticDependencyIssues.length > 0) {
@@ -440,7 +486,13 @@ export function createSystemHealthHandler(
                 : `Static worker status=${statusRaw}${staticDependencyIssues.length > 0 ? `; ${staticDependencyIssues.join('; ')}` : ''}`,
             details: {
               ...workerHealth,
-              external_backends: staticBackends,
+              external_backends: analysisBackends,
+              qiling_rootfs: {
+                configured_path: qilingRootfsConfigured || null,
+                ready: qilingRootfsConfigured ? qilingRootfsReady : null,
+                caveat:
+                  'Qiling requires an externally supplied Windows rootfs (DLLs and registry hives are not bundled).',
+              },
             },
           }
 
@@ -451,21 +503,25 @@ export function createSystemHealthHandler(
             setupActions = mergeSetupActions(
               setupActions,
               buildBaselinePythonSetupActions(),
-              buildStaticAnalysisSetupActions()
+              buildStaticAnalysisSetupActions(),
+              buildCoreLinuxToolchainSetupActions(),
+              buildDynamicDependencySetupActions(),
+              buildHeavyBackendSetupActions()
             )
             requiredUserInputs = mergeRequiredUserInputs(
               requiredUserInputs,
-              buildStaticAnalysisRequiredUserInputs()
+              buildStaticAnalysisRequiredUserInputs(),
+              buildDynamicDependencyRequiredUserInputs()
             )
             if (!capaAvailable) {
               recommendations.push('Install flare-capa to enable static capability recognition.')
             }
-            if (!staticBackends.capa_rules.available) {
+            if (!analysisBackends.capa_rules.available) {
               recommendations.push(
                 'Provide CAPA_RULES_PATH or workers.static.capaRulesPath so capability triage can load rules.'
               )
             }
-            if (!staticBackends.die.available) {
+            if (!analysisBackends.die.available) {
               recommendations.push(
                 'Provide DIE_PATH or add diec.exe to PATH for compiler, protector, and packer attribution.'
               )
@@ -478,6 +534,37 @@ export function createSystemHealthHandler(
                 buildFridaRequiredUserInputs()
               )
             }
+            if (!analysisBackends.graphviz.available) {
+              recommendations.push('Install Graphviz dot to enable SVG and PNG CFG rendering artifacts.')
+            }
+            if (!analysisBackends.rizin.available) {
+              recommendations.push('Install or configure Rizin for lightweight fallback disassembly and graph workflows.')
+            }
+            if (!analysisBackends.yara_x.available) {
+              recommendations.push('Install YARA-X alongside legacy YARA to prepare for newer rule-engine workflows.')
+            }
+            if (!analysisBackends.upx.available) {
+              recommendations.push('Install UPX for common packed-sample helper workflows.')
+            }
+            if (!analysisBackends.wine.available || !analysisBackends.winedbg.available) {
+              recommendations.push('Install Wine plus winedbg for Linux-hosted Windows user-mode execution and debugger-style troubleshooting.')
+            }
+            if (!analysisBackends.qiling.available) {
+              recommendations.push('Install Qiling for automated Windows API emulation workflows.')
+            } else if (!qilingRootfsConfigured || !qilingRootfsReady) {
+              recommendations.push(
+                'Mount a Windows Qiling rootfs and set QILING_ROOTFS before relying on Qiling-based automated debugging.'
+              )
+            }
+            if (!analysisBackends.angr.available) {
+              recommendations.push('Install angr in an isolated Python environment and set ANGR_PYTHON for advanced CFG and path exploration workflows.')
+            }
+            if (!analysisBackends.panda.available) {
+              recommendations.push('Install pandare/PANDA bindings if you need record/replay-oriented dynamic workflows.')
+            }
+            if (!analysisBackends.retdec.available) {
+              recommendations.push('Install RetDec as an artifact-first heavy decompiler backend for alternate native lifting workflows.')
+            }
           }
         } catch (error) {
           staticWorkerComponent = {
@@ -485,18 +572,22 @@ export function createSystemHealthHandler(
             ok: false,
             error: normalizeError(error),
             details: {
-              external_backends: resolveStaticBackends(),
+              external_backends: resolveAnalysisBackends(),
             },
           }
           recommendations.push('Fix Python runtime or static worker startup to avoid analysis outages.')
           setupActions = mergeSetupActions(
             setupActions,
             buildBaselinePythonSetupActions(),
-            buildStaticAnalysisSetupActions()
+            buildStaticAnalysisSetupActions(),
+            buildCoreLinuxToolchainSetupActions(),
+            buildDynamicDependencySetupActions(),
+            buildHeavyBackendSetupActions()
           )
           requiredUserInputs = mergeRequiredUserInputs(
             requiredUserInputs,
-            buildStaticAnalysisRequiredUserInputs()
+            buildStaticAnalysisRequiredUserInputs(),
+            buildDynamicDependencyRequiredUserInputs()
           )
         }
       }
@@ -623,6 +714,21 @@ export function createSystemHealthHandler(
         warnings.push(`System health is ${overallStatus}`)
       }
 
+      const recommendedNextTools =
+        overallStatus === 'healthy'
+          ? ['workflow.analyze.start', 'workflow.summarize', 'workflow.triage']
+          : ['system.setup.guide']
+      const nextActions =
+        overallStatus === 'healthy'
+          ? [
+              'Proceed with workflow.analyze.start for the primary staged-runtime path, or use workflow.triage only when you intentionally want the compatibility quick-profile surface.',
+            ]
+          : [
+              'Inspect setup_actions and required_user_inputs before retrying blocked analysis tools.',
+              'Use system.setup.guide if you need a consolidated bootstrap or remediation plan.',
+              'Retry the original analysis tool only after the degraded dependencies or permissions issues are addressed.',
+            ]
+
       return {
         ok: overallStatus !== 'unhealthy',
         data: {
@@ -639,6 +745,11 @@ export function createSystemHealthHandler(
           recommendations,
           setup_actions: setupActions,
           required_user_inputs: requiredUserInputs,
+          result_mode: 'environment_health',
+          tool_surface_role: 'primary',
+          preferred_primary_tools: [],
+          recommended_next_tools: recommendedNextTools,
+          next_actions: nextActions,
         },
         warnings: warnings.length > 0 ? warnings : undefined,
         metrics: {

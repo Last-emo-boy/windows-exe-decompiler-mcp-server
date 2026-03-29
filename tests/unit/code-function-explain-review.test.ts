@@ -131,6 +131,19 @@ describe('code.function.explain.review tool', () => {
           },
         },
       })
+    const samplingRequester = jest.fn(async (): Promise<any> => ({
+      role: 'assistant',
+      model: 'generic-tool-calling-llm',
+      stopReason: 'endTurn',
+      content: {
+        type: 'text',
+        text: [
+          '```json',
+          '{"explanations":[{"address_or_function":"0x14008d790","summary":"Resolves dynamic imports and sets up remote-process operations.","behavior":"resolve_dynamic_imports","confidence":0.83,"assumptions":["The helper table is consumed by later process operations."],"evidence_used":["xref:GetProcAddress","runtime:resolve_dynamic_apis"],"rewrite_guidance":["Promote resolved imports into a table.","Split import resolution from staging logic."]}]}',
+          '```',
+        ].join('\n'),
+      },
+    }))
 
     const handler = createCodeFunctionExplainReviewHandler(
       workspaceManager,
@@ -140,19 +153,7 @@ describe('code.function.explain.review tool', () => {
       {
         prepareHandler,
         applyHandler,
-        samplingRequester: async () => ({
-          role: 'assistant',
-          model: 'generic-tool-calling-llm',
-          stopReason: 'endTurn',
-          content: {
-            type: 'text',
-            text: [
-              '```json',
-              '{"explanations":[{"address_or_function":"0x14008d790","summary":"Resolves dynamic imports and sets up remote-process operations.","behavior":"resolve_dynamic_imports","confidence":0.83,"assumptions":["The helper table is consumed by later process operations."],"evidence_used":["xref:GetProcAddress","runtime:resolve_dynamic_apis"],"rewrite_guidance":["Promote resolved imports into a table.","Split import resolution from staging logic."]}]}',
-              '```',
-            ].join('\n'),
-          },
-        }),
+        samplingRequester: samplingRequester as any,
         clientCapabilitiesProvider: () => ({
           sampling: {},
         }),
@@ -200,5 +201,10 @@ describe('code.function.explain.review tool', () => {
         evidence_session_tag: 'runtime-alpha',
       })
     )
+    expect(samplingRequester).toHaveBeenCalledTimes(1)
+    const samplingParams = (samplingRequester.mock.calls as any[][])[0]?.[0] as any
+    expect(samplingParams.systemPrompt).toContain('Do not wrap the response in markdown')
+    expect(samplingParams.systemPrompt).toContain('Do not call tools')
+    expect(samplingParams.systemPrompt).toContain('Preserve uncertainty explicitly')
   })
 })

@@ -1,12 +1,13 @@
 {
   "name": "windows-exe-decompiler-mcp-server",
-  "version": "0.1.4",
+  "version": "1.0.0-beta.1",
   "description": "MCP server for Windows binary reverse engineering, PE triage, Ghidra-assisted analysis, and reconstruction workflows.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
-    "windows-exe-decompiler-mcp-server": "./bin/windows-exe-decompiler-mcp-server.js"
+    "windows-exe-decompiler-mcp-server": "./bin/windows-exe-decompiler-mcp-server.js",
+    "windows-exe-decompiler-mcp-docker": "./bin/windows-exe-decompiler-mcp-docker.js"
   },
   "exports": {
     ".": "./dist/index.js"
@@ -17,10 +18,13 @@
     "README_zh.md",
     "dist/**/*.js",
     "dist/**/*.d.ts",
+    "workers/frida_worker.py",
+    "workers/rizin_preview_worker.py",
     "workers/static_worker.py",
     "workers/speakeasy_compat.py",
     "workers/requirements.txt",
     "workers/requirements-dynamic.txt",
+    "workers/requirements-qiling.txt",
     "workers/yara_rules/*.yar",
     "ghidra_scripts/*.java",
     "ghidra_scripts/*.py",
@@ -38,7 +42,7 @@
     "frida_scripts/README.md"
   ],
   "scripts": {
-    "build": "tsc",
+    "build": "npm run clean && tsc",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist']) { fs.rmSync(p,{recursive:true,force:true}); }\"",
     "dev": "tsx watch src/index.ts",
     "start": "node dist/index.js",
@@ -50,7 +54,12 @@
     "format:check": "prettier --check \"src/**/*.ts\"",
     "prepack": "npm run build",
     "pack:dry-run": "npm pack --dry-run",
-    "release:check": "npm run build && npm pack --dry-run"
+    "release:check": "npm run build && npm pack --dry-run",
+    "docker:build": "docker build -t windows-exe-decompiler:latest .",
+    "docker:run": "docker run --rm -it windows-exe-decompiler:latest bash",
+    "docker:test": "docker run --rm --entrypoint /usr/local/bin/validate-docker-full-stack.sh windows-exe-decompiler:latest",
+    "docker:clean": "docker system prune -af && docker builder prune -af",
+    "docker:push": "docker push windows-exe-decompiler:latest"
   },
   "keywords": [
     "mcp",

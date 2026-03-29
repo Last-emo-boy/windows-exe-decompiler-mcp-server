@@ -7,6 +7,7 @@ import { Server } from '@modelcontextprotocol/sdk/server/index.js'
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import {
   CallToolRequestSchema,
+  type CallToolResult,
   type ClientCapabilities,
   type CreateMessageRequest,
   type CreateMessageResult,
@@ -17,12 +18,15 @@ import {
   ListToolsRequestSchema,
   Prompt,
   Tool,
-  CallToolResult,
   TextContent,
 } from '@modelcontextprotocol/sdk/types.js'
 import { z } from 'zod'
 import pino from 'pino'
 import type { Config } from './config.js'
+import type { WorkspaceManager } from './workspace-manager.js'
+import type { DatabaseManager } from './database.js'
+import type { PolicyGuard } from './policy-guard.js'
+import type { StorageManager } from './storage/storage-manager.js'
 import type {
   ToolDefinition,
   ToolArgs,
@@ -32,6 +36,21 @@ import type {
   PromptArgs,
   PromptResult,
 } from './types.js'
+import { FileServer } from './api/file-server.js'
+import { createSampleFinalizationService } from './sample-finalization.js'
+import {
+  buildToolNameMappings,
+  rewriteToolReferencesInText,
+  rewriteToolReferencesInValue,
+  toTransportToolName,
+} from './tool-name-normalization.js'
+
+interface MCPServerDependencies {
+  workspaceManager?: WorkspaceManager
+  database?: DatabaseManager
+  policyGuard?: PolicyGuard
+  storageManager?: StorageManager
+}
 
 /**
  * Tool handler function type - can return either WorkerResult or ToolResult
@@ -45,29 +64,38 @@ type PromptHandler = (args: PromptArgs) => Promise<PromptResult>
 export class MCPServer {
   private server: Server
   private logger: pino.Logger
+  private config: Config
   private tools: Map<string, ToolDefinition>
+  private canonicalToolDefinitions: Map<string, ToolDefinition>
+  private toolAliases: Map<string, string>
   private handlers: Map<string, ToolHandler>
   private prompts: Map<string, PromptDefinition>
   private promptHandlers: Map<string, PromptHandler>
+  private httpFileServer: { stop: () => Promise<void> } | null = null
+  private dependencies: MCPServerDependencies
 
-  constructor(config: Config) {
+  constructor(config: Config, dependencies: MCPServerDependencies = {}) {
     // Create logger that writes to stderr to avoid interfering with MCP protocol on stdout
     const destination = pino.destination({ dest: 2, sync: false }); // fd 2 = stderr
-    
+
+    this.config = config
     this.logger = pino({
       level: config.logging.level,
     }, destination)
 
     this.tools = new Map()
+    this.canonicalToolDefinitions = new Map()
+    this.toolAliases = new Map()
     this.handlers = new Map()
     this.prompts = new Map()
     this.promptHandlers = new Map()
+    this.dependencies = dependencies
 
     // Initialize MCP SDK server
     this.server = new Server(
       {
         name: 'windows-exe-decompiler-mcp-server',
-        version: '0.1.4',
+        version: '1.0.0-beta.1',
       },
       {
         capabilities: {
@@ -117,9 +145,20 @@ export class MCPServer {
    * Register a tool with its definition and handler
    */
   public registerTool(definition: ToolDefinition, handler: ToolHandler): void {
-    this.logger.info({ tool: definition.name }, 'Registering tool')
-    this.tools.set(definition.name, definition)
-    this.handlers.set(definition.name, handler)
+    const canonicalName = definition.name
+    const transportName = toTransportToolName(canonicalName)
+    const existingTransport = this.tools.get(transportName)
+
+    if (existingTransport && existingTransport.canonicalName !== canonicalName) {
+      throw new Error(`Tool name collision while registering ${canonicalName} as ${transportName}`)
+    }
+
+    this.logger.info({ tool: canonicalName, transport_tool: transportName }, 'Registering tool')
+    this.canonicalToolDefinitions.set(canonicalName, definition)
+    this.tools.set(transportName, { ...definition, canonicalName, name: transportName })
+    this.toolAliases.set(canonicalName, transportName)
+    this.toolAliases.set(transportName, transportName)
+    this.handlers.set(transportName, handler)
   }
 
   /**
@@ -132,11 +171,21 @@ export class MCPServer {
   }
 
   public getToolDefinitions(): ToolDefinition[] {
-    return Array.from(this.tools.values())
+    return Array.from(this.canonicalToolDefinitions.values())
   }
 
   public getToolDefinition(name: string): ToolDefinition | undefined {
-    return this.tools.get(name)
+    const transportName = this.resolveToolName(name)
+    if (!transportName) {
+      return undefined
+    }
+
+    const definition = this.tools.get(transportName)
+    if (!definition) {
+      return undefined
+    }
+
+    return this.canonicalToolDefinitions.get(definition.canonicalName || definition.name)
   }
 
   public getPromptDefinitions(): PromptDefinition[] {
@@ -156,11 +205,15 @@ export class MCPServer {
     for (const [name, definition] of this.tools.entries()) {
       // Convert Zod schema to JSON Schema format for MCP protocol
       const inputSchema = this.zodToJsonSchema(definition.inputSchema)
+      const outputSchema = definition.outputSchema
+        ? this.zodToJsonSchema(definition.outputSchema)
+        : undefined
       
       tools.push({
         name,
         description: definition.description,
         inputSchema: inputSchema as Tool['inputSchema'],
+        ...(outputSchema ? { outputSchema: outputSchema as Tool['outputSchema'] } : {}),
       })
     }
 
@@ -237,17 +290,149 @@ export class MCPServer {
   /**
    * Attach schema description when available.
    */
-  private withDescription(
+  private withSchemaMetadata(
     jsonSchema: Record<string, unknown>,
     schema: z.ZodTypeAny
   ): Record<string, unknown> {
-    if (schema.description) {
-      return {
-        ...jsonSchema,
-        description: schema.description,
+    const withDescription = schema.description
+      ? {
+          ...jsonSchema,
+          description: schema.description,
+        }
+      : jsonSchema
+
+    const guidance = this.getSchemaGuidance(schema)
+    if (guidance.length === 0) {
+      return withDescription
+    }
+
+    return {
+      ...withDescription,
+      'x-guidance': guidance,
+    }
+  }
+
+  private getSchemaGuidance(schema: z.ZodTypeAny): string[] {
+    if (schema instanceof z.ZodEffects && schema.description) {
+      return [schema.description]
+    }
+
+    return []
+  }
+
+  private applyStringChecks(
+    jsonSchema: Record<string, unknown>,
+    schema: z.ZodString
+  ): Record<string, unknown> {
+    const checks = ((schema as any)._def?.checks || []) as Array<Record<string, unknown>>
+    const result: Record<string, unknown> = { ...jsonSchema }
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case 'min':
+          result.minLength = check.value
+          break
+        case 'max':
+          result.maxLength = check.value
+          break
+        case 'email':
+          result.format = 'email'
+          break
+        case 'url':
+          result.format = 'uri'
+          break
+        case 'uuid':
+          result.format = 'uuid'
+          break
+        case 'datetime':
+          result.format = 'date-time'
+          break
+        case 'regex':
+          if (check.regex instanceof RegExp) {
+            result.pattern = check.regex.source
+          }
+          break
       }
     }
-    return jsonSchema
+
+    return result
+  }
+
+  private applyNumberChecks(
+    jsonSchema: Record<string, unknown>,
+    schema: z.ZodNumber
+  ): Record<string, unknown> {
+    const checks = ((schema as any)._def?.checks || []) as Array<Record<string, unknown>>
+    const result: Record<string, unknown> = { ...jsonSchema }
+
+    for (const check of checks) {
+      switch (check.kind) {
+        case 'int':
+          result.type = 'integer'
+          break
+        case 'min':
+          if (check.inclusive === false) {
+            result.exclusiveMinimum = check.value
+          } else {
+            result.minimum = check.value
+          }
+          break
+        case 'max':
+          if (check.inclusive === false) {
+            result.exclusiveMaximum = check.value
+          } else {
+            result.maximum = check.value
+          }
+          break
+        case 'multipleOf':
+          result.multipleOf = check.value
+          break
+      }
+    }
+
+    return result
+  }
+
+  private applyArrayChecks(
+    jsonSchema: Record<string, unknown>,
+    schema: z.ZodArray<z.ZodTypeAny>
+  ): Record<string, unknown> {
+    const def = (schema as any)._def || {}
+    return {
+      ...jsonSchema,
+      ...(def.minLength?.value !== undefined ? { minItems: def.minLength.value } : {}),
+      ...(def.maxLength?.value !== undefined ? { maxItems: def.maxLength.value } : {}),
+    }
+  }
+
+  private isNeverSchema(schema: z.ZodTypeAny): boolean {
+    return schema instanceof z.ZodNever
+  }
+
+  private normalizeStructuredContent(
+    structuredContent: Record<string, unknown> | undefined,
+    outputSchema?: z.ZodTypeAny
+  ): Record<string, unknown> | undefined {
+    if (!structuredContent) {
+      return undefined
+    }
+
+    if (!outputSchema) {
+      return structuredContent
+    }
+
+    const parsed = outputSchema.safeParse(structuredContent)
+    if (!parsed.success || !parsed.data || typeof parsed.data !== 'object' || Array.isArray(parsed.data)) {
+      this.logger.warn(
+        {
+          issues: parsed.success ? undefined : parsed.error.issues,
+        },
+        'Structured content did not validate against output schema; omitting structuredContent'
+      )
+      return undefined
+    }
+
+    return parsed.data as Record<string, unknown>
   }
 
   /**
@@ -256,13 +441,13 @@ export class MCPServer {
   private zodFieldToJsonSchema(schema: z.ZodTypeAny): Record<string, unknown> {
     // Handle optional
     if (schema instanceof z.ZodOptional) {
-      return this.zodFieldToJsonSchema(schema._def.innerType)
+      return this.withSchemaMetadata(this.zodFieldToJsonSchema(schema._def.innerType), schema)
     }
 
     // Handle nullable
     if (schema instanceof z.ZodNullable) {
       const innerSchema = this.zodFieldToJsonSchema(schema._def.innerType)
-      return this.withDescription({
+      return this.withSchemaMetadata({
         anyOf: [innerSchema, { type: 'null' }],
       }, schema)
     }
@@ -271,61 +456,72 @@ export class MCPServer {
     if (schema instanceof z.ZodDefault) {
       const innerSchema = this.zodFieldToJsonSchema(schema._def.innerType)
       try {
-        return this.withDescription({
+        return this.withSchemaMetadata({
           ...innerSchema,
           default: schema._def.defaultValue(),
         }, schema)
       } catch {
-        return this.withDescription(innerSchema, schema)
+        return this.withSchemaMetadata(innerSchema, schema)
       }
     }
 
     // Handle catch fallback values
     if (schema instanceof z.ZodCatch) {
-      return this.zodFieldToJsonSchema(schema._def.innerType)
+      return this.withSchemaMetadata(this.zodFieldToJsonSchema(schema._def.innerType), schema)
     }
 
     // Handle effects/transform wrappers
     if (schema instanceof z.ZodEffects) {
-      return this.zodFieldToJsonSchema(schema._def.schema)
+      return this.withSchemaMetadata(this.zodFieldToJsonSchema(schema._def.schema), schema)
     }
 
     // Handle branded types
     if (schema instanceof z.ZodBranded) {
-      return this.zodFieldToJsonSchema(schema._def.type)
+      return this.withSchemaMetadata(this.zodFieldToJsonSchema(schema._def.type), schema)
     }
 
     // Handle readonly wrapper
     if (schema instanceof z.ZodReadonly) {
-      return this.zodFieldToJsonSchema(schema._def.innerType)
+      return this.withSchemaMetadata(this.zodFieldToJsonSchema(schema._def.innerType), schema)
+    }
+
+    // Handle any/unknown
+    if (schema instanceof z.ZodAny || schema instanceof z.ZodUnknown) {
+      return this.withSchemaMetadata({}, schema)
     }
 
     // Handle string
     if (schema instanceof z.ZodString) {
-      return this.withDescription({ type: 'string' }, schema)
+      return this.withSchemaMetadata(this.applyStringChecks({ type: 'string' }, schema), schema)
     }
 
     // Handle number
     if (schema instanceof z.ZodNumber) {
-      return this.withDescription({ type: 'number' }, schema)
+      return this.withSchemaMetadata(this.applyNumberChecks({ type: 'number' }, schema), schema)
     }
 
     // Handle boolean
     if (schema instanceof z.ZodBoolean) {
-      return this.withDescription({ type: 'boolean' }, schema)
+      return this.withSchemaMetadata({ type: 'boolean' }, schema)
     }
 
     // Handle array
     if (schema instanceof z.ZodArray) {
-      return this.withDescription({
-        type: 'array',
-        items: this.zodFieldToJsonSchema(schema._def.type),
-      }, schema)
+      return this.withSchemaMetadata(
+        this.applyArrayChecks(
+          {
+            type: 'array',
+            items: this.zodFieldToJsonSchema(schema._def.type),
+          },
+          schema
+        ),
+        schema
+      )
     }
 
     // Handle enum
     if (schema instanceof z.ZodEnum) {
-      return this.withDescription({
+      return this.withSchemaMetadata({
         type: 'string',
         enum: schema._def.values,
       }, schema)
@@ -335,7 +531,7 @@ export class MCPServer {
     if (schema instanceof z.ZodLiteral) {
       const literalValue = schema._def.value
       const literalType = literalValue === null ? 'null' : typeof literalValue
-      return this.withDescription({
+      return this.withSchemaMetadata({
         type: literalType,
         const: literalValue,
       }, schema)
@@ -354,17 +550,30 @@ export class MCPServer {
         }
       }
 
-      return this.withDescription({
-        type: 'object',
-        properties,
-        ...(required.length > 0 ? { required } : {}),
-      }, schema)
+      const catchall = (schema as any)._def?.catchall as z.ZodTypeAny | undefined
+      const unknownKeys = (schema as any)._def?.unknownKeys as string | undefined
+
+      return this.withSchemaMetadata(
+        {
+          type: 'object',
+          properties,
+          ...(required.length > 0 ? { required } : {}),
+          ...(
+            catchall && !this.isNeverSchema(catchall)
+              ? { additionalProperties: this.zodFieldToJsonSchema(catchall) }
+              : unknownKeys === 'passthrough'
+                ? { additionalProperties: true }
+                : { additionalProperties: false }
+          ),
+        },
+        schema
+      )
     }
 
     // Handle union
     if (schema instanceof z.ZodUnion) {
       const options = schema._def.options as z.ZodTypeAny[]
-      return this.withDescription({
+      return this.withSchemaMetadata({
         anyOf: options.map((option) => this.zodFieldToJsonSchema(option)),
       }, schema)
     }
@@ -372,14 +581,14 @@ export class MCPServer {
     // Handle discriminated union
     if (schema instanceof z.ZodDiscriminatedUnion) {
       const options = Array.from(schema.options.values()) as z.ZodTypeAny[]
-      return this.withDescription({
+      return this.withSchemaMetadata({
         anyOf: options.map((option) => this.zodFieldToJsonSchema(option)),
       }, schema)
     }
 
     // Handle record
     if (schema instanceof z.ZodRecord) {
-      return this.withDescription({
+      return this.withSchemaMetadata({
         type: 'object',
         additionalProperties: this.zodFieldToJsonSchema(schema._def.valueType),
       }, schema)
@@ -387,14 +596,14 @@ export class MCPServer {
 
     // Handle tuple
     if (schema instanceof z.ZodTuple) {
-      return this.withDescription({
+      return this.withSchemaMetadata({
         type: 'array',
         items: schema._def.items.map((item: z.ZodTypeAny) => this.zodFieldToJsonSchema(item)),
       }, schema)
     }
 
     // Default
-    return this.withDescription({ type: 'string' }, schema)
+    return this.withSchemaMetadata({ type: 'string' }, schema)
   }
 
   /**
@@ -405,8 +614,10 @@ export class MCPServer {
     this.logger.info({ tool: name, args }, 'Calling tool')
 
     try {
+      const resolvedName = this.resolveToolName(name)
+
       // Check if tool exists
-      const definition = this.tools.get(name)
+      const definition = resolvedName ? this.tools.get(resolvedName) : undefined
       if (!definition) {
         throw new Error(`Tool not found: ${name}`)
       }
@@ -415,7 +626,7 @@ export class MCPServer {
       const validatedArgs = this.validateArgs(definition.inputSchema, args)
 
       // Get handler
-      const handler = this.handlers.get(name)
+      const handler = this.handlers.get(resolvedName)
       if (!handler) {
         throw new Error(`Handler not found for tool: ${name}`)
       }
@@ -428,15 +639,20 @@ export class MCPServer {
       // Check if result is ToolResult or WorkerResult
       if ('content' in result) {
         // It's a ToolResult - use directly
+        const structuredContent = this.normalizeStructuredContent(
+          this.rewriteToolReferences(result.structuredContent),
+          definition.outputSchema
+        )
         this.logger.info({ tool: name, elapsed, isError: result.isError }, 'Tool execution completed')
         return {
-          content: result.content as any, // MCP SDK Content type
+          content: this.rewriteTextContentItems(result.content as TextContent[]) as any, // MCP SDK Content type
+          structuredContent,
           isError: result.isError
         }
       } else {
         // It's a WorkerResult - convert to ToolResult
         this.logger.info({ tool: name, elapsed, ok: result.ok }, 'Tool execution completed')
-        return this.workerResultToToolResult(result)
+        return this.workerResultToToolResult(result, definition.outputSchema)
       }
     } catch (error) {
       const elapsed = Date.now() - startTime
@@ -531,6 +747,22 @@ export class MCPServer {
    */
   private generateSchemaExample(schema: z.ZodTypeAny): Record<string, unknown> | null {
     try {
+      if (schema instanceof z.ZodEffects) {
+        return this.generateSchemaExample(schema._def.schema)
+      }
+      if (schema instanceof z.ZodOptional || schema instanceof z.ZodNullable || schema instanceof z.ZodCatch) {
+        return this.generateSchemaExample(schema._def.innerType)
+      }
+      if (schema instanceof z.ZodDefault) {
+        return this.generateSchemaExample(schema._def.innerType)
+      }
+      if (schema instanceof z.ZodBranded) {
+        return this.generateSchemaExample(schema._def.type)
+      }
+      if (schema instanceof z.ZodReadonly) {
+        return this.generateSchemaExample(schema._def.innerType)
+      }
+
       // Handle ZodObject
       if (schema instanceof z.ZodObject) {
         const shape = schema.shape as Record<string, z.ZodTypeAny>
@@ -566,6 +798,22 @@ export class MCPServer {
     // Handle default values
     if (schema instanceof z.ZodDefault) {
       return schema._def.defaultValue()
+    }
+
+    if (schema instanceof z.ZodCatch) {
+      return this.generateFieldExample(schema._def.innerType)
+    }
+
+    if (schema instanceof z.ZodEffects) {
+      return this.generateFieldExample(schema._def.schema)
+    }
+
+    if (schema instanceof z.ZodBranded) {
+      return this.generateFieldExample(schema._def.type)
+    }
+
+    if (schema instanceof z.ZodReadonly) {
+      return this.generateFieldExample(schema._def.innerType)
     }
 
     // Handle string
@@ -623,28 +871,30 @@ export class MCPServer {
   /**
    * Convert worker result to MCP tool result
    */
-  private workerResultToToolResult(result: WorkerResult): CallToolResult {
+  private workerResultToToolResult(result: WorkerResult, outputSchema?: z.ZodTypeAny): CallToolResult {
     const content: TextContent[] = []
+    const structuredPayload = this.rewriteToolReferences<Record<string, unknown>>({
+      ok: result.ok,
+      ...(result.data !== undefined ? { data: result.data } : {}),
+      ...(result.warnings !== undefined ? { warnings: result.warnings } : {}),
+      ...(result.errors !== undefined ? { errors: result.errors } : {}),
+      ...(result.artifacts !== undefined ? { artifacts: result.artifacts } : {}),
+      ...(result.metrics !== undefined ? { metrics: result.metrics } : {}),
+      ...(result.setup_actions !== undefined ? { setup_actions: result.setup_actions } : {}),
+      ...(result.required_user_inputs !== undefined
+        ? { required_user_inputs: result.required_user_inputs }
+        : {}),
+    })
 
     // Add text representation
     content.push({
       type: 'text',
-      text: JSON.stringify(
-        {
-          ok: result.ok,
-          data: result.data,
-          warnings: result.warnings,
-          errors: result.errors,
-          artifacts: result.artifacts,
-          metrics: result.metrics,
-        },
-        null,
-        2
-      ),
+      text: JSON.stringify(structuredPayload),
     })
 
     return {
       content,
+      structuredContent: this.normalizeStructuredContent(structuredPayload, outputSchema),
       isError: !result.ok,
     }
   }
@@ -659,6 +909,63 @@ export class MCPServer {
     await this.server.connect(transport)
 
     this.logger.info('MCP Server started and listening on stdio')
+
+    // Start HTTP File Server if enabled
+    if (this.config.api?.enabled) {
+      try {
+        await this.startHttpFileServer()
+      } catch (error) {
+        this.logger.error('Failed to start HTTP File Server: ' + JSON.stringify(error))
+      }
+    }
+  }
+
+  /**
+   * Start HTTP File Server
+   */
+  private async startHttpFileServer(): Promise<void> {
+    const workspaceManager =
+      this.dependencies.workspaceManager ||
+      new (await import('./workspace-manager.js')).WorkspaceManager(this.config.workspace.root)
+    const database =
+      this.dependencies.database ||
+      new (await import('./database.js')).DatabaseManager(this.config.database.path)
+    const policyGuard =
+      this.dependencies.policyGuard ||
+      new (await import('./policy-guard.js')).PolicyGuard(this.config.logging.auditPath)
+    const storageManager =
+      this.dependencies.storageManager ||
+      new (await import('./storage/storage-manager.js')).StorageManager({
+        root: this.config.api.storageRoot,
+        maxFileSize: this.config.api.maxFileSize,
+        retentionDays: this.config.api.retentionDays,
+      })
+
+    await storageManager.initialize()
+
+    const finalizationService = createSampleFinalizationService(
+      workspaceManager,
+      database,
+      policyGuard
+    )
+
+    const fileServer = new FileServer(
+      {
+        port: this.config.api.port || 18080,
+        apiKey: this.config.api.apiKey,
+        maxFileSize: this.config.api.maxFileSize || 500 * 1024 * 1024,
+      },
+      {
+        storageManager,
+        database,
+        workspaceManager,
+        finalizationService,
+      }
+    )
+
+    await fileServer.start()
+    this.httpFileServer = fileServer
+    this.logger.info(`HTTP File Server started on port ${fileServer.getPort()}`)
   }
 
   /**
@@ -666,6 +973,10 @@ export class MCPServer {
    */
   public async stop(): Promise<void> {
     this.logger.info('Stopping MCP Server')
+    if (this.httpFileServer) {
+      await this.httpFileServer.stop()
+      this.httpFileServer = null
+    }
     await this.server.close()
     this.logger.info('MCP Server stopped')
   }
@@ -712,5 +1023,31 @@ export class MCPServer {
    */
   public getLogger(): pino.Logger {
     return this.logger
+  }
+
+  private resolveToolName(name: string): string | undefined {
+    return this.toolAliases.get(name)
+  }
+
+  private getToolNameMappings(): Array<[string, string]> {
+    return buildToolNameMappings(this.canonicalToolDefinitions.keys())
+  }
+
+  private rewriteToolReferences<T>(value: T): T {
+    return rewriteToolReferencesInValue(value, this.getToolNameMappings())
+  }
+
+  private rewriteTextContentItems(content: TextContent[]): TextContent[] {
+    const mappings = this.getToolNameMappings()
+    return content.map((item) => {
+      if ('text' in item && typeof item.text === 'string') {
+        return {
+          ...item,
+          text: rewriteToolReferencesInText(item.text, mappings),
+        }
+      }
+
+      return item
+    })
   }
 }

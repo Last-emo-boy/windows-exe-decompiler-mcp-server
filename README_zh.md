@@ -350,7 +350,7 @@ pip install frida frida-tools
 
 ## 当前开发进度
 
-### 最新 Release: v0.1.4
+### 最新 Release: v1.0.0-beta.1
 
 **稳定功能** (生产环境可用)：
 - PE 初筛与静态分析 (`static.capability.triage`, `pe.structure.analyze`, `compiler.packer.detect`)
@@ -360,9 +360,9 @@ pip install frida frida-tools
 - 源码风格重建，支持 LLM 辅助 review 层
 - 运行时证据导入与关联
 
-### 开发中 (即将发布 v0.2.0)
+### 开发中 (beta 后续迭代)
 
-**Frida 动态 Instrumentation** - 实现已完成，待发布：
+**Frida 动态 Instrumentation** - 实现已完成，正在并入 v1 beta 线：
 - `frida.runtime.instrument` - Spawn 和 attach 模式 instrumentation
 - `frida.script.inject` - 预构建和自定义脚本注入
 - `frida.trace.capture` - 规范化 trace schema，支持过滤/聚合
@@ -596,12 +596,20 @@ npm start
 
 ## 使用已发布的 npm 包
 
+先启动 Docker runtime：
+
+```powershell
+docker compose up -d mcp-server
+```
+
+然后在 MCP 客户端中使用已发布的 npm launcher：
+
 ```json
 {
   "mcpServers": {
     "windows-exe-decompiler": {
       "command": "npx",
-      "args": ["-y", "windows-exe-decompiler-mcp-server"],
+      "args": ["-y", "windows-exe-decompiler-mcp-server", "docker-stdio"],
       "env": {
         "GHIDRA_PATH": "C:/path/to/ghidra",
         "GHIDRA_INSTALL_DIR": "C:/path/to/ghidra"
@@ -610,6 +618,13 @@ npm start
   }
 }
 ```
+
+发布态的职责划分是：
+
+- `npm/npx` 只负责启动 MCP launcher
+- Docker Compose 容器负责真实分析 runtime
+
+现有源码直跑方式和直接 `docker exec` 方式仍然可用。
 
 ## License
 

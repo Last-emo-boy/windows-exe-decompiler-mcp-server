@@ -37,6 +37,9 @@ live-cache-runtime-export/
 
 # Databases
 *.db
+*.db-journal
+*.db-wal
+*.db-shm
 *.sqlite
 *.sqlite3
 
@@ -44,6 +47,7 @@ live-cache-runtime-export/
 .vscode/
 .idea/
 .kiro/
+.qwen/
 codex-mcp-config.toml
 .mcp.json
 *~
@@ -79,3 +83,8 @@ spec/
 .claude/
 .openspec/
 openspec
+.docker-runtime.env
+docker-dist-temp/
+docker-dist-v2/
+docker-dist-hotfix/
+tmp-ghidra-cmd-*/

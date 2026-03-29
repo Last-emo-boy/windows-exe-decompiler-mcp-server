@@ -206,7 +206,9 @@ describe('strings.floss.decode tool', () => {
       })
 
       expect(result.ok).toBe(true)
-      expect(result.data).toEqual(mockCachedData)
+      expect(result.data).toMatchObject(mockCachedData)
+      expect((result.data as any).enriched).toBeDefined()
+      expect((result.data as any).enriched.top_decoded.length).toBeGreaterThan(0)
       expect(result.warnings).toContain('Result from cache')
       expect(mockCacheManager.getCachedResult).toHaveBeenCalled()
     })

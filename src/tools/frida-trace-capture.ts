@@ -4,7 +4,7 @@
  */
 
 import { spawn } from 'child_process'
-import { randomUUID } from 'crypto'
+import { createHash, randomUUID } from 'crypto'
 import { z } from 'zod'
 import type { ToolDefinition, ToolArgs, WorkerResult, ArtifactRef } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
@@ -80,6 +80,7 @@ export const FridaTraceCaptureOutputSchema = z.object({
   ok: z.boolean(),
   data: z
     .object({
+      status: z.enum(['completed', 'failed', 'timeout', 'error']).optional(),
       session_id: z.string().optional(),
       sample_id: z.string().optional(),
       captured_at: z.string(),
@@ -233,6 +234,33 @@ async function callFridaWorker(request: WorkerRequest): Promise<WorkerResponse> 
       })
     }
   })
+}
+
+function buildFridaUnavailableResponse(
+  input: FridaTraceCaptureInput,
+  startTime: number,
+  errorMessage: string
+): WorkerResult {
+  return {
+    ok: true,
+    data: {
+      status: 'error',
+      session_id: input.session_id,
+      sample_id: input.sample_id || 'unknown',
+      captured_at: new Date().toISOString(),
+      trace_format: input.trace_format,
+      total_events: 0,
+      filtered_events: 0,
+      events: [],
+      warnings: [`Frida is not available: ${errorMessage}`],
+      errors: [errorMessage],
+    },
+    warnings: [`Frida is not available: ${errorMessage}`],
+    metrics: {
+      elapsed_ms: Date.now() - startTime,
+      tool: TOOL_NAME,
+    },
+  }
 }
 
 /**
@@ -431,9 +459,17 @@ export function createFridaTraceCaptureHandler(
       try {
         workerResponse = await runWorker(workerRequest)
       } catch (error) {
+        const errorStr = normalizeError(error)
+        if (errorStr.includes('Frida is not installed') || errorStr.includes('ModuleNotFoundError')) {
+          return buildFridaUnavailableResponse(
+            input,
+            startTime,
+            'Frida runtime not installed. Run: pip install frida'
+          )
+        }
         return {
           ok: false,
-          errors: [normalizeError(error)],
+          errors: [errorStr],
           metrics: {
             elapsed_ms: Date.now() - startTime,
             tool: TOOL_NAME,
@@ -442,9 +478,13 @@ export function createFridaTraceCaptureHandler(
       }
 
       if (!workerResponse.ok) {
+        const errorMsg = workerResponse.errors.join('; ') || 'Frida trace capture failed'
+        if (errorMsg.toLowerCase().includes('not installed') || errorMsg.toLowerCase().includes('import')) {
+          return buildFridaUnavailableResponse(input, startTime, errorMsg)
+        }
         return {
           ok: false,
-          errors: workerResponse.errors,
+          errors: [errorMsg],
           warnings: workerResponse.warnings,
           metrics: {
             elapsed_ms: Date.now() - startTime,
@@ -455,11 +495,16 @@ export function createFridaTraceCaptureHandler(
 
       // Process trace data
       const rawData = (workerResponse.data || {}) as Record<string, any>
-      const rawTraces = Array.isArray(rawData.traces) ? rawData.traces : []
+      const rawTraces = Array.isArray(rawData.traces)
+        ? rawData.traces
+        : Array.isArray(rawData.events)
+          ? rawData.events
+          : []
 
       // Normalize traces
       const normalizedTraces = rawTraces.map(normalizeTraceEvent)
-      const totalEvents = normalizedTraces.length
+      const totalEvents =
+        typeof rawData.total_events === 'number' ? rawData.total_events : normalizedTraces.length
 
       // Filter traces
       let filteredTraces = normalizedTraces
@@ -513,8 +558,7 @@ export function createFridaTraceCaptureHandler(
 
         await fs.writeFile(artifactPath, JSON.stringify(artifactContent, null, 2), 'utf-8')
 
-        const sha256 = (data: string) =>
-          require('crypto').createHash('sha256').update(data).digest('hex')
+        const sha256 = (data: string) => createHash('sha256').update(data).digest('hex')
         const artifactId = `frida_trace_${sha256(artifactContent.captured_at)}`
 
         artifacts.push({
@@ -536,6 +580,7 @@ export function createFridaTraceCaptureHandler(
       return {
         ok: true,
         data: {
+          status: 'completed',
           session_id: rawData.session_id || input.session_id,
           sample_id: input.sample_id || 'unknown',
           captured_at: new Date().toISOString(),

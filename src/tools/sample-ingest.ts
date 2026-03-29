@@ -6,18 +6,16 @@
 
 import { z } from 'zod'
 import fs from 'fs'
-import crypto from 'crypto'
 import type { ToolDefinition, ToolArgs, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
 import type { DatabaseManager } from '../database.js'
 import type { PolicyGuard } from '../policy-guard.js'
 import { withLogging, logError, logWarning } from '../logger.js'
-
-// ============================================================================
-// Constants
-// ============================================================================
-
-const MAX_SAMPLE_SIZE = 500 * 1024 * 1024 // 500MB
+import {
+  MAX_SAMPLE_SIZE,
+  createSampleFinalizationService,
+} from '../sample-finalization.js'
+import { ToolSurfaceRoleSchema } from '../tool-surface-guidance.js'
 
 // ============================================================================
 // Input/Output Schemas
@@ -41,22 +39,33 @@ export const SampleIngestInputSchema = z
       .min(1)
       .optional()
       .describe('Fallback only. Use Base64 file bytes when the MCP client cannot access the local file path. Ignored when `path` is provided.'),
+    // NEW: API upload support
+    upload_url: z
+      .string()
+      .url()
+      .optional()
+      .describe('Compatibility-only path for daemon-backed upload sessions. Prefer reading `sample_id` directly from the upload response and only pass `upload_url` here when an older client still expects the extra finalize step.'),
+    api_key: z
+      .string()
+      .optional()
+      .describe('Legacy compatibility field. Not required for daemon-backed upload-session lookup.'),
     filename: z.string().optional().describe('Optional display/original filename'),
     source: z.string().optional().describe('Optional source tag, e.g. upload/email/sandbox'),
   })
   .superRefine((value, ctx) => {
     const hasPath = typeof value.path === 'string' && value.path.length > 0
     const hasBytes = typeof value.bytes_b64 === 'string' && value.bytes_b64.length > 0
+    const hasUploadUrl = typeof value.upload_url === 'string' && value.upload_url.length > 0
 
-    if (!hasPath && !hasBytes) {
+    if (!hasPath && !hasBytes && !hasUploadUrl) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['path'],
-        message: 'Provide either `path` (preferred for local files) or `bytes_b64` (fallback when the client cannot read the file path).',
+        message: 'Provide either `path` (preferred for local files), `bytes_b64` (fallback), or `upload_url` (HTTP API upload).',
       })
     }
   })
-  .describe('Ingest a sample from a local file path or Base64 bytes. Prefer `path` whenever the MCP client can access the file directly.')
+  .describe('Ingest a sample from a local file path, Base64 bytes, or HTTP API upload. Prefer `path` whenever the MCP client can access the file directly.')
 
 export type SampleIngestInput = z.infer<typeof SampleIngestInputSchema>
 
@@ -71,6 +80,11 @@ export const SampleIngestOutputSchema = z.object({
     size: z.number(),
     file_type: z.string().optional(),
     existed: z.boolean().optional(),
+    result_mode: z.literal('sample_registered'),
+    tool_surface_role: ToolSurfaceRoleSchema,
+    preferred_primary_tools: z.array(z.string()),
+    recommended_next_tools: z.array(z.string()),
+    next_actions: z.array(z.string()),
   }).optional(),
   errors: z.array(z.string()).optional(),
 })
@@ -87,7 +101,20 @@ export type SampleIngestOutput = z.infer<typeof SampleIngestOutputSchema>
 export const sampleIngestToolDefinition: ToolDefinition = {
   name: 'sample.ingest',
   description:
-    'Register a new sample from a local file path or Base64 bytes. Prefer `path` for local files; use `bytes_b64` only when the MCP client cannot read local disk.',
+    'Register a sample from exactly one ingest path: a container-visible local file path, Base64 bytes, or a compatibility upload_url. ' +
+    'Use this tool when the MCP worker can already read the file path directly or when a small file must be sent as Base64. ' +
+    'Do not use path for host-machine files that only exist outside the container; use sample.request_upload instead. ' +
+    '\n\nDecision guide:\n' +
+    '- Use when: the file is already accessible to the MCP worker, or a small Base64 fallback is required.\n' +
+    '- Do not use when: the only copy is on the host machine outside the container-accessible filesystem.\n' +
+    '- Typical next step: continue with workflow.analyze.start for the staged-runtime path, or use workflow.triage only when you explicitly want the compatibility quick-profile surface.\n' +
+    '- Common mistake: passing a Windows host path to path while the MCP worker is running inside Docker.\n' +
+    '\nPrimary host-file workflow:\n' +
+    '1. Call sample.request_upload.\n' +
+    '2. POST the file bytes to upload_url.\n' +
+    '3. Read sample_id from the HTTP upload response.\n' +
+    '\nCompatibility-only workflow:\n' +
+    'Call sample.ingest(upload_url) only when a legacy client still requires an extra finalize step after upload.',
   inputSchema: SampleIngestInputSchema,
   outputSchema: SampleIngestOutputSchema,
 }
@@ -96,42 +123,23 @@ export const sampleIngestToolDefinition: ToolDefinition = {
 // Helper Functions
 // ============================================================================
 
-/**
- * Compute SHA256 hash of data
- * Requirement: 1.1
- */
-function computeSHA256(data: Buffer): string {
-  return crypto.createHash('sha256').update(data).digest('hex')
-}
-
-/**
- * Compute MD5 hash of data
- * Requirement: 1.1
- */
-function computeMD5(data: Buffer): string {
-  return crypto.createHash('md5').update(data).digest('hex')
-}
-
-/**
- * Detect file type from data
- * Basic implementation - can be enhanced with magic number detection
- */
-function detectFileType(data: Buffer): string {
-  // Check for PE signature (MZ header)
-  if (data.length >= 2 && data[0] === 0x4D && data[1] === 0x5A) {
-    return 'PE'
+function extractUploadToken(uploadUrl: string): string | null {
+  const url = new URL(uploadUrl)
+  const queryToken = url.searchParams.get('token')
+  if (queryToken) {
+    return queryToken
   }
 
-  // Check for ELF signature
-  if (data.length >= 4 && 
-      data[0] === 0x7F && 
-      data[1] === 0x45 && 
-      data[2] === 0x4C && 
-      data[3] === 0x46) {
-    return 'ELF'
+  const parts = url.pathname.split('/').filter(Boolean)
+  if (parts.length === 0) {
+    return null
   }
 
-  return 'unknown'
+  if (parts[parts.length - 1] === 'status' && parts.length >= 2) {
+    return parts[parts.length - 2]
+  }
+
+  return parts[parts.length - 1] || null
 }
 
 // ============================================================================
@@ -147,6 +155,12 @@ export function createSampleIngestHandler(
   database: DatabaseManager,
   policyGuard: PolicyGuard
 ) {
+  const finalizationService = createSampleFinalizationService(
+    workspaceManager,
+    database,
+    policyGuard
+  )
+
   return async (args: ToolArgs): Promise<WorkerResult> => {
     const input = args as SampleIngestInput
 
@@ -176,6 +190,133 @@ export function createSampleIngestHandler(
             // Extract just the filename, not the full path
             const pathParts = input.path.replace(/\\/g, '/').split('/')
             originalFilename = input.filename || pathParts[pathParts.length - 1] || 'sample.bin'
+          } else if (input.upload_url) {
+            const token = extractUploadToken(input.upload_url)
+
+            if (!token) {
+              return {
+                ok: false,
+                errors: ['Invalid upload_url: missing upload session token'],
+              }
+            }
+
+            database.expireUploadSessions()
+            const session = database.findUploadSessionByToken(token)
+            if (!session) {
+              return {
+                ok: false,
+                errors: ['Invalid or expired upload session'],
+              }
+            }
+
+            if (
+              session.status !== 'registered' &&
+              new Date(session.expires_at).getTime() < Date.now()
+            ) {
+              database.markUploadSessionExpired(token)
+              return {
+                ok: false,
+                errors: ['Upload session expired'],
+              }
+            }
+
+            if (session.status === 'failed') {
+              return {
+                ok: false,
+                errors: [session.error || 'Upload session failed'],
+              }
+            }
+
+            if (session.status === 'expired') {
+              return {
+                ok: false,
+                errors: ['Upload session expired'],
+              }
+            }
+
+            if (session.status === 'registered' && session.sample_id) {
+              const existingSample = database.findSample(session.sample_id)
+              return {
+                ok: true,
+                data: {
+                  sample_id: session.sample_id,
+                  size: existingSample?.size || session.size || 0,
+                  file_type: existingSample?.file_type || undefined,
+                  existed: true,
+                  result_mode: 'sample_registered',
+                  tool_surface_role: 'primary',
+                  preferred_primary_tools: ['workflow.analyze.start', 'workflow.analyze.status', 'workflow.analyze.promote'],
+                  recommended_next_tools: ['workflow.analyze.start', 'workflow.summarize', 'workflow.triage'],
+                  next_actions: [
+                    'Use workflow.analyze.start with the returned sample_id for the primary staged-runtime path.',
+                    'Use workflow.triage only when you intentionally want the compatibility quick-profile surface.',
+                    'Promote the staged run or call workflow.summarize after deeper analysis has persisted.',
+                  ],
+                },
+              }
+            }
+
+            if (session.status !== 'uploaded' || !session.staged_path) {
+              return {
+                ok: false,
+                errors: ['File not yet uploaded to the upload endpoint'],
+              }
+            }
+
+            if (!fs.existsSync(session.staged_path)) {
+              return {
+                ok: false,
+                errors: [`Uploaded file not found: ${session.staged_path}`],
+              }
+            }
+
+            data = fs.readFileSync(session.staged_path)
+            originalFilename = input.filename || session.filename || 'sample.bin'
+
+            try {
+              const finalized = await finalizationService.finalizeBuffer({
+                data,
+                filename: originalFilename,
+                source: input.source || session.source || 'api_upload',
+                auditOperation: 'sample.ingest',
+              })
+
+              database.markUploadSessionRegistered(token, {
+                sample_id: finalized.sample_id,
+                size: finalized.size,
+                sha256: finalized.sha256,
+                md5: finalized.md5,
+                clearStagedPath: true,
+              })
+
+              try {
+                fs.unlinkSync(session.staged_path)
+              } catch (error) {
+                logWarning('Failed to clean up uploaded file', { path: session.staged_path })
+              }
+
+              return {
+                ok: true,
+                data: {
+                  sample_id: finalized.sample_id,
+                  size: finalized.size,
+                  file_type: finalized.file_type,
+                  existed: finalized.existed,
+                  result_mode: 'sample_registered',
+                  tool_surface_role: 'primary',
+                  preferred_primary_tools: ['workflow.analyze.start', 'workflow.analyze.status', 'workflow.analyze.promote'],
+                  recommended_next_tools: ['workflow.analyze.start', 'workflow.summarize', 'workflow.triage'],
+                  next_actions: [
+                    'Use workflow.analyze.start with the returned sample_id for the primary staged-runtime path.',
+                    'Use workflow.triage only when you intentionally want the compatibility quick-profile surface.',
+                    'Promote the staged run or call workflow.summarize after deeper analysis has persisted.',
+                  ],
+                },
+              }
+            } catch (error) {
+              database.markUploadSessionFailed(token, (error as Error).message)
+              throw error
+            }
           } else if (input.bytes_b64) {
             // Decode from Base64
             // Validate Base64 format first
@@ -226,135 +367,29 @@ export function createSampleIngestHandler(
             }
           }
 
-          // 3. Compute hashes
-          // Requirement: 1.1
-          const sha256 = computeSHA256(data)
-          const md5 = computeMD5(data)
-          const sampleId = `sha256:${sha256}`
-
-          // 4. Check if sample already exists
-          // Requirement: 1.2
-          const existingSample = database.findSampleBySha256(sha256)
-          if (existingSample) {
-            // Sample already exists, return existing sample_id
-            await policyGuard.auditLog({
-              timestamp: new Date().toISOString(),
-              operation: 'sample.ingest',
-              sampleId: existingSample.id,
-              decision: 'allow',
-              reason: 'Sample already exists (SHA256 match)',
-              metadata: {
-                size: data.length,
-                source: input.source || 'upload',
-                existed: true,
-              },
-            })
-
-            return {
-              ok: true,
-              data: {
-                sample_id: existingSample.id,
-                size: existingSample.size,
-                file_type: existingSample.file_type || undefined,
-                existed: true,
-              },
-            }
-          }
-
-          // 5. Create workspace
-          // Requirement: 1.4
-          const workspace = await workspaceManager.createWorkspace(sampleId)
-
-          // 6. Store sample file
-          // Requirement: 1.4
-          const samplePath = `${workspace.original}/${originalFilename}`
-          fs.writeFileSync(samplePath, data)
-
-          // Mark file as non-executable (security measure)
-          // Requirement: 29.3
-          try {
-            fs.chmodSync(samplePath, 0o444) // Read-only
-          } catch (error) {
-            // Ignore chmod errors on Windows
-            logWarning('Failed to set file permissions', {
-              path: samplePath,
-              error: (error as Error).message,
-            })
-          }
-
-          // 7. Detect file type
-          const fileType = detectFileType(data)
-
-          // 8. Insert into database
-          // Requirement: 1.5
-          const sample = {
-            id: sampleId,
-            sha256,
-            md5,
-            size: data.length,
-            file_type: fileType,
-            created_at: new Date().toISOString(),
+          const finalized = await finalizationService.finalizeBuffer({
+            data,
+            filename: originalFilename,
             source: input.source || 'upload',
-          }
-
-          try {
-            database.insertSample(sample)
-          } catch (error: any) {
-            // Handle race condition: if another concurrent request already inserted this sample
-            if (error.code === 'SQLITE_CONSTRAINT_UNIQUE' || error.message?.includes('UNIQUE constraint')) {
-              // Sample was inserted by another concurrent request
-              // Query it again and return
-              const existingSample = database.findSampleBySha256(sha256)
-              if (existingSample) {
-                await policyGuard.auditLog({
-                  timestamp: new Date().toISOString(),
-                  operation: 'sample.ingest',
-                  sampleId: existingSample.id,
-                  decision: 'allow',
-                  reason: 'Sample already exists (concurrent insert race condition)',
-                  metadata: {
-                    size: data.length,
-                    source: input.source || 'upload',
-                    existed: true,
-                  },
-                })
-
-                return {
-                  ok: true,
-                  data: {
-                    sample_id: existingSample.id,
-                    size: existingSample.size,
-                    file_type: existingSample.file_type || undefined,
-                    existed: true,
-                  },
-                }
-              }
-            }
-            // Re-throw if it's a different error
-            throw error
-          }
-
-          // 9. Audit log
-          // Requirement: 1.6
-          await policyGuard.auditLog({
-            timestamp: new Date().toISOString(),
-            operation: 'sample.ingest',
-            sampleId: sample.id,
-            decision: 'allow',
-            metadata: {
-              size: data.length,
-              source: sample.source,
-              file_type: fileType,
-            },
+            auditOperation: 'sample.ingest',
           })
 
-          // 10. Return result
           return {
             ok: true,
             data: {
-              sample_id: sampleId,
-              size: data.length,
-              file_type: fileType,
+              sample_id: finalized.sample_id,
+              size: finalized.size,
+              file_type: finalized.file_type,
+              existed: finalized.existed,
+              result_mode: 'sample_registered',
+              tool_surface_role: 'primary',
+              preferred_primary_tools: ['workflow.analyze.start', 'workflow.analyze.status', 'workflow.analyze.promote'],
+              recommended_next_tools: ['workflow.analyze.start', 'workflow.summarize', 'workflow.triage'],
+              next_actions: [
+                'Use workflow.analyze.start with the returned sample_id for the primary staged-runtime path.',
+                'Use workflow.triage only when you intentionally want the compatibility quick-profile surface.',
+                'Promote the staged run or call workflow.summarize after deeper analysis has persisted.',
+              ],
             },
           }
         } catch (error) {

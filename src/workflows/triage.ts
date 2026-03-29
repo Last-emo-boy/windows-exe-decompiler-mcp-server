@@ -4,6 +4,8 @@
  * Requirements: 15.1, 15.2, 15.4, 15.5
  */
 
+import fs from 'fs'
+import path from 'path'
 import { z } from 'zod'
 import type { ToolDefinition, ToolArgs, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
@@ -17,6 +19,31 @@ import { createYaraScanHandler } from '../tools/yara-scan.js'
 import { createStaticCapabilityTriageHandler } from '../tools/static-capability-triage.js'
 import { createPEStructureAnalyzeHandler } from '../tools/pe-structure-analyze.js'
 import { createCompilerPackerDetectHandler } from '../tools/compiler-packer-detect.js'
+import { createAnalysisContextLinkHandler } from '../tools/analysis-context-link.js'
+import {
+  AnalysisIntentDepthSchema,
+  BackendPolicySchema,
+  BackendRoutingMetadataSchema,
+  buildIntentBackendPlan,
+  mergeRoutingMetadata,
+  selectedBackendTools,
+} from '../intent-routing.js'
+import {
+  CoverageEnvelopeSchema,
+  buildBudgetDowngradeReasons,
+  buildCoverageEnvelope,
+  classifySampleSizeTier,
+  deriveAnalysisBudgetProfile,
+  mergeCoverageEnvelope,
+} from '../analysis-coverage.js'
+import { resolveAnalysisBackends } from '../static-backend-discovery.js'
+import {
+  createRizinAnalyzeHandler,
+  createUPXInspectHandler,
+  createYaraXScanHandler,
+} from '../tools/docker-backend-tools.js'
+import { collectCryptoApiNames } from '../crypto-breakpoint-analysis.js'
+import { ToolSurfaceRoleSchema } from '../tool-surface-guidance.js'
 
 // ============================================================================
 // Constants
@@ -87,6 +114,24 @@ export const TriageWorkflowInputSchema = z.object({
     .optional()
     .default(false)
     .describe('Bypass cache in dependent static tools'),
+  raw_result_mode: z
+    .enum(['compact', 'full'])
+    .optional()
+    .default('compact')
+    .describe('Return compact per-tool previews by default; use `full` only when the complete child tool payloads are required for a targeted smaller-sample review. Large samples should stay compact.'),
+  depth: AnalysisIntentDepthSchema
+    .optional()
+    .default('balanced')
+    .describe('Controls how aggressively safe corroborating backends are auto-selected.'),
+  backend_policy: BackendPolicySchema
+    .optional()
+    .default('auto')
+    .describe('Controls whether newer installed backends are auto-preferred, suppressed, or only used when baseline evidence is weak.'),
+  allow_transformations: z
+    .boolean()
+    .optional()
+    .default(false)
+    .describe('Keep false for normal triage. True suppresses automatic unpack-style backend actions so transformations remain explicit.'),
 })
 
 export type TriageWorkflowInput = z.infer<typeof TriageWorkflowInputSchema>
@@ -169,6 +214,11 @@ export const TriageWorkflowOutputSchema = z.object({
       .optional()
       .describe('Inference layer derived from evidence, separated for auditability'),
     recommendation: z.string().describe('Recommended next steps'),
+    result_mode: z.literal('quick_profile').describe('Routing hint indicating this workflow is a quick-profile stage rather than deep reverse engineering'),
+    tool_surface_role: ToolSurfaceRoleSchema.describe('Marks this workflow as a primary or compatibility surface for AI routing.'),
+    preferred_primary_tools: z.array(z.string()).describe('Primary staged-runtime alternatives that should be preferred for full lifecycle analysis.'),
+    recommended_next_tools: z.array(z.string()).describe('Machine-readable immediate follow-up tool suggestions'),
+    next_actions: z.array(z.string()).describe('Machine-readable next-step guidance for clients'),
     raw_results: z.object({
       fingerprint: z.any().optional(),
       runtime: z.any().optional(),
@@ -178,8 +228,19 @@ export const TriageWorkflowOutputSchema = z.object({
       static_capability: z.any().optional(),
       pe_structure: z.any().optional(),
       compiler_packer: z.any().optional(),
+      string_context: z.any().optional(),
+      backend_enrichments: z
+        .object({
+          upx: z.any().optional(),
+          yara_x: z.any().optional(),
+          rizin: z.any().optional(),
+      })
+        .optional(),
     }).describe('Raw results from individual tools'),
-  }).optional(),
+  })
+    .extend(CoverageEnvelopeSchema.shape)
+    .extend(BackendRoutingMetadataSchema.shape)
+    .optional(),
   warnings: z.array(z.string()).optional(),
   errors: z.array(z.string()).optional(),
   metrics: z.object({
@@ -199,7 +260,18 @@ export type TriageWorkflowOutput = z.infer<typeof TriageWorkflowOutputSchema>
  */
 export const triageWorkflowToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
-  description: '快速画像工作流：在 5 分钟内完成基础威胁评估，包括 PE 指纹、运行时检测、导入表分析、字符串提取和 YARA 扫描',
+  description:
+    'Compatibility quick-profile workflow for first-pass static assessment within minutes. Use this after sample registration when you explicitly want a compact threat-oriented profile, not the primary staged analysis lifecycle. ' +
+    'When the user has not chosen a workflow yet, prefer workflow.analyze.auto so the server can route by intent first. ' +
+    'Do not treat this as the final reverse-engineering step; deeper analysis continues through workflow.analyze.start/status/promote, with ghidra.analyze and workflow.reconstruct as downstream deep surfaces. ' +
+    'Read coverage_level, completion_state, coverage_gaps, and upgrade_paths to see exactly what quick triage did not cover yet. ' +
+    '\n\nDecision guide:\n' +
+    '- Use when: you need fast threat posture, runtime hints, strings/imports/YARA context, and compact triage output.\n' +
+    '- Best for: small/medium samples or an explicitly requested quick profile.\n' +
+    '- Large-sample pattern: prefer workflow.analyze.auto or workflow.analyze.start, then follow with workflow.analyze.status/promote instead of repeatedly calling workflow.triage.\n' +
+    '- Do not use when: you already need function-level decompilation or source-like reconstruction.\n' +
+    '- Typical next step: continue with workflow.analyze.start/status/promote for staged analysis, or use ghidra.analyze/workflow.reconstruct only when you intentionally need those deeper surfaces.\n' +
+    '- Common mistake: assuming workflow.triage alone completes reverse engineering.',
   inputSchema: TriageWorkflowInputSchema,
   outputSchema: TriageWorkflowOutputSchema,
 }
@@ -301,6 +373,10 @@ function summarizePeStructureResult(data: Record<string, unknown> | null | undef
   const resourceCount = Number(summary.resource_count || 0)
   const forwarderCount = Number(summary.forwarder_count || 0)
   const parserPreference = typeof summary.parser_preference === 'string' ? summary.parser_preference : 'unknown'
+  const overlaySuggestsPacking =
+    overlayPresent &&
+    data.status === 'ready' &&
+    (sectionCount > 0 || resourceCount > 0 || forwarderCount > 0)
 
   const evidence = [
     `PE structure analysis used parser preference ${parserPreference}.`,
@@ -320,7 +396,7 @@ function summarizePeStructureResult(data: Record<string, unknown> | null | undef
       overlayPresent || resourceCount > 0
         ? 'Inspect recovered resources and any detected overlay before assuming the file layout is benign or complete.'
         : null,
-    packer_hint: overlayPresent,
+    packer_hint: overlaySuggestsPacking,
   }
 }
 
@@ -373,6 +449,664 @@ function summarizeCompilerPackerResult(data: Record<string, unknown> | null | un
         : null,
     packer_hint: packerCount > 0 || protectorCount > 0,
   }
+}
+
+function summarizeStringContextResult(data: Record<string, unknown> | null | undefined) {
+  if (!data || (data.status !== 'ready' && data.status !== 'partial')) {
+    return {
+      summary: null as string | null,
+      evidence: [] as string[],
+      recommendation: null as string | null,
+      context_hint: false,
+    }
+  }
+
+  const mergedStrings =
+    data.merged_strings && typeof data.merged_strings === 'object'
+      ? (data.merged_strings as Record<string, unknown>)
+      : {}
+  const functionContexts = Array.isArray(data.function_contexts)
+    ? (data.function_contexts as Array<Record<string, unknown>>)
+    : []
+  const analystRelevantCount = Number(mergedStrings.analyst_relevant_count || 0)
+  const topFunctions = functionContexts
+    .slice(0, 3)
+    .map((item) => String(item.function || item.address || 'unknown'))
+  const xrefStatus = typeof data.xref_status === 'string' ? data.xref_status : 'unavailable'
+
+  return {
+    summary:
+      analystRelevantCount > 0 || functionContexts.length > 0
+        ? xrefStatus === 'available'
+          ? `Context-linking retained ${analystRelevantCount} analyst-relevant string(s) and mapped them to ${functionContexts.length} compact function context(s).`
+          : `Context-linking retained ${analystRelevantCount} analyst-relevant string(s), but Ghidra-backed function attribution is still unavailable.`
+        : null,
+    evidence: [
+      `Context-linking retained ${analystRelevantCount} analyst-relevant string(s).`,
+      ...(xrefStatus === 'available'
+        ? [`Compact function contexts recovered: ${functionContexts.length}.`]
+        : ['Compact string context is currently string-only because Ghidra-backed attribution is unavailable.']),
+      ...(topFunctions.length > 0 ? [`Top correlated functions: ${topFunctions.join(', ')}.`] : []),
+    ],
+    recommendation:
+      xrefStatus === 'available' && functionContexts.length > 0
+        ? 'Use code.xrefs.analyze or code.function.decompile on the highest-signal correlated function before jumping to full reconstruction.'
+        : xrefStatus !== 'available'
+          ? 'Run ghidra.analyze first if you need string-to-function or API-to-function attribution before deeper reconstruction.'
+          : null,
+    context_hint: functionContexts.length > 0,
+  }
+}
+
+function findDefaultYaraXRulesPath(): string | null {
+  const candidates = [
+    path.join(process.cwd(), 'workers', 'yara_rules', 'malware_families.yar'),
+    path.join(process.cwd(), 'workers', 'yara_rules', 'default.yar'),
+  ]
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) {
+      return candidate
+    }
+  }
+
+  return null
+}
+
+function trimText(value: unknown, maxLength = 180): string {
+  const text = String(value ?? '')
+  if (text.length <= maxLength) {
+    return text
+  }
+  return `${text.slice(0, Math.max(0, maxLength - 3))}...`
+}
+
+function compactGroupedImports(
+  value: unknown,
+  maxGroups = 10,
+  maxFunctionsPerGroup = 8
+): { values: Record<string, string[]>; totalGroups: number; totalFunctions: number; truncated: boolean } {
+  if (!value || typeof value !== 'object') {
+    return {
+      values: {},
+      totalGroups: 0,
+      totalFunctions: 0,
+      truncated: false,
+    }
+  }
+
+  const entries = Object.entries(value as Record<string, unknown>)
+    .map(([name, functions]) => ({
+      name,
+      functions: Array.isArray(functions)
+        ? functions
+            .map((item) => String(item).trim())
+            .filter((item) => item.length > 0)
+        : [],
+    }))
+    .filter((entry) => entry.functions.length > 0)
+    .sort((left, right) => right.functions.length - left.functions.length || left.name.localeCompare(right.name))
+
+  const previewEntries = entries.slice(0, maxGroups).map((entry) => [
+    entry.name,
+    entry.functions.slice(0, maxFunctionsPerGroup),
+  ] as const)
+
+  const previewFunctionCount = previewEntries.reduce((total, [, functions]) => total + functions.length, 0)
+  const totalFunctions = entries.reduce((total, entry) => total + entry.functions.length, 0)
+
+  return {
+    values: Object.fromEntries(previewEntries),
+    totalGroups: entries.length,
+    totalFunctions,
+    truncated: entries.length > maxGroups || previewFunctionCount < totalFunctions,
+  }
+}
+
+function compactFingerprintRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  return {
+    machine: record.machine ?? null,
+    machine_name: record.machine_name ?? null,
+    subsystem: record.subsystem ?? null,
+    subsystem_name: record.subsystem_name ?? null,
+    timestamp_iso: record.timestamp_iso ?? null,
+    imphash: record.imphash ?? null,
+    entry_point: record.entry_point ?? null,
+    image_base: record.image_base ?? null,
+    sections: Array.isArray(record.sections) ? record.sections.slice(0, 8) : [],
+    section_count: Array.isArray(record.sections) ? record.sections.length : 0,
+    signature: record.signature ?? null,
+    _parser: record._parser ?? null,
+    _pefile_error: record._pefile_error ?? null,
+  }
+}
+
+function compactRuntimeRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const suspected = Array.isArray(record.suspected)
+    ? record.suspected.slice(0, 8).map((item) => {
+        const entry = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+        return {
+          runtime: entry.runtime ?? null,
+          confidence: entry.confidence ?? null,
+          evidence: Array.isArray(entry.evidence) ? entry.evidence.slice(0, 4).map((value) => trimText(value, 140)) : [],
+        }
+      })
+    : []
+  const importDlls = Array.isArray(record.import_dlls)
+    ? record.import_dlls.slice(0, 20).map((item) => String(item))
+    : []
+
+  return {
+    is_dotnet: record.is_dotnet ?? false,
+    dotnet_version: record.dotnet_version ?? null,
+    target_framework: record.target_framework ?? null,
+    suspected,
+    import_dlls: importDlls,
+    import_dll_count: Array.isArray(record.import_dlls) ? record.import_dlls.length : importDlls.length,
+  }
+}
+
+function compactImportsRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const imports = compactGroupedImports(record.imports, 10, 8)
+  const delayImports = compactGroupedImports(record.delay_imports, 8, 6)
+
+  return {
+    imports: imports.values,
+    total_dlls: imports.totalGroups,
+    total_functions: imports.totalFunctions,
+    imports_truncated: imports.truncated,
+    delay_imports: delayImports.values,
+    total_delay_dlls: delayImports.totalGroups,
+    total_delay_functions: delayImports.totalFunctions,
+    delay_imports_truncated: delayImports.truncated,
+    _parser: record._parser ?? null,
+    _pefile_error: record._pefile_error ?? null,
+  }
+}
+
+function compactStringsRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const strings = Array.isArray(record.strings) ? record.strings.slice(0, 20) : []
+  const summary = record.summary && typeof record.summary === 'object' ? (record.summary as Record<string, unknown>) : null
+  const topHighValue = Array.isArray(summary?.top_high_value)
+    ? summary!.top_high_value.slice(0, 12).map((item) => {
+        const entry = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+        return {
+          offset: entry.offset ?? null,
+          string: trimText(entry.string ?? '', 160),
+          encoding: entry.encoding ?? null,
+          categories: Array.isArray(entry.categories) ? entry.categories.slice(0, 6).map((value) => String(value)) : [],
+        }
+      })
+    : []
+  const contextWindows = Array.isArray(summary?.context_windows)
+    ? summary!.context_windows.slice(0, 4).map((item) => {
+        const entry = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+        const stringsInWindow = Array.isArray(entry.strings)
+          ? entry.strings.slice(0, 5).map((windowItem) => {
+              const stringEntry =
+                windowItem && typeof windowItem === 'object' ? (windowItem as Record<string, unknown>) : {}
+              return {
+                offset: stringEntry.offset ?? null,
+                string: trimText(stringEntry.string ?? '', 140),
+                encoding: stringEntry.encoding ?? null,
+                categories: Array.isArray(stringEntry.categories)
+                  ? stringEntry.categories.slice(0, 4).map((value) => String(value))
+                  : [],
+              }
+            })
+          : []
+        return {
+          start_offset: entry.start_offset ?? null,
+          end_offset: entry.end_offset ?? null,
+          score: entry.score ?? null,
+          categories: Array.isArray(entry.categories) ? entry.categories.slice(0, 6).map((value) => String(value)) : [],
+          strings: stringsInWindow,
+        }
+      })
+    : []
+
+  return {
+    strings,
+    count: record.count ?? null,
+    total_count: record.total_count ?? null,
+    pre_filter_count: record.pre_filter_count ?? null,
+    truncated: record.truncated ?? null,
+    max_strings: record.max_strings ?? null,
+    max_string_length: record.max_string_length ?? null,
+    min_len: record.min_len ?? null,
+    encoding_filter: record.encoding_filter ?? null,
+    category_filter: record.category_filter ?? null,
+    summary: summary
+      ? {
+          cluster_counts: summary.cluster_counts ?? {},
+          top_high_value: topHighValue,
+          context_windows: contextWindows,
+        }
+      : null,
+  }
+}
+
+function compactYaraRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const matches = Array.isArray(record.matches)
+    ? record.matches.slice(0, 12).map((item) => {
+        const match = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+        return {
+          rule: match.rule ?? null,
+          tags: Array.isArray(match.tags) ? match.tags.slice(0, 8).map((value) => String(value)) : [],
+          meta: match.meta ?? {},
+          strings: Array.isArray(match.strings)
+            ? match.strings.slice(0, 5).map((matchString) => {
+                const stringEntry =
+                  matchString && typeof matchString === 'object' ? (matchString as Record<string, unknown>) : {}
+                return {
+                  identifier: stringEntry.identifier ?? null,
+                  offset: stringEntry.offset ?? null,
+                  matched_data: trimText(stringEntry.matched_data ?? '', 96),
+                  location: stringEntry.location ?? null,
+                }
+              })
+            : [],
+          confidence: match.confidence ?? null,
+          evidence: match.evidence
+            ? {
+                import_dll_hits: Array.isArray((match.evidence as Record<string, unknown>).import_dll_hits)
+                  ? ((match.evidence as Record<string, unknown>).import_dll_hits as unknown[]).slice(0, 8).map(String)
+                  : [],
+                import_api_hits: Array.isArray((match.evidence as Record<string, unknown>).import_api_hits)
+                  ? ((match.evidence as Record<string, unknown>).import_api_hits as unknown[]).slice(0, 8).map(String)
+                  : [],
+                section_hits: Array.isArray((match.evidence as Record<string, unknown>).section_hits)
+                  ? ((match.evidence as Record<string, unknown>).section_hits as unknown[]).slice(0, 8).map(String)
+                  : [],
+                near_entrypoint_hits: (match.evidence as Record<string, unknown>).near_entrypoint_hits ?? null,
+                string_only: (match.evidence as Record<string, unknown>).string_only ?? null,
+              }
+            : null,
+          inference: match.inference ?? null,
+        }
+      })
+    : []
+
+  return {
+    matches,
+    match_count: Array.isArray(record.matches) ? record.matches.length : matches.length,
+    ruleset_version: record.ruleset_version ?? null,
+    timed_out: record.timed_out ?? null,
+    rule_set: record.rule_set ?? null,
+    rule_tier: record.rule_tier ?? null,
+    confidence_summary: record.confidence_summary ?? null,
+    import_evidence: record.import_evidence ?? null,
+    quality_notes: Array.isArray(record.quality_notes)
+      ? record.quality_notes.slice(0, 8).map((item) => trimText(item, 180))
+      : [],
+  }
+}
+
+function compactStaticCapabilityRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  return {
+    status: record.status ?? null,
+    sample_id: record.sample_id ?? null,
+    capability_count: record.capability_count ?? 0,
+    behavior_namespaces: Array.isArray(record.behavior_namespaces)
+      ? record.behavior_namespaces.slice(0, 12).map((item) => String(item))
+      : [],
+    capability_groups: record.capability_groups ?? {},
+    capabilities: Array.isArray(record.capabilities)
+      ? record.capabilities.slice(0, 15).map((item) => {
+          const capability = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+          return {
+            rule_id: capability.rule_id ?? null,
+            name: capability.name ?? null,
+            namespace: capability.namespace ?? null,
+            scopes: Array.isArray(capability.scopes) ? capability.scopes.slice(0, 6).map((value) => String(value)) : [],
+            group: capability.group ?? null,
+            confidence: capability.confidence ?? null,
+            match_count: capability.match_count ?? null,
+            evidence_summary: trimText(capability.evidence_summary ?? '', 180),
+          }
+        })
+      : [],
+    summary: record.summary ?? null,
+    backend: record.backend ?? null,
+    confidence_semantics: record.confidence_semantics ?? null,
+    analysis_id: record.analysis_id ?? null,
+    artifact: record.artifact ?? null,
+  }
+}
+
+function compactPeStructureRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const imports = record.imports && typeof record.imports === 'object' ? (record.imports as Record<string, unknown>) : {}
+  const importPreview = compactGroupedImports(imports.imports, 10, 8)
+  const delayedImportPreview = compactGroupedImports(imports.delayed_imports, 8, 6)
+  const exportsValue =
+    record.exports && typeof record.exports === 'object' ? (record.exports as Record<string, unknown>) : {}
+  const resourcesValue =
+    record.resources && typeof record.resources === 'object' ? (record.resources as Record<string, unknown>) : {}
+  const backendDetails =
+    record.backend_details && typeof record.backend_details === 'object'
+      ? Object.fromEntries(
+          Object.entries(record.backend_details as Record<string, unknown>).map(([backendName, backendValue]) => {
+            const backendRecord =
+              backendValue && typeof backendValue === 'object' ? (backendValue as Record<string, unknown>) : {}
+            return [
+              backendName,
+              {
+                parser: backendRecord.parser ?? null,
+                available: backendRecord.available ?? null,
+                status: backendRecord.status ?? null,
+                warnings: Array.isArray(backendRecord.warnings)
+                  ? backendRecord.warnings.slice(0, 3).map((item) => trimText(item, 160))
+                  : [],
+                error: backendRecord.error ? trimText(backendRecord.error, 180) : null,
+              },
+            ]
+          })
+        )
+      : {}
+
+  return {
+    status: record.status ?? null,
+    sample_id: record.sample_id ?? null,
+    summary: record.summary ?? null,
+    headers: record.headers ?? null,
+    entry_point: record.entry_point ?? null,
+    sections: Array.isArray(record.sections) ? record.sections.slice(0, 8) : [],
+    imports: {
+      imports: importPreview.values,
+      delayed_imports: delayedImportPreview.values,
+      total_dlls:
+        imports.total_dlls ??
+        importPreview.totalGroups,
+      total_delayed_dlls:
+        imports.total_delayed_dlls ??
+        delayedImportPreview.totalGroups,
+      total_functions:
+        imports.total_functions ??
+        importPreview.totalFunctions,
+      total_delayed_functions:
+        imports.total_delayed_functions ??
+        delayedImportPreview.totalFunctions,
+      truncated: importPreview.truncated || delayedImportPreview.truncated,
+    },
+    exports: {
+      exports: Array.isArray(exportsValue.exports) ? exportsValue.exports.slice(0, 12) : [],
+      forwarders: Array.isArray(exportsValue.forwarders) ? exportsValue.forwarders.slice(0, 12) : [],
+      total_exports: exportsValue.total_exports ?? 0,
+      total_forwarders: exportsValue.total_forwarders ?? 0,
+    },
+    resources: {
+      present: resourcesValue.present ?? null,
+      type_count: resourcesValue.type_count ?? 0,
+      entry_count: resourcesValue.entry_count ?? 0,
+      types: Array.isArray(resourcesValue.types) ? resourcesValue.types.slice(0, 12) : [],
+      entries: Array.isArray(resourcesValue.entries) ? resourcesValue.entries.slice(0, 12) : [],
+    },
+    overlay: record.overlay ?? null,
+    backend_details: backendDetails,
+    confidence_semantics: record.confidence_semantics ?? null,
+    analysis_id: record.analysis_id ?? null,
+    artifact: record.artifact ?? null,
+  }
+}
+
+function compactCompilerPackerRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const limitFindings = (value: unknown) =>
+    Array.isArray(value)
+      ? value.slice(0, 10).map((item) => {
+          const finding = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+          return {
+            name: finding.name ?? null,
+            category: finding.category ?? null,
+            confidence: finding.confidence ?? null,
+            evidence_summary: trimText(finding.evidence_summary ?? '', 180),
+            source: finding.source ?? null,
+          }
+        })
+      : []
+
+  return {
+    status: record.status ?? null,
+    sample_id: record.sample_id ?? null,
+    compiler_findings: limitFindings(record.compiler_findings),
+    packer_findings: limitFindings(record.packer_findings),
+    protector_findings: limitFindings(record.protector_findings),
+    file_type_findings: limitFindings(record.file_type_findings),
+    summary: record.summary ?? null,
+    backend: record.backend ?? null,
+    confidence_semantics: record.confidence_semantics ?? null,
+    analysis_id: record.analysis_id ?? null,
+    artifact: record.artifact ?? null,
+  }
+}
+
+function compactArtifactRefs(value: unknown, maxItems = 4) {
+  return Array.isArray(value)
+    ? value.slice(0, maxItems).map((item) => {
+        const record = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+        return {
+          id: record.id ?? null,
+          type: record.type ?? null,
+          path: record.path ?? null,
+        }
+      })
+    : []
+}
+
+function compactStringContextRawResult(data: unknown) {
+  if (!data || typeof data !== 'object') {
+    return data ?? null
+  }
+
+  const record = data as Record<string, unknown>
+  const mergedStrings =
+    record.merged_strings && typeof record.merged_strings === 'object'
+      ? (record.merged_strings as Record<string, unknown>)
+      : {}
+  const topHighlights = (field: string, limit: number) =>
+    Array.isArray(mergedStrings[field])
+      ? (mergedStrings[field] as unknown[]).slice(0, limit).map((item) => {
+          const entry = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+          return {
+            value: trimText(entry.value ?? '', 140),
+            offset: entry.offset ?? null,
+            categories: Array.isArray(entry.categories)
+              ? entry.categories.slice(0, 4).map((value) => String(value))
+              : [],
+            labels: Array.isArray(entry.labels)
+              ? entry.labels.slice(0, 4).map((value) => String(value))
+              : [],
+            confidence: entry.confidence ?? null,
+            score: entry.score ?? null,
+          }
+        })
+      : []
+  const functionContexts = Array.isArray(record.function_contexts)
+    ? record.function_contexts.slice(0, 6).map((item) => {
+        const entry = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+        return {
+          function: entry.function ?? null,
+          address: entry.address ?? null,
+          score: entry.score ?? null,
+          top_strings: Array.isArray(entry.top_strings)
+            ? entry.top_strings.slice(0, 3).map((value) => trimText(value, 120))
+            : [],
+          top_categories: Array.isArray(entry.top_categories)
+            ? entry.top_categories.slice(0, 5).map((value) => String(value))
+            : [],
+          sensitive_apis: Array.isArray(entry.sensitive_apis)
+            ? entry.sensitive_apis.slice(0, 5).map((value) => String(value))
+            : [],
+          rationale: Array.isArray(entry.rationale)
+            ? entry.rationale.slice(0, 4).map((value) => trimText(value, 120))
+            : [],
+        }
+      })
+    : []
+
+  return {
+    status: record.status ?? null,
+    xref_status: record.xref_status ?? null,
+    summary: trimText(record.summary ?? '', 220),
+    merged_strings: {
+      status: mergedStrings.status ?? null,
+      total_records: mergedStrings.total_records ?? 0,
+      kept_records: mergedStrings.kept_records ?? 0,
+      analyst_relevant_count: mergedStrings.analyst_relevant_count ?? 0,
+      runtime_noise_count: mergedStrings.runtime_noise_count ?? 0,
+      encoded_candidate_count: mergedStrings.encoded_candidate_count ?? 0,
+      merged_sources: mergedStrings.merged_sources ?? false,
+      truncated: mergedStrings.truncated ?? false,
+      top_suspicious: topHighlights('top_suspicious', 6),
+      top_iocs: topHighlights('top_iocs', 6),
+      top_decoded: topHighlights('top_decoded', 4),
+      context_windows: Array.isArray(mergedStrings.context_windows)
+        ? (mergedStrings.context_windows as unknown[]).slice(0, 3)
+        : [],
+    },
+    function_contexts: functionContexts,
+    source_artifact_refs: compactArtifactRefs(record.source_artifact_refs, 4),
+    artifact:
+      record.artifact && typeof record.artifact === 'object'
+        ? compactArtifactRefs([record.artifact], 1)[0]
+        : null,
+  }
+}
+
+function buildCompactRawResults(results: {
+  fingerprint: unknown
+  runtime: unknown
+  imports: unknown
+  strings: unknown
+  yara: unknown
+  staticCapability: unknown
+  peStructure: unknown
+  compilerPacker: unknown
+  stringContext: unknown
+  backendEnrichments?: unknown
+}) {
+  return {
+    fingerprint: compactFingerprintRawResult(results.fingerprint),
+    runtime: compactRuntimeRawResult(results.runtime),
+    imports: compactImportsRawResult(results.imports),
+    strings: compactStringsRawResult(results.strings),
+    yara: compactYaraRawResult(results.yara),
+    static_capability: compactStaticCapabilityRawResult(results.staticCapability),
+    pe_structure: compactPeStructureRawResult(results.peStructure),
+    compiler_packer: compactCompilerPackerRawResult(results.compilerPacker),
+    string_context: compactStringContextRawResult(results.stringContext),
+    backend_enrichments: results.backendEnrichments ?? null,
+  }
+}
+
+function summarizeWorkflowWarnings(allWarnings: string[]) {
+  const uniqueWarnings = Array.from(new Set(allWarnings.filter((item) => item.trim().length > 0)))
+  const cacheTiers = new Set<string>()
+  let cacheResultCount = 0
+  const nonCacheWarnings: string[] = []
+
+  for (const warning of uniqueWarnings) {
+    if (/^Result from cache$/i.test(warning)) {
+      cacheResultCount += 1
+      continue
+    }
+
+    const cacheMatch = warning.match(/^Cache details:\s*tier=([^,]+)/i)
+    if (cacheMatch) {
+      cacheResultCount += 1
+      cacheTiers.add(cacheMatch[1])
+      continue
+    }
+
+    nonCacheWarnings.push(trimText(warning, 220))
+  }
+
+  const summarized = [...nonCacheWarnings]
+  if (cacheResultCount > 0) {
+    summarized.unshift(
+      `Reused ${cacheResultCount} cached sub-result(s)${
+        cacheTiers.size > 0 ? ` from ${Array.from(cacheTiers).join(', ')} cache` : ''
+      }.`
+    )
+  }
+
+  return summarized.slice(0, 12)
+}
+
+function hasCryptoCapabilitySignals(result: WorkerResult | undefined): boolean {
+  const data = result?.data && typeof result.data === 'object' ? (result.data as Record<string, unknown>) : {}
+  const namespaces = Array.isArray(data.behavior_namespaces)
+    ? data.behavior_namespaces.map((item) => String(item))
+    : []
+  if (namespaces.some((item) => /(crypt|aes|rsa|hash|cipher|key|decrypt|encrypt)/i.test(item))) {
+    return true
+  }
+  const groups = data.capability_groups && typeof data.capability_groups === 'object'
+    ? Object.keys(data.capability_groups as Record<string, unknown>)
+    : []
+  if (groups.some((item) => /(crypt|aes|rsa|hash|cipher|key|decrypt|encrypt)/i.test(item))) {
+    return true
+  }
+  const capabilities = Array.isArray(data.capabilities) ? data.capabilities : []
+  return capabilities.some((item) => {
+    const capability = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+    return [capability.name, capability.namespace, capability.group]
+      .map((entry) => (typeof entry === 'string' ? entry : ''))
+      .some((entry) => /(crypt|aes|rsa|hash|cipher|key|decrypt|encrypt)/i.test(entry))
+  })
+}
+
+function hasCryptoContextSignals(result: WorkerResult | undefined): boolean {
+  const data = result?.data && typeof result.data === 'object' ? (result.data as Record<string, unknown>) : {}
+  const contexts = Array.isArray(data.function_contexts) ? data.function_contexts : []
+  return contexts.some((item) => {
+    const context = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+    const values = [
+      ...(Array.isArray(context.sensitive_apis) ? context.sensitive_apis.map((entry) => String(entry)) : []),
+      ...(Array.isArray(context.top_strings) ? context.top_strings.map((entry) => String(entry)) : []),
+      ...(Array.isArray(context.rationale) ? context.rationale.map((entry) => String(entry)) : []),
+    ]
+    return values.some((entry) => /(crypt|aes|rsa|hash|cipher|key|decrypt|encrypt|cbc|gcm|ctr|rc4|chacha|salsa)/i.test(entry))
+  })
 }
 
 /**
@@ -1640,6 +2374,23 @@ export async function triageWorkflow(
 // Workflow Handler
 // ============================================================================
 
+interface TriageWorkflowDependencies {
+  analyzeStart?: (args: ToolArgs) => Promise<WorkerResult>
+  peFingerprint?: ReturnType<typeof createPEFingerprintHandler>
+  runtimeDetect?: ReturnType<typeof createRuntimeDetectHandler>
+  peImportsExtract?: ReturnType<typeof createPEImportsExtractHandler>
+  stringsExtract?: ReturnType<typeof createStringsExtractHandler>
+  yaraScan?: ReturnType<typeof createYaraScanHandler>
+  staticCapabilityTriage?: ReturnType<typeof createStaticCapabilityTriageHandler>
+  peStructureAnalyze?: ReturnType<typeof createPEStructureAnalyzeHandler>
+  compilerPackerDetect?: ReturnType<typeof createCompilerPackerDetectHandler>
+  analysisContextLink?: ReturnType<typeof createAnalysisContextLinkHandler>
+  upxInspect?: ReturnType<typeof createUPXInspectHandler>
+  yaraXScan?: ReturnType<typeof createYaraXScanHandler>
+  rizinAnalyze?: ReturnType<typeof createRizinAnalyzeHandler>
+  resolveBackends?: typeof resolveAnalysisBackends
+}
+
 /**
  * Create triage workflow handler
  * Requirements: 15.1, 15.2, 15.4, 15.5
@@ -1647,25 +2398,97 @@ export async function triageWorkflow(
 export function createTriageWorkflowHandler(
   workspaceManager: WorkspaceManager,
   database: DatabaseManager,
-  cacheManager: CacheManager
+  cacheManager: CacheManager,
+  dependencies: TriageWorkflowDependencies = {}
 ) {
   // Create tool handlers
-  const peFingerprintHandler = createPEFingerprintHandler(workspaceManager, database, cacheManager)
-  const runtimeDetectHandler = createRuntimeDetectHandler(workspaceManager, database, cacheManager)
-  const peImportsExtractHandler = createPEImportsExtractHandler(workspaceManager, database, cacheManager)
-  const stringsExtractHandler = createStringsExtractHandler(workspaceManager, database, cacheManager)
-  const yaraScanHandler = createYaraScanHandler(workspaceManager, database, cacheManager)
-  const staticCapabilityTriageHandler = createStaticCapabilityTriageHandler(workspaceManager, database)
-  const peStructureAnalyzeHandler = createPEStructureAnalyzeHandler(workspaceManager, database)
-  const compilerPackerDetectHandler = createCompilerPackerDetectHandler(workspaceManager, database)
+  const peFingerprintHandler =
+    dependencies.peFingerprint || createPEFingerprintHandler(workspaceManager, database, cacheManager)
+  const runtimeDetectHandler =
+    dependencies.runtimeDetect || createRuntimeDetectHandler(workspaceManager, database, cacheManager)
+  const peImportsExtractHandler =
+    dependencies.peImportsExtract || createPEImportsExtractHandler(workspaceManager, database, cacheManager)
+  const stringsExtractHandler =
+    dependencies.stringsExtract || createStringsExtractHandler(workspaceManager, database, cacheManager)
+  const yaraScanHandler =
+    dependencies.yaraScan || createYaraScanHandler(workspaceManager, database, cacheManager)
+  const staticCapabilityTriageHandler =
+    dependencies.staticCapabilityTriage || createStaticCapabilityTriageHandler(workspaceManager, database)
+  const peStructureAnalyzeHandler =
+    dependencies.peStructureAnalyze || createPEStructureAnalyzeHandler(workspaceManager, database)
+  const compilerPackerDetectHandler =
+    dependencies.compilerPackerDetect || createCompilerPackerDetectHandler(workspaceManager, database)
+  const analysisContextLinkHandler =
+    dependencies.analysisContextLink || createAnalysisContextLinkHandler(workspaceManager, database, cacheManager)
+  const upxInspectHandler =
+    dependencies.upxInspect || createUPXInspectHandler(workspaceManager, database)
+  const yaraXScanHandler =
+    dependencies.yaraXScan || createYaraXScanHandler(workspaceManager, database)
+  const rizinAnalyzeHandler =
+    dependencies.rizinAnalyze || createRizinAnalyzeHandler(workspaceManager, database)
   
   return async (args: ToolArgs): Promise<WorkerResult> => {
-    const input = args as TriageWorkflowInput
+    const input = TriageWorkflowInputSchema.parse(args)
     const startTime = Date.now()
     const warnings: string[] = []
     const errors: string[] = []
     
     try {
+      if (dependencies.analyzeStart) {
+        const delegated = await dependencies.analyzeStart({
+          sample_id: input.sample_id,
+          goal: 'triage',
+          depth: input.depth,
+          backend_policy: input.backend_policy,
+          allow_transformations: input.allow_transformations,
+          allow_live_execution: false,
+          force_refresh: input.force_refresh,
+        })
+        if (!delegated.ok || !delegated.data) {
+          return {
+            ok: delegated.ok,
+            errors: delegated.errors,
+            warnings: delegated.warnings,
+            metrics: {
+              elapsed_ms: Date.now() - startTime,
+              tool: TOOL_NAME,
+            },
+          }
+        }
+
+        const delegatedPayload =
+          delegated.data && typeof delegated.data === 'object'
+            ? (delegated.data as Record<string, unknown>)
+            : {}
+        const stageResult =
+          delegatedPayload.stage_result && typeof delegatedPayload.stage_result === 'object'
+            ? (delegatedPayload.stage_result as Record<string, unknown>)
+            : delegatedPayload
+
+        return {
+          ok: true,
+          data: {
+            ...stageResult,
+            run_id: delegatedPayload.run_id,
+            deferred_jobs: delegatedPayload.deferred_jobs,
+            recommended_next_tools:
+              (stageResult.recommended_next_tools as string[] | undefined) || [
+                'workflow.analyze.promote',
+                'workflow.analyze.status',
+              ],
+            next_actions:
+              (stageResult.next_actions as string[] | undefined) || [
+                'Promote the persisted run instead of rerunning triage when you need deeper stages.',
+              ],
+          },
+          warnings: delegated.warnings,
+          metrics: {
+            elapsed_ms: Date.now() - startTime,
+            tool: TOOL_NAME,
+          },
+        }
+      }
+
       // Verify sample exists
       const sample = database.findSample(input.sample_id)
       if (!sample) {
@@ -1674,6 +2497,8 @@ export function createTriageWorkflowHandler(
           errors: [`Sample not found: ${input.sample_id}`],
         }
       }
+      const sampleSizeTier = classifySampleSizeTier(sample.size || 0)
+      const analysisBudgetProfile = deriveAnalysisBudgetProfile(input.depth, sampleSizeTier)
       
       // Step 1: PE Fingerprint (fast mode)
       // Requirement: 15.1
@@ -1783,6 +2608,26 @@ export function createTriageWorkflowHandler(
       if (compilerPackerResult.warnings) {
         warnings.push(...compilerPackerResult.warnings)
       }
+
+      // Step 9: Compact string/Xref context correlation
+      const stringContextResult = await analysisContextLinkHandler({
+        sample_id: input.sample_id,
+        include_decoded: true,
+        max_records: 40,
+        max_functions: 6,
+        max_strings_per_function: 3,
+        xref_depth: 1,
+        persist_artifact: true,
+        reuse_cached: !input.force_refresh,
+        force_refresh: input.force_refresh,
+      })
+      if (!stringContextResult.ok) {
+        const contextErrors = stringContextResult.errors || ['analysis.context.link failed']
+        warnings.push(`analysis.context.link unavailable: ${contextErrors.join('; ')}`)
+      }
+      if (stringContextResult.warnings) {
+        warnings.push(...stringContextResult.warnings)
+      }
       
       // If all tools failed, return error
       if (errors.length >= 8) {
@@ -1797,7 +2642,7 @@ export function createTriageWorkflowHandler(
         }
       }
       
-      // Step 9: Aggregate results and generate structured summary
+      // Step 10: Aggregate results and generate structured summary
       // Requirements: 15.2, 15.4, 15.5
       
       // Extract YARA matches
@@ -1981,13 +2826,24 @@ export function createTriageWorkflowHandler(
           ? (compilerPackerResult.data as Record<string, unknown>)
           : null
       )
+      const stringContextInsights = summarizeStringContextResult(
+        stringContextResult.ok && stringContextResult.data
+          ? (stringContextResult.data as Record<string, unknown>)
+          : null
+      )
 
-      if (staticCapabilityInsights.summary || peStructureInsights.summary || compilerPackerInsights.summary) {
+      if (
+        staticCapabilityInsights.summary ||
+        peStructureInsights.summary ||
+        compilerPackerInsights.summary ||
+        stringContextInsights.summary
+      ) {
         summary = [
           summary,
           staticCapabilityInsights.summary,
           peStructureInsights.summary,
           compilerPackerInsights.summary,
+          stringContextInsights.summary,
         ]
           .filter((item): item is string => Boolean(item && item.trim().length > 0))
           .join(' ')
@@ -1997,6 +2853,7 @@ export function createTriageWorkflowHandler(
         staticCapabilityInsights.recommendation,
         peStructureInsights.recommendation,
         compilerPackerInsights.recommendation,
+        stringContextInsights.recommendation,
       ].filter((item): item is string => Boolean(item && item.trim().length > 0))
       if (recommendationAddenda.length > 0) {
         recommendation = `${recommendation} ${Array.from(new Set(recommendationAddenda)).join(' ')}`
@@ -2007,6 +2864,7 @@ export function createTriageWorkflowHandler(
           ...staticCapabilityInsights.evidence,
           ...peStructureInsights.evidence,
           ...compilerPackerInsights.evidence,
+          ...stringContextInsights.evidence,
         ].filter((item) => item.trim().length > 0)
       )
 
@@ -2021,31 +2879,317 @@ export function createTriageWorkflowHandler(
         adjustedThreatLevel = 'suspicious'
         adjustedConfidence = Math.max(adjustedConfidence, 0.58)
       }
+
+      const defaultYaraXRulesPath = findDefaultYaraXRulesPath()
+      const routingMetadata = buildIntentBackendPlan({
+        goal: 'triage',
+        depth: input.depth,
+        backendPolicy: input.backend_policy,
+        allowTransformations: input.allow_transformations,
+        readiness: (dependencies.resolveBackends || resolveAnalysisBackends)(),
+        signals: {
+          packer_suspected:
+            compilerPackerInsights.packer_hint || peStructureInsights.packer_hint,
+          legacy_yara_weak:
+            yaraMatches.length === 0 ||
+            (yaraMatches.length <= 1 && yaraLowConfidenceMatches.length > 0),
+          degraded_structure:
+            !peStructureResult.ok ||
+            !peStructureResult.data ||
+            ((peStructureResult.data as Record<string, unknown>)?.status !== 'ready' &&
+              (peStructureResult.data as Record<string, unknown>)?.status !== 'partial'),
+          import_parsing_weak: !importsResult.ok,
+          yara_x_rules_ready: Boolean(defaultYaraXRulesPath),
+        },
+      })
+
+      const selectedBackends = new Set(selectedBackendTools(routingMetadata))
+      let upxEnrichment: unknown = null
+      let yaraXEnrichment: unknown = null
+      let rizinEnrichment: unknown = null
+
+      if (selectedBackends.has('upx.inspect')) {
+        const upxResult = await upxInspectHandler({
+          sample_id: input.sample_id,
+          operation: 'test',
+          timeout_sec: 20,
+          persist_artifact: true,
+        })
+        if (upxResult.ok && upxResult.data) {
+          upxEnrichment = upxResult.data
+          evidence.push(`UPX corroboration: ${String((upxResult.data as Record<string, unknown>).summary || 'validation completed.')}`)
+        } else {
+          warnings.push(
+            `upx.inspect unavailable: ${(upxResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+        if (upxResult.warnings?.length) {
+          warnings.push(...upxResult.warnings.map((item) => `upx.inspect: ${item}`))
+        }
+      }
+
+      if (selectedBackends.has('yara_x.scan') && defaultYaraXRulesPath) {
+        const yaraXResult = await yaraXScanHandler({
+          sample_id: input.sample_id,
+          rules_path: defaultYaraXRulesPath,
+          timeout_sec: 25,
+          persist_artifact: true,
+        })
+        if (yaraXResult.ok && yaraXResult.data) {
+          yaraXEnrichment = yaraXResult.data
+          const matchCount = Number((yaraXResult.data as Record<string, unknown>).match_count || 0)
+          if (matchCount > 0) {
+            evidence.push(`YARA-X corroboration produced ${matchCount} match(es).`)
+          }
+        } else {
+          warnings.push(
+            `yara_x.scan unavailable: ${(yaraXResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+        if (yaraXResult.warnings?.length) {
+          warnings.push(...yaraXResult.warnings.map((item) => `yara_x.scan: ${item}`))
+        }
+      }
+
+      if (selectedBackends.has('rizin.analyze')) {
+        const rizinOperation =
+          !importsResult.ok ? 'imports' : !peStructureResult.ok ? 'sections' : 'info'
+        const rizinResult = await rizinAnalyzeHandler({
+          sample_id: input.sample_id,
+          operation: rizinOperation,
+          max_items: 20,
+          timeout_sec: 30,
+          persist_artifact: true,
+        })
+        if (rizinResult.ok && rizinResult.data) {
+          rizinEnrichment = rizinResult.data
+          evidence.push(
+            `Rizin corroboration completed ${String((rizinResult.data as Record<string, unknown>).operation || rizinOperation)} inspection.`
+          )
+        } else {
+          warnings.push(
+            `rizin.analyze unavailable: ${(rizinResult.errors || ['unknown error']).join('; ')}`
+          )
+        }
+        if (rizinResult.warnings?.length) {
+          warnings.push(...rizinResult.warnings.map((item) => `rizin.analyze: ${item}`))
+        }
+      }
       
       // Return structured result
+      const backendEnrichments = {
+        ...(upxEnrichment ? { upx: upxEnrichment } : {}),
+        ...(yaraXEnrichment ? { yara_x: yaraXEnrichment } : {}),
+        ...(rizinEnrichment ? { rizin: rizinEnrichment } : {}),
+      }
+      const rawResults =
+        input.raw_result_mode === 'full'
+          ? {
+              fingerprint: fingerprintResult.data || null,
+              runtime: runtimeResult.data || null,
+              imports: importsResult.data || null,
+              strings: stringsResult.data || null,
+              yara: yaraResult.data || null,
+              static_capability: staticCapabilityResult.data || null,
+              pe_structure: peStructureResult.data || null,
+              compiler_packer: compilerPackerResult.data || null,
+              string_context: stringContextResult.data || null,
+              backend_enrichments: backendEnrichments,
+            }
+          : buildCompactRawResults({
+              fingerprint: fingerprintResult.data || null,
+              runtime: runtimeResult.data || null,
+              imports: importsResult.data || null,
+              strings: stringsResult.data || null,
+              yara: yaraResult.data || null,
+              staticCapability: staticCapabilityResult.data || null,
+              peStructure: peStructureResult.data || null,
+              compilerPacker: compilerPackerResult.data || null,
+              stringContext: stringContextResult.data || null,
+              backendEnrichments,
+            })
+      const summarizedWarnings = summarizeWorkflowWarnings(warnings)
+      const stringContextReady =
+        stringContextResult.ok &&
+        stringContextResult.data &&
+        typeof stringContextResult.data === 'object' &&
+        (stringContextResult.data as Record<string, unknown>).xref_status === 'available'
+      const importsMap =
+        importsResult.ok &&
+        importsResult.data &&
+        typeof importsResult.data === 'object' &&
+        (importsResult.data as Record<string, unknown>).imports &&
+        typeof (importsResult.data as Record<string, unknown>).imports === 'object'
+          ? ((importsResult.data as Record<string, unknown>).imports as Record<string, string[]>)
+          : undefined
+      const cryptoSignalsPresent =
+        collectCryptoApiNames(importsMap).length > 0 ||
+        hasCryptoCapabilitySignals(staticCapabilityResult) ||
+        hasCryptoContextSignals(stringContextResult)
+      const recommendedNextTools = Array.from(
+        new Set(
+          stringContextReady
+            ? ['analysis.context.link', 'code.xrefs.analyze', 'ghidra.analyze', 'workflow.reconstruct', 'binary.role.profile']
+            : ['ghidra.analyze', 'analysis.context.link', 'code.xrefs.analyze', 'workflow.reconstruct', 'binary.role.profile']
+        )
+      )
+      if (cryptoSignalsPresent) {
+        recommendedNextTools.unshift('trace.condition')
+        recommendedNextTools.unshift('breakpoint.smart')
+        recommendedNextTools.unshift('crypto.identify')
+      }
+      const nextActions = stringContextReady
+        ? [
+            'Use analysis.context.link or code.xrefs.analyze to inspect the highest-signal correlated function before deep reverse engineering.',
+            'Use ghidra.analyze when you need function-level reverse engineering and decompilation.',
+            'Use workflow.reconstruct when you want source-like export after quick profiling.',
+            'Use binary.role.profile if you need a more role-aware DLL/COM/plugin classification before deep analysis.',
+          ]
+        : [
+            'Run ghidra.analyze first if you need string-to-function or API-to-function attribution before deeper reverse engineering.',
+            'Retry analysis.context.link or use code.xrefs.analyze after Ghidra function_index readiness is available.',
+            'Use workflow.reconstruct when you want source-like export after quick profiling.',
+            'Use binary.role.profile if you need a more role-aware DLL/COM/plugin classification before deep analysis.',
+          ]
+      if (cryptoSignalsPresent) {
+        nextActions.unshift(
+          'Use crypto.identify to turn crypto-related imports, strings, and function context into compact algorithm and constant findings before planning instrumentation.'
+        )
+        nextActions.unshift(
+          'Then use breakpoint.smart and trace.condition to build a bounded Frida-oriented breakpoint and trace plan without immediately executing instrumentation.'
+        )
+      }
+      const coverageEnvelope = buildCoverageEnvelope({
+        coverageLevel: 'quick',
+        completionState: 'bounded',
+        sampleSizeTier,
+        analysisBudgetProfile,
+        downgradeReasons: buildBudgetDowngradeReasons({
+          requestedDepth: input.depth,
+          sampleSizeTier,
+          analysisBudgetProfile,
+          extraReasons: [
+            input.depth === 'deep'
+              ? 'workflow.triage remains a quick-profile workflow even when depth=deep; depth only expands bounded corroborating backends.'
+              : null,
+            sampleSizeTier === 'large' || sampleSizeTier === 'oversized'
+              ? `Sample size tier ${sampleSizeTier} reinforces that this result is a first-pass profile rather than full reverse engineering.`
+              : null,
+          ],
+        }),
+        coverageGaps: [
+          {
+            domain: 'ghidra_analysis',
+            status: 'missing',
+            reason: 'Quick triage does not perform a queued Ghidra decompiler pass.',
+          },
+          {
+            domain: 'function_attribution',
+            status: stringContextReady ? 'degraded' : 'missing',
+            reason: stringContextReady
+              ? 'Some string or API context was correlated, but full function-level attribution remains incomplete.'
+              : 'String and API evidence is not yet mapped to a full Ghidra-backed function index.',
+          },
+          {
+            domain: 'dynamic_behavior',
+            status: 'missing',
+            reason: 'No dynamic execution, imported trace replay, or sandbox verification was performed.',
+          },
+          cryptoSignalsPresent
+            ? {
+                domain: 'crypto_analysis',
+                status: 'missing',
+                reason: 'Crypto-related imports or context were observed, but dedicated crypto identification was not run yet.',
+              }
+            : null,
+        ],
+        confidenceByDomain: {
+          imports: evidenceWeights.import,
+          strings: evidenceWeights.string,
+          iocs: adjustedConfidence,
+          packer:
+            compilerPackerInsights.packer_hint || peStructureInsights.packer_hint
+              ? Math.max(0.55, adjustedConfidence)
+              : 0.3,
+          capabilities: staticCapabilityInsights.evidence.length > 0 ? Math.max(0.55, adjustedConfidence) : 0.35,
+          graph_context: stringContextReady ? 0.65 : 0.2,
+          crypto: cryptoSignalsPresent ? 0.55 : 0.15,
+        },
+        knownFindings: [
+          ...evidence.slice(0, 4),
+          adjustedThreatLevel !== 'clean'
+            ? `Threat posture assessed as ${adjustedThreatLevel} with confidence ${adjustedConfidence.toFixed(2)}.`
+            : null,
+        ],
+        suspectedFindings: [
+          ...inference.hypotheses.slice(0, 3),
+          ...yaraLowConfidenceMatches.slice(0, 2).map((item) => `Low-confidence YARA match: ${item}`),
+          compilerPackerInsights.packer_hint ? 'Packer or protector indicators suggest additional hidden logic may exist.' : null,
+        ],
+        unverifiedAreas: [
+          'Full function-level decompilation was not performed.',
+          'Dynamic behavior and runtime-only indicators remain unverified.',
+          cryptoSignalsPresent ? 'Crypto algorithm identity and constant extraction remain unverified.' : null,
+        ],
+        upgradePaths: [
+          {
+            tool: 'ghidra.analyze',
+            purpose: 'Recover function-level decompilation and attribution.',
+            closes_gaps: ['ghidra_analysis', 'function_attribution'],
+            expected_coverage_gain: 'Adds function index, decompiler output, and stronger API or string-to-function attribution.',
+            cost_tier: 'high',
+          },
+          {
+            tool: stringContextReady ? 'code.xrefs.analyze' : 'analysis.context.link',
+            purpose: 'Deepen string, API, and Xref correlation before full reconstruction.',
+            closes_gaps: ['function_attribution'],
+            expected_coverage_gain: 'Clarifies which functions, strings, and APIs are linked to the top triage findings.',
+            cost_tier: 'medium',
+          },
+          {
+            tool: 'workflow.reconstruct',
+            purpose: 'Move from quick profile to source-like reconstruction artifacts.',
+            closes_gaps: ['reconstruction_export'],
+            expected_coverage_gain: 'Adds planning, export, and corroborating backend artifacts beyond triage.',
+            cost_tier: 'high',
+          },
+          cryptoSignalsPresent
+            ? {
+                tool: 'crypto.identify',
+                purpose: 'Turn crypto-related signals into algorithm and constant findings.',
+                closes_gaps: ['crypto_analysis'],
+                expected_coverage_gain: 'Adds crypto routine, constant, and mode hints before breakpoint planning.',
+                cost_tier: 'medium',
+              }
+            : null,
+        ],
+      })
+
       return {
         ok: true,
-        data: {
-          summary,
-          confidence: adjustedConfidence,
-          threat_level: adjustedThreatLevel,
-          iocs,
-          evidence: Array.from(new Set(evidence)),
-          evidence_weights: evidenceWeights,
-          inference,
-          recommendation,
-          raw_results: {
-            fingerprint: fingerprintResult.data || null,
-            runtime: runtimeResult.data || null,
-            imports: importsResult.data || null,
-            strings: stringsResult.data || null,
-            yara: yaraResult.data || null,
-            static_capability: staticCapabilityResult.data || null,
-            pe_structure: peStructureResult.data || null,
-            compiler_packer: compilerPackerResult.data || null,
-          },
-        },
-        warnings: warnings.length > 0 ? warnings : undefined,
+        data: mergeRoutingMetadata(
+          mergeCoverageEnvelope(
+            {
+              summary,
+              confidence: adjustedConfidence,
+              threat_level: adjustedThreatLevel,
+              iocs,
+              evidence: Array.from(new Set(evidence)),
+              evidence_weights: evidenceWeights,
+              inference,
+              recommendation,
+              result_mode: 'quick_profile',
+              tool_surface_role: 'compatibility',
+              preferred_primary_tools: ['workflow.analyze.start', 'workflow.analyze.status', 'workflow.analyze.promote'],
+              recommended_next_tools: recommendedNextTools,
+              next_actions: nextActions,
+              raw_results: rawResults,
+            },
+            coverageEnvelope
+          ),
+          routingMetadata
+        ),
+        warnings: summarizedWarnings.length > 0 ? summarizedWarnings : undefined,
         errors: errors.length > 0 ? errors : undefined,
         metrics: {
           elapsed_ms: Date.now() - startTime,

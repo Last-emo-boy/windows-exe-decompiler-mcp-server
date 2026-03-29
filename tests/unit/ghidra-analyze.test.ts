@@ -92,8 +92,11 @@ describe('ghidra.analyze tool', () => {
     expect(payload.ok).toBe(true)
     expect(payload.data.analysis_id).toBe('analysis-reuse-1')
     expect(payload.data.status).toBe('reused')
+    expect(payload.data.result_mode).toBe('reused')
+    expect(payload.data.recommended_next_tools).toContain('workflow.reconstruct')
     expect(payload.data.function_count).toBe(42)
     expect(enqueue).not.toHaveBeenCalled()
+    expect((result as any).structuredContent.data.result_mode).toBe('reused')
   })
 
   test('should return matching job_id when queueing a fresh analysis', async () => {
@@ -117,8 +120,10 @@ describe('ghidra.analyze tool', () => {
     expect(payload.data.analysis_id).toBe('job-123')
     expect(payload.data.job_id).toBe('job-123')
     expect(payload.data.status).toBe('queued')
+    expect(payload.data.result_mode).toBe('queued')
     expect(payload.data.polling_guidance.prefer_sleep).toBe(true)
     expect(payload.data.polling_guidance.recommended_wait_seconds).toBeGreaterThan(0)
+    expect(payload.data.next_actions[0]).toContain('recommended polling interval')
     expect(enqueue).toHaveBeenCalledTimes(1)
   })
 
@@ -161,6 +166,7 @@ describe('ghidra.analyze tool', () => {
       expect(payload.ok).toBe(true)
       expect(payload.data.analysis_id).toBe('analysis-rust-1')
       expect(payload.data.function_count).toBe(7)
+      expect(payload.data.result_mode).toBe('partial_success')
       expect(analyzeSpy).toHaveBeenCalledWith(
         sampleId,
         expect.objectContaining({

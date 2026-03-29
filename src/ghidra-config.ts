@@ -430,11 +430,36 @@ export function getAnalyzeHeadlessPath(installDir: string): string {
   }
 }
 
+function readGhidraVersionFromProperties(installDir: string): string | null {
+  const propertiesPath = path.join(installDir, 'Ghidra', 'application.properties')
+  if (!fs.existsSync(propertiesPath)) {
+    return null
+  }
+
+  try {
+    const content = fs.readFileSync(propertiesPath, 'utf8')
+    const versionMatch = content.match(/^application\.version=(.+)$/m)
+    if (!versionMatch?.[1]) {
+      return null
+    }
+    const version = versionMatch[1].trim()
+    return version.length > 0 ? version : null
+  } catch (error) {
+    logger.warn({ error, propertiesPath }, 'Failed to read Ghidra version from application.properties')
+    return null
+  }
+}
+
 /**
  * Get Ghidra version from installation
  */
 export function getGhidraVersion(installDir: string): string | null {
   try {
+    const versionFromProperties = readGhidraVersionFromProperties(installDir)
+    if (versionFromProperties) {
+      return versionFromProperties
+    }
+
     const analyzeHeadlessPath = getAnalyzeHeadlessPath(installDir)
 
     const invocation = buildProcessInvocation(analyzeHeadlessPath, ['-help'])

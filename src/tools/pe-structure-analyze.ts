@@ -105,7 +105,10 @@ export const peStructureAnalyzeToolDefinition: ToolDefinition = {
 }
 
 interface PEStructureAnalyzeDependencies {
-  callWorker?: (request: ReturnType<typeof buildStaticWorkerRequest>) => Promise<StaticWorkerResponse>
+  callWorker?: (
+    request: ReturnType<typeof buildStaticWorkerRequest>,
+    options?: { database?: DatabaseManager; family?: string }
+  ) => Promise<StaticWorkerResponse>
 }
 
 function uniqueWarnings(response: StaticWorkerResponse, data: Record<string, unknown>) {
@@ -147,7 +150,10 @@ export function createPEStructureAnalyzeHandler(
         samplePath,
         toolVersion: TOOL_VERSION,
       })
-      const workerResponse = await callWorker(workerRequest)
+      const workerResponse = await callWorker(workerRequest, {
+        database,
+        family: 'static_python.preview',
+      })
       if (!workerResponse.ok || !workerResponse.data || typeof workerResponse.data !== 'object') {
         return {
           ok: false,

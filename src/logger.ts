@@ -54,21 +54,24 @@ export interface AuditEvent {
 
 /**
  * 创建 pino logger 实例
- * 
+ *
  * CRITICAL: All logs must go to stderr to avoid interfering with MCP protocol on stdout
  */
 function createLogger() {
   // Create destination that writes to stderr (fd 2)
-  const destination = pino.destination({ dest: 2, sync: false });
-  
+  // Use sync mode to ensure logs are written immediately
+  const destination = pino.destination({ dest: 2, sync: true });
+
   return pino({
     level: config.logging.level || 'info',
+    // Simple text format for MCP stdio compatibility
+    messageKey: 'msg',
     // 基础字段
     base: {
       pid: process.pid,
-      hostname: undefined, // 不记录 hostname 以减少日志大小
+      hostname: undefined,
     },
-    // 时间戳格式
+    // 时间戳
     timestamp: pino.stdTimeFunctions.isoTime,
     // 序列化错误对象
     serializers: {

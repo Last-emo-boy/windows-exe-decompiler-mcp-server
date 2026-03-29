@@ -11,10 +11,15 @@ import { PolicyGuard } from './policy-guard.js'
 import { CacheManager } from './cache-manager.js'
 import { JobQueue } from './job-queue.js'
 import { AnalysisTaskRunner } from './analysis-task-runner.js'
+import { StorageManager } from './storage/storage-manager.js'
 import { 
   sampleIngestToolDefinition, 
   createSampleIngestHandler 
 } from './tools/sample-ingest.js'
+import {
+  sampleRequestUploadToolDefinition,
+  createSampleRequestUploadHandler,
+} from './tools/sample-request-upload.js'
 import {
   sampleProfileGetToolDefinition,
   createSampleProfileGetHandler
@@ -31,6 +36,10 @@ import {
   artifactsDiffToolDefinition,
   createArtifactsDiffHandler
 } from './tools/artifacts-diff.js'
+import {
+  artifactDownloadToolDefinition,
+  createArtifactDownloadHandler,
+} from './tools/artifact-download.js'
 import {
   peFingerprintToolDefinition,
   createPEFingerprintHandler
@@ -52,6 +61,14 @@ import {
   createPESymbolsRecoverHandler,
 } from './tools/pe-symbols-recover.js'
 import {
+  llmAnalyzeToolDefinition,
+  createLlmAnalyzeHandler,
+} from './llm/llm-analyze.js'
+import {
+  createAsyncToolWrapper,
+  LONG_RUNNING_TOOLS,
+} from './async-tool-wrapper.js'
+import {
   peStructureAnalyzeToolDefinition,
   createPEStructureAnalyzeHandler,
 } from './tools/pe-structure-analyze.js'
@@ -63,6 +80,10 @@ import {
   stringsFlossDecodeToolDefinition,
   createStringsFlossDecodeHandler
 } from './tools/strings-floss-decode.js'
+import {
+  analysisContextLinkToolDefinition,
+  createAnalysisContextLinkHandler,
+} from './tools/analysis-context-link.js'
 import {
   yaraScanToolDefinition,
   createYaraScanHandler
@@ -96,6 +117,18 @@ import {
   createBinaryRoleProfileHandler,
 } from './tools/binary-role-profile.js'
 import {
+  cryptoIdentifyToolDefinition,
+  createCryptoIdentifyHandler,
+} from './tools/crypto-identify.js'
+import {
+  breakpointSmartToolDefinition,
+  createBreakpointSmartHandler,
+} from './tools/breakpoint-smart.js'
+import {
+  traceConditionToolDefinition,
+  createTraceConditionHandler,
+} from './tools/trace-condition.js'
+import {
   dllExportProfileToolDefinition,
   createDllExportProfileHandler,
 } from './tools/dll-export-profile.js'
@@ -111,6 +144,18 @@ import {
   triageWorkflowToolDefinition,
   createTriageWorkflowHandler
 } from './workflows/triage.js'
+import {
+  analyzeAutoWorkflowToolDefinition,
+  createAnalyzeAutoWorkflowHandler,
+} from './workflows/analyze-auto.js'
+import {
+  analyzeWorkflowPromoteToolDefinition,
+  analyzeWorkflowStartToolDefinition,
+  analyzeWorkflowStatusToolDefinition,
+  createAnalyzeWorkflowPromoteHandler,
+  createAnalyzeWorkflowStartHandler,
+  createAnalyzeWorkflowStatusHandler,
+} from './workflows/analyze-pipeline.js'
 import {
   reconstructWorkflowToolDefinition,
   createReconstructWorkflowHandler
@@ -140,6 +185,10 @@ import {
   createReportGenerateHandler
 } from './tools/report-generate.js'
 import {
+  workflowSummarizeToolDefinition,
+  createWorkflowSummarizeHandler,
+} from './workflows/summarize.js'
+import {
   toolHelpToolDefinition,
   createToolHelpHandler
 } from './tools/tool-help.js'
@@ -159,6 +208,10 @@ import {
   systemSetupGuideToolDefinition,
   createSystemSetupGuideHandler,
 } from './tools/system-setup-guide.js'
+import {
+  setupRemediateToolDefinition,
+  createSetupRemediateHandler,
+} from './tools/setup-remediate.js'
 import {
   dynamicDependenciesToolDefinition,
   createDynamicDependenciesHandler
@@ -227,6 +280,10 @@ import {
   codeFunctionsSearchToolDefinition,
   createCodeFunctionsSearchHandler
 } from './tools/code-functions-search.js'
+import {
+  codeXrefsAnalyzeToolDefinition,
+  createCodeXrefsAnalyzeHandler,
+} from './tools/code-xrefs-analyze.js'
 import {
   codeFunctionDecompileToolDefinition,
   createCodeFunctionDecompileHandler
@@ -307,6 +364,26 @@ import {
   moduleReconstructionReviewWorkflowToolDefinition,
   createModuleReconstructionReviewWorkflowHandler,
 } from './workflows/module-reconstruction-review.js'
+import {
+  angrAnalyzeToolDefinition,
+  createAngrAnalyzeHandler,
+  graphvizRenderToolDefinition,
+  createGraphvizRenderHandler,
+  pandaInspectToolDefinition,
+  createPandaInspectHandler,
+  qilingInspectToolDefinition,
+  createQilingInspectHandler,
+  retdecDecompileToolDefinition,
+  createRetDecDecompileHandler,
+  rizinAnalyzeToolDefinition,
+  createRizinAnalyzeHandler,
+  upxInspectToolDefinition,
+  createUPXInspectHandler,
+  wineRunToolDefinition,
+  createWineRunHandler,
+  yaraXScanToolDefinition,
+  createYaraXScanHandler,
+} from './tools/docker-backend-tools.js'
 
 // Export public API
 export { MCPServer } from './server.js'
@@ -325,12 +402,23 @@ async function main() {
     const database = new DatabaseManager(config.database.path)
     const policyGuard = new PolicyGuard(config.logging.auditPath)
     const cacheManager = new CacheManager(config.cache.root, database)
-    const jobQueue = new JobQueue()
-    const analysisTaskRunner = new AnalysisTaskRunner(jobQueue, database, workspaceManager, cacheManager)
+    const storageManager = new StorageManager({
+      root: config.api.storageRoot,
+      maxFileSize: config.api.maxFileSize,
+      retentionDays: config.api.retentionDays,
+    })
+    await storageManager.initialize()
+    const jobQueue = new JobQueue(database)
+    const analysisTaskRunner = new AnalysisTaskRunner(jobQueue, database, workspaceManager, cacheManager, policyGuard)
     analysisTaskRunner.start()
 
     // Create and start MCP server
-    const server = new MCPServer(config)
+    const server = new MCPServer(config, {
+      workspaceManager,
+      database,
+      policyGuard,
+      storageManager,
+    })
 
     // Register tools
     server.registerPrompt(
@@ -350,6 +438,11 @@ async function main() {
     server.registerTool(
       sampleIngestToolDefinition,
       createSampleIngestHandler(workspaceManager, database, policyGuard)
+    )
+
+    server.registerTool(
+      sampleRequestUploadToolDefinition,
+      createSampleRequestUploadHandler(database, { apiPort: config.api.port })
     )
 
     // Task 8.2: sample.profile.get tool
@@ -373,6 +466,16 @@ async function main() {
     server.registerTool(
       artifactsDiffToolDefinition,
       createArtifactsDiffHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      artifactDownloadToolDefinition,
+      createArtifactDownloadHandler(database, { storageManager, workspaceManager })
+    )
+
+    // LLM-Assisted Analysis: llm.analyze tool - Unified LLM analysis interface
+    server.registerTool(
+      llmAnalyzeToolDefinition,
+      createLlmAnalyzeHandler(server)
     )
 
     // Task 8.3: pe.fingerprint tool
@@ -409,13 +512,18 @@ async function main() {
     // Task 8.6: strings.extract tool
     server.registerTool(
       stringsExtractToolDefinition,
-      createStringsExtractHandler(workspaceManager, database, cacheManager)
+      createStringsExtractHandler(workspaceManager, database, cacheManager, jobQueue)
     )
 
     // Task 8.7: strings.floss.decode tool
     server.registerTool(
       stringsFlossDecodeToolDefinition,
-      createStringsFlossDecodeHandler(workspaceManager, database, cacheManager)
+      createStringsFlossDecodeHandler(workspaceManager, database, cacheManager, jobQueue)
+    )
+
+    server.registerTool(
+      analysisContextLinkToolDefinition,
+      createAnalysisContextLinkHandler(workspaceManager, database, cacheManager, {}, jobQueue)
     )
 
     // Task 8.8: yara.scan tool
@@ -454,7 +562,19 @@ async function main() {
     )
     server.registerTool(
       binaryRoleProfileToolDefinition,
-      createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)
+      createBinaryRoleProfileHandler(workspaceManager, database, cacheManager, undefined, jobQueue)
+    )
+    server.registerTool(
+      cryptoIdentifyToolDefinition,
+      createCryptoIdentifyHandler(workspaceManager, database, cacheManager, {}, jobQueue)
+    )
+    server.registerTool(
+      breakpointSmartToolDefinition,
+      createBreakpointSmartHandler(workspaceManager, database, cacheManager)
+    )
+    server.registerTool(
+      traceConditionToolDefinition,
+      createTraceConditionHandler(workspaceManager, database, cacheManager)
     )
     server.registerTool(
       dllExportProfileToolDefinition,
@@ -472,7 +592,57 @@ async function main() {
     // Task 9.1: workflow.triage - Quick triage workflow
     server.registerTool(
       triageWorkflowToolDefinition,
-      createTriageWorkflowHandler(workspaceManager, database, cacheManager)
+      createTriageWorkflowHandler(workspaceManager, database, cacheManager, {
+        analyzeStart: createAnalyzeWorkflowStartHandler(
+          workspaceManager,
+          database,
+          cacheManager,
+          policyGuard,
+          server,
+          {},
+          jobQueue
+        ),
+      })
+    )
+    server.registerTool(
+      analyzeWorkflowStartToolDefinition,
+      createAnalyzeWorkflowStartHandler(
+        workspaceManager,
+        database,
+        cacheManager,
+        policyGuard,
+        server,
+        {},
+        jobQueue
+      )
+    )
+    server.registerTool(
+      analyzeWorkflowStatusToolDefinition,
+      createAnalyzeWorkflowStatusHandler(database, {}, jobQueue)
+    )
+    server.registerTool(
+      analyzeWorkflowPromoteToolDefinition,
+      createAnalyzeWorkflowPromoteHandler(
+        workspaceManager,
+        database,
+        cacheManager,
+        policyGuard,
+        server,
+        {},
+        jobQueue
+      )
+    )
+    server.registerTool(
+      analyzeAutoWorkflowToolDefinition,
+      createAnalyzeAutoWorkflowHandler(
+        workspaceManager,
+        database,
+        cacheManager,
+        policyGuard,
+        server,
+        {},
+        jobQueue
+      )
     )
 
     // Task 40.5.1: workflow.reconstruct - End-to-end source reconstruction workflow
@@ -530,6 +700,10 @@ async function main() {
       reportSummarizeToolDefinition,
       createReportSummarizeHandler(workspaceManager, database, cacheManager)
     )
+    server.registerTool(
+      workflowSummarizeToolDefinition,
+      createWorkflowSummarizeHandler(workspaceManager, database, cacheManager, server)
+    )
 
     // Task 24.x: report.generate - Generate stored multi-stage analysis report artifact
     server.registerTool(
@@ -546,7 +720,7 @@ async function main() {
     // Task execution controls: query/cancel/sweep analysis jobs
     server.registerTool(
       taskStatusToolDefinition,
-      createTaskStatusHandler(jobQueue)
+      createTaskStatusHandler(jobQueue, database)
     )
     server.registerTool(
       taskCancelToolDefinition,
@@ -564,13 +738,23 @@ async function main() {
     )
 
     // Task 40.5.2: system.health - Aggregated HA readiness health check
+    const systemHealthHandler = createSystemHealthHandler(workspaceManager, database, { cacheManager })
+    const systemSetupGuideHandler = createSystemSetupGuideHandler()
+
     server.registerTool(
       systemHealthToolDefinition,
-      createSystemHealthHandler(workspaceManager, database, { cacheManager })
+      systemHealthHandler
     )
     server.registerTool(
       systemSetupGuideToolDefinition,
-      createSystemSetupGuideHandler()
+      systemSetupGuideHandler
+    )
+    server.registerTool(
+      setupRemediateToolDefinition,
+      createSetupRemediateHandler(workspaceManager, database, cacheManager, {
+        healthHandler: systemHealthHandler,
+        setupGuideHandler: systemSetupGuideHandler,
+      })
     )
 
     // Task 18.22: dynamic.dependencies - probe dynamic-analysis component readiness
@@ -615,6 +799,43 @@ async function main() {
       createFridaTraceCaptureHandler(workspaceManager, database)
     )
 
+    server.registerTool(
+      graphvizRenderToolDefinition,
+      createGraphvizRenderHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      rizinAnalyzeToolDefinition,
+      createRizinAnalyzeHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      yaraXScanToolDefinition,
+      createYaraXScanHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      upxInspectToolDefinition,
+      createUPXInspectHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      retdecDecompileToolDefinition,
+      createRetDecDecompileHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      angrAnalyzeToolDefinition,
+      createAngrAnalyzeHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      qilingInspectToolDefinition,
+      createQilingInspectHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      pandaInspectToolDefinition,
+      createPandaInspectHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      wineRunToolDefinition,
+      createWineRunHandler(workspaceManager, database)
+    )
+
     // P1 enhancement: ATT&CK mapping from correlated static indicators
     server.registerTool(
       attackMapToolDefinition,
@@ -657,6 +878,10 @@ async function main() {
     server.registerTool(
       codeFunctionsSearchToolDefinition,
       createCodeFunctionsSearchHandler(workspaceManager, database)
+    )
+    server.registerTool(
+      codeXrefsAnalyzeToolDefinition,
+      createCodeXrefsAnalyzeHandler(workspaceManager, database, cacheManager)
     )
 
     // Task 15.4: code.function.decompile - Decompile specific function

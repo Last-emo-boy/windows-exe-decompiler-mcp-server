@@ -195,6 +195,35 @@ export interface CrossReference {
   from_function?: string;
 }
 
+export interface CrossReferenceTarget {
+  query: string;
+  resolved_address?: string;
+  resolved_name?: string;
+}
+
+export interface CrossReferenceNode {
+  function: string;
+  address: string;
+  depth: number;
+  relation: string;
+  reference_types: string[];
+  reference_addresses: string[];
+  matched_values: string[];
+}
+
+export interface CrossReferenceAnalysis {
+  target_type: 'function' | 'api' | 'string' | 'data';
+  target: CrossReferenceTarget;
+  inbound: CrossReferenceNode[];
+  outbound: CrossReferenceNode[];
+  direct_xrefs: CrossReference[];
+  truncated: boolean;
+  limits: {
+    depth: number;
+    limit: number;
+  };
+}
+
 /**
  * Decompiled function result
  * Requirements: 10.1, 10.2, 10.3, 10.4
@@ -2415,6 +2444,74 @@ export class DecompilerWorker {
     );
   }
 
+  async analyzeCrossReferences(
+    sampleId: string,
+    options: {
+      targetType: 'function' | 'api' | 'string' | 'data'
+      query: string
+      depth?: number
+      limit?: number
+      timeout?: number
+    }
+  ): Promise<CrossReferenceAnalysis> {
+    if (!ghidraConfig.isValid) {
+      throw new Error(
+        'Ghidra is not properly configured. Please set GHIDRA_PATH or GHIDRA_INSTALL_DIR environment variable.'
+      )
+    }
+
+    const sample = this.database.findSample(sampleId)
+    if (!sample) {
+      throw new Error(`Sample not found: ${sampleId}`)
+    }
+
+    const resolved = this.resolveGhidraAnalysisForCapability(sampleId, 'function_index')
+    await this.workspaceManager.getWorkspace(sampleId)
+    const samplePath = await this.resolveSamplePathForSample(sampleId)
+    if (!fs.existsSync(samplePath)) {
+      throw new Error(`Sample file not found: ${samplePath}`)
+    }
+
+    const depth = Math.max(1, Math.min(options.depth || 1, 3))
+    const limit = Math.max(1, Math.min(options.limit || 20, 100))
+    const timeout = options.timeout || 30000
+
+    return this.runWithProjectLockRetry(
+      'Cross-reference analysis',
+      async () => {
+        const output = await this.executeCrossReferenceScript(
+          resolved.projectPath,
+          resolved.projectKey,
+          samplePath,
+          options.targetType,
+          options.query,
+          depth,
+          limit,
+          timeout,
+          sampleId
+        )
+
+        const result = this.parseCrossReferenceOutput(
+          output.stdout,
+          output.stderr,
+          output.diagnostics
+        )
+        if ('error' in result) {
+          throw result.diagnostics
+            ? new GhidraOutputParseError(result.error as string, result.diagnostics)
+            : new Error(result.error as string)
+        }
+
+        return result as CrossReferenceAnalysis
+      },
+      {
+        sampleId,
+        targetType: options.targetType,
+        query: options.query,
+      }
+    )
+  }
+
   /**
    * Decompile a specific function
    * 
@@ -2691,6 +2788,83 @@ export class DecompilerWorker {
     }
 
     return normalized;
+  }
+
+  private normalizeCrossReferenceNodes(raw: unknown): CrossReferenceNode[] {
+    if (!Array.isArray(raw)) {
+      return [];
+    }
+
+    const normalized: CrossReferenceNode[] = []
+    const seen = new Set<string>()
+    for (const item of raw) {
+      if (!item || typeof item !== 'object') {
+        continue
+      }
+      const typed = item as Record<string, unknown>
+      const address = typeof typed.address === 'string' ? typed.address : ''
+      const relation = typeof typed.relation === 'string' ? typed.relation : 'reference'
+      const key = `${address}|${relation}|${Number(typed.depth || 0)}`
+      if (!address || seen.has(key)) {
+        continue
+      }
+      seen.add(key)
+      normalized.push({
+        function: typeof typed.function === 'string' ? typed.function : 'unknown',
+        address,
+        depth: Number(typed.depth || 0),
+        relation,
+        reference_types: this.normalizeStringArray(typed.reference_types),
+        reference_addresses: this.normalizeStringArray(typed.reference_addresses),
+        matched_values: this.normalizeStringArray(typed.matched_values),
+      })
+    }
+
+    return normalized
+  }
+
+  private normalizeCrossReferenceAnalysis(raw: unknown): CrossReferenceAnalysis {
+    const typed = raw as Record<string, unknown>
+    const targetRecord =
+      typed.target && typeof typed.target === 'object'
+        ? (typed.target as Record<string, unknown>)
+        : {}
+
+    const targetType =
+      typed.target_type === 'function' ||
+      typed.target_type === 'api' ||
+      typed.target_type === 'string' ||
+      typed.target_type === 'data'
+        ? typed.target_type
+        : 'function'
+
+    const limitsRecord =
+      typed.limits && typeof typed.limits === 'object'
+        ? (typed.limits as Record<string, unknown>)
+        : {}
+
+    return {
+      target_type: targetType,
+      target: {
+        query: typeof targetRecord.query === 'string' ? targetRecord.query : '',
+        resolved_address:
+          typeof targetRecord.resolved_address === 'string'
+            ? targetRecord.resolved_address
+            : undefined,
+        resolved_name:
+          typeof targetRecord.resolved_name === 'string'
+            ? targetRecord.resolved_name
+            : undefined,
+      },
+      inbound: this.normalizeCrossReferenceNodes(typed.inbound),
+      outbound: this.normalizeCrossReferenceNodes(typed.outbound),
+      direct_xrefs: this.normalizeCrossReferences(typed.direct_xrefs),
+      truncated: Boolean(typed.truncated),
+      limits: {
+        depth: Number(limitsRecord.depth || 1),
+        limit: Number(limitsRecord.limit || 20),
+      },
+    }
   }
 
   private normalizeGhidraFunction(raw: unknown): GhidraFunction | null {
@@ -3293,6 +3467,57 @@ export class DecompilerWorker {
     );
   }
 
+  private async executeCrossReferenceScript(
+    projectPath: string,
+    projectKey: string,
+    samplePath: string,
+    targetType: 'function' | 'api' | 'string' | 'data',
+    query: string,
+    depth: number,
+    limit: number,
+    timeout: number,
+    sampleId?: string
+  ): Promise<GhidraCommandOutput> {
+    const command = ghidraConfig.analyzeHeadlessPath
+    const logFilePath = sampleId
+      ? this.buildGhidraCommandLogPath(sampleId, 'analyze_cross_references', projectKey)
+      : undefined
+    const ghidraRuntimeLogPath = sampleId
+      ? this.buildGhidraRuntimeLogPath(sampleId, 'analyze_cross_references', projectKey)
+      : undefined
+    const args = [
+      projectPath,
+      projectKey,
+      '-process', path.basename(samplePath),
+      '-readOnly',
+      '-scriptPath', ghidraConfig.scriptsDir,
+      '-postScript', 'AnalyzeCrossReferences.java', targetType, query, String(depth), String(limit),
+      '-noanalysis',
+      ...(ghidraRuntimeLogPath ? ['-log', ghidraRuntimeLogPath] : []),
+    ]
+
+    logger.debug(
+      {
+        command,
+        args,
+        timeout,
+      },
+      'Executing cross-reference analysis post-script'
+    )
+
+    return this.runGhidraCommand(
+      command,
+      args,
+      projectPath,
+      timeout,
+      undefined,
+      `E_TIMEOUT: Cross-reference analysis exceeded timeout of ${timeout}ms`,
+      'Cross-reference analysis failed',
+      logFilePath,
+      ghidraRuntimeLogPath
+    )
+  }
+
   private parseSearchOutput(
     output: string,
     stderr: string,
@@ -3413,6 +3638,52 @@ export class DecompilerWorker {
         error: `Failed to parse function search output: ${errorMessage}`,
         diagnostics: normalizedDiagnostics,
       };
+    }
+  }
+
+  private parseCrossReferenceOutput(
+    output: string,
+    stderr: string,
+    diagnostics?: GhidraProcessDiagnostics
+  ): CrossReferenceAnalysis | ParsedGhidraError {
+    try {
+      const jsonMatch = output.match(/\{[\s\S]*\}/)
+      if (!jsonMatch) {
+        throw new GhidraOutputParseError(
+          this.buildNoJsonOutputMessage('code.xrefs.analyze', output, stderr, diagnostics),
+          diagnostics || this.buildSyntheticDiagnostics(output, stderr)
+        )
+      }
+
+      const parsed = JSON.parse(jsonMatch[0]) as Record<string, unknown>
+      if (parsed.error) {
+        return {
+          error: String(parsed.error),
+          diagnostics: diagnostics || this.buildSyntheticDiagnostics(output, stderr),
+        }
+      }
+
+      if (!parsed.target_type || !parsed.target) {
+        throw new Error('Invalid cross-reference output: missing target metadata')
+      }
+
+      return this.normalizeCrossReferenceAnalysis(parsed)
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      const normalizedDiagnostics =
+        diagnostics || getGhidraDiagnostics(error) || this.buildSyntheticDiagnostics(output, stderr)
+      logger.error(
+        {
+          error: errorMessage,
+          outputPreview: output.substring(0, 500),
+          stderrPreview: stderr.substring(0, 500),
+        },
+        'Failed to parse cross-reference output'
+      )
+      return {
+        error: `Failed to parse cross-reference output: ${errorMessage}`,
+        diagnostics: normalizedDiagnostics,
+      }
     }
   }
 

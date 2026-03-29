@@ -49,6 +49,8 @@ export function buildFunctionExplanationReviewPromptText(
     '- assumptions',
     '- evidence_used',
     '- rewrite_guidance',
+    '- If no explanation is evidence-grounded, return {"explanations":[]} instead of filling speculative content.',
+    '- Do not wrap the JSON in markdown or prose.',
     '',
     'The client can use your JSON output as a post-processing explanation layer over reconstruct/export results.',
     '',

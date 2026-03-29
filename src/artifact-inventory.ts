@@ -37,6 +37,9 @@ export function inferUntrackedArtifactType(relativePath: string): string {
   if (normalized.includes('gaps')) {
     return 'gaps'
   }
+  if (normalized.includes('summary')) {
+    return 'summary'
+  }
   if (normalized.includes('report')) {
     return 'report'
   }

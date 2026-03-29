@@ -62,6 +62,28 @@ import {
   mergeSetupActions,
 } from '../setup-guidance.js'
 import { PollingGuidanceSchema, buildPollingGuidance } from '../polling-guidance.js'
+import {
+  AnalysisIntentDepthSchema,
+  BackendPolicySchema,
+  BackendRoutingMetadataSchema,
+  buildIntentBackendPlan,
+  mergeRoutingMetadata,
+  selectedBackendTools,
+} from '../intent-routing.js'
+import {
+  CoverageEnvelopeSchema,
+  buildBudgetDowngradeReasons,
+  buildCoverageEnvelope,
+  classifySampleSizeTier,
+  deriveAnalysisBudgetProfile,
+  mergeCoverageEnvelope,
+} from '../analysis-coverage.js'
+import { resolveAnalysisBackends } from '../static-backend-discovery.js'
+import {
+  createAngrAnalyzeHandler,
+  createRetDecDecompileHandler,
+  createRizinAnalyzeHandler,
+} from '../tools/docker-backend-tools.js'
 
 const TOOL_NAME = 'workflow.reconstruct'
 const TOOL_VERSION = '0.1.5'
@@ -170,6 +192,16 @@ export const ReconstructWorkflowInputSchema = z.object({
     .boolean()
     .default(true)
     .describe('When all export paths fail, still return runtime/plan as partial output'),
+  depth: AnalysisIntentDepthSchema
+    .default('balanced')
+    .describe('Controls how aggressively safe corroborating recovery backends are auto-selected.'),
+  backend_policy: BackendPolicySchema
+    .default('auto')
+    .describe('Controls whether newer installed backends are auto-preferred, suppressed, or only selected when reconstruction quality is weak.'),
+  allow_transformations: z
+    .boolean()
+    .default(false)
+    .describe('Reserved for future transform-capable reverse workflows. Keep false for normal artifact-first reconstruction.'),
   reuse_cached: z
     .boolean()
     .default(true)
@@ -348,6 +380,135 @@ const PreflightSummarySchema = z.object({
   role_strategy: RoleAwareStrategySchema.nullable(),
 })
 
+const AlternateBackendSummarySchema = z.object({
+  rizin: z.any().optional(),
+  angr: z.any().optional(),
+  retdec: z.any().optional(),
+})
+
+function buildReconstructCoverage(params: {
+  sampleSize: number
+  requestedDepth: z.infer<typeof AnalysisIntentDepthSchema>
+  queued: boolean
+  selectedPath?: 'native' | 'dotnet'
+  degraded?: boolean
+  validateBuild: boolean
+  runHarness: boolean
+  exportSummary?: z.infer<typeof ExportSummarySchema> | null
+  stageStatus?: {
+    export_primary: 'ok' | 'failed' | 'skipped'
+    plan: 'ok' | 'failed' | 'skipped'
+  }
+}): z.infer<typeof CoverageEnvelopeSchema> {
+  const sampleSizeTier = classifySampleSizeTier(params.sampleSize)
+  const analysisBudgetProfile = deriveAnalysisBudgetProfile(params.requestedDepth, sampleSizeTier)
+
+  return buildCoverageEnvelope({
+    coverageLevel: 'reconstruction',
+    completionState: params.queued
+      ? 'queued'
+      : params.degraded
+        ? 'degraded'
+        : analysisBudgetProfile === 'deep'
+          ? 'completed'
+          : 'bounded',
+    sampleSizeTier,
+    analysisBudgetProfile,
+    downgradeReasons: buildBudgetDowngradeReasons({
+      requestedDepth: params.requestedDepth,
+      sampleSizeTier,
+      analysisBudgetProfile,
+      extraReasons: [
+        !params.validateBuild
+          ? 'Build validation was intentionally skipped or bounded for this reconstruction run.'
+          : null,
+        !params.runHarness
+          ? 'Harness execution was intentionally skipped or bounded for this reconstruction run.'
+          : null,
+      ],
+    }),
+    coverageGaps: [
+      params.queued
+        ? {
+            domain: 'reconstruction_export',
+            status: 'queued',
+            reason: 'Reconstruction has been queued but export artifacts are not ready yet.',
+          }
+        : null,
+      !params.validateBuild
+        ? {
+            domain: 'build_validation',
+            status: 'skipped',
+            reason: 'Build validation was not requested for this reconstruction run.',
+          }
+        : null,
+      !params.runHarness
+        ? {
+            domain: 'runtime_verification',
+            status: 'skipped',
+            reason: 'Harness execution was not requested for this reconstruction run.',
+          }
+        : null,
+      params.degraded
+        ? {
+            domain: 'reconstruction_export',
+            status: 'degraded',
+            reason: 'Primary reconstruction path failed or returned degraded artifacts.',
+          }
+        : null,
+      {
+        domain: 'dynamic_behavior',
+        status: 'missing',
+        reason: 'workflow.reconstruct does not verify live runtime behavior by itself.',
+      },
+    ],
+    confidenceByDomain: {
+      function_index: params.queued ? 0.2 : 0.7,
+      reconstruction:
+        params.queued ? 0.15 : params.degraded ? 0.45 : params.exportSummary ? 0.78 : 0.4,
+      decompilation: params.queued ? 0.1 : params.selectedPath === 'native' ? 0.7 : 0.6,
+      dynamic_behavior: params.runHarness ? 0.35 : 0.1,
+    },
+    knownFindings: [
+      params.selectedPath ? `Reconstruction routed through ${params.selectedPath}.` : null,
+      !params.queued && params.exportSummary?.export_root
+        ? `Export artifacts were written under ${params.exportSummary.export_root}.`
+        : null,
+    ],
+    suspectedFindings: [
+      params.degraded ? 'Primary reconstruction path required degraded or fallback handling.' : null,
+      params.stageStatus?.plan === 'failed' ? 'Planning quality was degraded before export.' : null,
+    ],
+    unverifiedAreas: [
+      !params.validateBuild ? 'Build validation remains unverified.' : null,
+      !params.runHarness ? 'Harness or runtime verification remains unverified.' : null,
+      'Live runtime behavior remains unverified outside reconstruction artifacts.',
+    ],
+    upgradePaths: [
+      {
+        tool: params.queued ? 'task.status' : 'artifact.read',
+        purpose: params.queued
+          ? 'Wait for reconstruction completion.'
+          : 'Inspect reconstructed artifacts and unresolved gaps.',
+        closes_gaps: params.queued ? ['reconstruction_export'] : ['reconstruction_export'],
+        expected_coverage_gain: params.queued
+          ? 'Returns completed reconstruction output when the queued job finishes.'
+          : 'Shows exact export manifests, gaps, and validation notes.',
+        cost_tier: 'low',
+      },
+      !params.runHarness
+        ? {
+            tool: 'sandbox.execute',
+            purpose: 'Add bounded runtime confirmation after reconstruction.',
+            closes_gaps: ['runtime_verification', 'dynamic_behavior'],
+            expected_coverage_gain: 'Provides execution-oriented evidence that reconstruction alone cannot confirm.',
+            cost_tier: 'medium',
+          }
+        : null,
+    ],
+  })
+}
+
 const ReconstructQueuedDataSchema = z.object({
   job_id: z.string(),
   status: z.literal('queued'),
@@ -356,7 +517,10 @@ const ReconstructQueuedDataSchema = z.object({
   requested_path: z.enum(['auto', 'native', 'dotnet']),
   progress: z.number().int().min(0).max(100),
   polling_guidance: PollingGuidanceSchema.nullable(),
-})
+  result_mode: z.literal('queued'),
+  recommended_next_tools: z.array(z.string()),
+  next_actions: z.array(z.string()),
+}).extend(CoverageEnvelopeSchema.shape).extend(BackendRoutingMetadataSchema.shape)
 
 const ReconstructCompletedDataSchema = z.object({
   sample_id: z.string(),
@@ -380,8 +544,12 @@ const ReconstructCompletedDataSchema = z.object({
   preflight: PreflightSummarySchema.optional(),
   plan: PlanSummarySchema.nullable(),
   export: ExportSummarySchema.nullable(),
+  alternate_backends: AlternateBackendSummarySchema.optional(),
   notes: z.array(z.string()),
-})
+  result_mode: z.literal('completed'),
+  recommended_next_tools: z.array(z.string()),
+  next_actions: z.array(z.string()),
+}).extend(CoverageEnvelopeSchema.shape).extend(BackendRoutingMetadataSchema.shape)
 
 export const ReconstructWorkflowOutputSchema = z.object({
   ok: z.boolean(),
@@ -410,7 +578,17 @@ export type ReconstructWorkflowOutput = z.infer<typeof ReconstructWorkflowOutput
 export const reconstructWorkflowToolDefinition: ToolDefinition = {
   name: TOOL_NAME,
   description:
-    'Run a complete source-reconstruction workflow with auto routing (native/.NET), binary/language preflight profiling, optional function-index recovery, planning, export, and cache observability.',
+    'Run the main source-like reconstruction workflow with auto routing, binary/language preflight, optional function-index recovery, planning, export, and cache observability. ' +
+    'If the user has not picked a workflow yet, prefer workflow.analyze.auto so the server can route by intent first. ' +
+    'Use this after sample registration when you want one orchestrated deep-analysis path instead of calling many leaf tools manually. ' +
+    'Do not use this as a health check or before the sample is ingested. ' +
+    'Read coverage_level, completion_state, coverage_gaps, and upgrade_paths to distinguish queued, bounded, degraded, and fully completed reconstruction output. ' +
+    '\n\nDecision guide:\n' +
+    '- Use when: you want one-shot reconstruction and export across native or .NET paths.\n' +
+    '- Do not use when: you only need quick profiling, string/Xref correlation, or a single leaf artifact.\n' +
+    '- Intermediate step: use analysis.context.link, code.xrefs.analyze, or code.function.cfg(format=dot|mermaid) first when you need bounded indicator-to-function or graph context before paying reconstruction cost.\n' +
+    '- Typical next step: if queued, poll task.status(job_id); if completed, inspect export artifacts or continue with module/function review tools.\n' +
+    '- Common mistake: starting reconstruct before the sample exists or without waiting for queued completion.',
   inputSchema: ReconstructWorkflowInputSchema,
   outputSchema: ReconstructWorkflowOutputSchema,
 }
@@ -497,6 +675,10 @@ interface ReconstructWorkflowDependencies {
   comRoleProfileHandler?: (args: ToolArgs) => Promise<WorkerResult>
   rustBinaryAnalyzeHandler?: (args: ToolArgs) => Promise<WorkerResult>
   functionIndexRecoverHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  rizinAnalyzeHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  angrAnalyzeHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  retdecDecompileHandler?: (args: ToolArgs) => Promise<WorkerResult>
+  resolveBackends?: typeof resolveAnalysisBackends
 }
 
 function normalizeError(error: unknown): string {
@@ -712,6 +894,10 @@ function summarizeFunctionIndexRecovery(data: FunctionIndexRecoveryData) {
   }
 }
 
+function summarizeAlternateBackendData(data: unknown) {
+  return data ?? null
+}
+
 export function createReconstructWorkflowHandler(
   workspaceManager: WorkspaceManager,
   database: DatabaseManager,
@@ -750,6 +936,15 @@ export function createReconstructWorkflowHandler(
   const functionIndexRecoverHandler =
     dependencies?.functionIndexRecoverHandler ||
     createFunctionIndexRecoverWorkflowHandler(workspaceManager, database, cacheManager)
+  const rizinAnalyzeHandler =
+    dependencies?.rizinAnalyzeHandler ||
+    createRizinAnalyzeHandler(workspaceManager, database)
+  const angrAnalyzeHandler =
+    dependencies?.angrAnalyzeHandler ||
+    createAngrAnalyzeHandler(workspaceManager, database)
+  const retdecDecompileHandler =
+    dependencies?.retdecDecompileHandler ||
+    createRetDecDecompileHandler(workspaceManager, database)
 
   return async (args: ToolArgs): Promise<WorkerResult> => {
     const input = ReconstructWorkflowInputSchema.parse(args)
@@ -763,12 +958,21 @@ export function createReconstructWorkflowHandler(
           errors: [`Sample not found: ${input.sample_id}`],
         }
       }
+      const sampleSizeTier = classifySampleSizeTier(sample.size || 0)
+      const analysisBudgetProfile = deriveAnalysisBudgetProfile(input.depth, sampleSizeTier)
 
       if (jobQueue) {
         const jobTimeoutMs = Math.max(
           input.build_timeout_ms + input.run_timeout_ms + 45 * 60 * 1000,
           60 * 60 * 1000
         )
+        const queuedRoutingMetadata = buildIntentBackendPlan({
+          goal: 'reverse',
+          depth: input.depth,
+          backendPolicy: input.backend_policy,
+          allowTransformations: input.allow_transformations,
+          readiness: (dependencies?.resolveBackends || resolveAnalysisBackends)(),
+        })
         const jobId = jobQueue.enqueue({
           type: 'static',
           tool: TOOL_NAME,
@@ -785,20 +989,38 @@ export function createReconstructWorkflowHandler(
 
         return {
           ok: true,
-          data: {
-            job_id: jobId,
-            status: 'queued',
-            tool: TOOL_NAME,
-            sample_id: input.sample_id,
-            requested_path: input.path,
-            progress: 0,
-            polling_guidance: buildPollingGuidance({
-              tool: TOOL_NAME,
-              status: 'queued',
-              progress: 0,
-              timeout_ms: jobTimeoutMs,
-            }),
-          },
+          data: mergeRoutingMetadata(
+            mergeCoverageEnvelope(
+              {
+                job_id: jobId,
+                status: 'queued',
+                tool: TOOL_NAME,
+                sample_id: input.sample_id,
+                requested_path: input.path,
+                progress: 0,
+                polling_guidance: buildPollingGuidance({
+                  tool: TOOL_NAME,
+                  status: 'queued',
+                  progress: 0,
+                  timeout_ms: jobTimeoutMs,
+                }),
+                result_mode: 'queued',
+                recommended_next_tools: ['task.status'],
+                next_actions: [
+                  'Wait for approximately the recommended polling interval before checking task.status again.',
+                  'Call task.status with the returned job_id until the reconstruct workflow completes, fails, or is cancelled.',
+                ],
+              },
+              buildReconstructCoverage({
+                sampleSize: sample.size || 0,
+                requestedDepth: input.depth,
+                queued: true,
+                validateBuild: input.validate_build,
+                runHarness: input.run_harness,
+              })
+            ),
+            queuedRoutingMetadata
+          ),
           metrics: {
             elapsed_ms: Date.now() - startTime,
             tool: TOOL_NAME,
@@ -1449,8 +1671,10 @@ export function createReconstructWorkflowHandler(
           requiredUserInputs,
           primaryExportResult.setupGuidance.requiredUserInputs
         )
+        const primaryExportErrors =
+          'errors' in primaryExportResult ? primaryExportResult.errors : ['unknown error']
         warnings.push(
-          `primary export(${primaryPath}) failed: ${(primaryExportResult.errors || ['unknown error']).join('; ')}`
+          `primary export(${primaryPath}) failed: ${primaryExportErrors.join('; ')}`
         )
         if (primaryExportResult.warnings.length > 0) {
           warnings.push(
@@ -1488,8 +1712,10 @@ export function createReconstructWorkflowHandler(
             requiredUserInputs,
             fallbackExportResult.setupGuidance.requiredUserInputs
           )
+          const fallbackExportErrors =
+            'errors' in fallbackExportResult ? fallbackExportResult.errors : ['unknown error']
           warnings.push(
-            `fallback export(${fallbackPath}) failed: ${(fallbackExportResult.errors || ['unknown error']).join('; ')}`
+            `fallback export(${fallbackPath}) failed: ${fallbackExportErrors.join('; ')}`
           )
           if (fallbackExportResult.warnings.length > 0) {
             warnings.push(
@@ -1582,30 +1808,165 @@ export function createReconstructWorkflowHandler(
         notes.push(`Harness validation: ${exportSummary.harness_validation_status}.`)
       }
 
-      const outputData = {
-        sample_id: input.sample_id,
-        selected_path: selectedPath,
-        degraded: stageStatus.export_primary !== 'ok' || stageStatus.plan === 'failed' || !exportSummary,
-        stage_status: stageStatus,
-        provenance,
-        selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
-        ghidra_execution: ghidraExecution,
-        runtime: summarizeRuntime(runtimeData),
-        preflight:
-          input.include_preflight || stageStatus.function_index_recovery !== 'skipped'
-            ? {
-                binary_profile: binaryProfileData,
-                dll_profile: dllProfileData,
-                com_profile: comProfileData,
-                rust_profile: rustProfileData ? summarizeRustPreflight(rustProfileData) : null,
-                function_index_recovery: functionIndexRecoveryData,
-                role_strategy: roleStrategy,
-              }
-            : undefined,
-        plan: planSummary,
-        export: exportSummary,
-        notes,
+      const routingMetadata = buildIntentBackendPlan({
+        goal: 'reverse',
+        depth: input.depth,
+        backendPolicy: input.backend_policy,
+        allowTransformations: input.allow_transformations,
+        readiness: (dependencies?.resolveBackends || resolveAnalysisBackends)(),
+        signals: {
+          weak_function_coverage:
+            selectedPath === 'native' &&
+            ((!hasReadyGhidraFunctionIndex && !functionIndexRecoveryApplied) ||
+              Boolean(
+                functionIndexRecoveryData &&
+                  functionIndexRecoveryData.recovered_function_count <
+                    Math.max(input.topk, 12)
+              )),
+          degraded_reconstruction:
+            selectedPath === 'native' &&
+            (stageStatus.export_primary !== 'ok' ||
+              stageStatus.plan === 'failed' ||
+              !exportSummary ||
+              planSummary?.feasibility === 'low' ||
+              exportSummary?.degraded_mode === true),
+          unresolved_control_flow:
+            selectedPath === 'native' &&
+            Boolean(
+              rustProfileData?.suspected_rust &&
+                rustProfileData.recovered_function_count < Math.max(input.topk * 2, 24)
+            ),
+        },
+      })
+
+      const selectedBackends = new Set(selectedBackendTools(routingMetadata))
+      let alternateBackends: Record<string, unknown> | undefined
+
+      if (selectedPath === 'native' && selectedBackends.size > 0) {
+        alternateBackends = {}
+
+        if (selectedBackends.has('rizin.analyze')) {
+          const rizinResult = await rizinAnalyzeHandler({
+            sample_id: input.sample_id,
+            operation: 'functions',
+            max_items: 20,
+            timeout_sec: 45,
+            persist_artifact: true,
+          })
+          if (rizinResult.ok && rizinResult.data) {
+            alternateBackends.rizin = summarizeAlternateBackendData(rizinResult.data)
+            notes.push('Rizin corroboration was used because baseline function coverage looked weak.')
+          } else {
+            warnings.push(
+              `rizin.analyze unavailable: ${(rizinResult.errors || ['unknown error']).join('; ')}`
+            )
+          }
+          if (rizinResult.warnings?.length) {
+            warnings.push(...rizinResult.warnings.map((item) => `rizin.analyze: ${item}`))
+          }
+        }
+
+        if (selectedBackends.has('angr.analyze')) {
+          const angrResult = await angrAnalyzeHandler({
+            sample_id: input.sample_id,
+            analysis: 'cfg_fast',
+            max_functions: 20,
+            timeout_sec: 90,
+            persist_artifact: true,
+          })
+          if (angrResult.ok && angrResult.data) {
+            alternateBackends.angr = summarizeAlternateBackendData(angrResult.data)
+            notes.push('angr CFGFast corroboration was used to cross-check weak or ambiguous function discovery.')
+          } else {
+            warnings.push(
+              `angr.analyze unavailable: ${(angrResult.errors || ['unknown error']).join('; ')}`
+            )
+          }
+          if (angrResult.warnings?.length) {
+            warnings.push(...angrResult.warnings.map((item) => `angr.analyze: ${item}`))
+          }
+        }
+
+        if (selectedBackends.has('retdec.decompile')) {
+          const retdecResult = await retdecDecompileHandler({
+            sample_id: input.sample_id,
+            output_format: 'plain',
+            timeout_sec: 180,
+            persist_artifact: true,
+          })
+          if (retdecResult.ok && retdecResult.data) {
+            alternateBackends.retdec = summarizeAlternateBackendData(retdecResult.data)
+            notes.push('RetDec alternate decompilation was generated because reconstruction quality was degraded.')
+          } else {
+            warnings.push(
+              `retdec.decompile unavailable: ${(retdecResult.errors || ['unknown error']).join('; ')}`
+            )
+          }
+          if (retdecResult.warnings?.length) {
+            warnings.push(...retdecResult.warnings.map((item) => `retdec.decompile: ${item}`))
+          }
+        }
+
+        if (Object.keys(alternateBackends).length === 0) {
+          alternateBackends = undefined
+        }
       }
+
+      const degraded = stageStatus.export_primary !== 'ok' || stageStatus.plan === 'failed' || !exportSummary
+      const outputData = mergeRoutingMetadata(
+        mergeCoverageEnvelope(
+          {
+            sample_id: input.sample_id,
+            selected_path: selectedPath,
+            degraded,
+            stage_status: stageStatus,
+            provenance,
+            selection_diffs: Object.keys(selectionDiffs).length > 0 ? selectionDiffs : undefined,
+            ghidra_execution: ghidraExecution,
+            runtime: summarizeRuntime(runtimeData),
+            preflight:
+              input.include_preflight || stageStatus.function_index_recovery !== 'skipped'
+                ? {
+                    binary_profile: binaryProfileData,
+                    dll_profile: dllProfileData,
+                    com_profile: comProfileData,
+                    rust_profile: rustProfileData ? summarizeRustPreflight(rustProfileData) : null,
+                    function_index_recovery: functionIndexRecoveryData,
+                    role_strategy: roleStrategy,
+                  }
+                : undefined,
+            plan: planSummary,
+            export: exportSummary,
+            alternate_backends: alternateBackends,
+            notes,
+            result_mode: 'completed' as const,
+            recommended_next_tools: [
+              'artifacts.list',
+              'artifact.read',
+              'code.module.review',
+            ],
+            next_actions: [
+              'Inspect export_root artifacts with artifacts.list or artifact.read.',
+              'Use code.module.review or function-level review tools when you want LLM-guided refinement over reconstructed output.',
+            ],
+          },
+          buildReconstructCoverage({
+            sampleSize: sample.size || 0,
+            requestedDepth: input.depth,
+            queued: false,
+            selectedPath,
+            degraded,
+            validateBuild: input.validate_build && analysisBudgetProfile === 'deep',
+            runHarness: input.run_harness && analysisBudgetProfile === 'deep',
+            exportSummary,
+            stageStatus: {
+              export_primary: stageStatus.export_primary,
+              plan: stageStatus.plan,
+            },
+          })
+        ),
+        routingMetadata
+      )
 
       await cacheManager.setCachedResult(cacheKey, outputData, CACHE_TTL_MS, sample.sha256)
 
