@@ -1,4 +1,4 @@
-﻿/**
+/**
  * report.summarize tool implementation
  * Generates quick triage report with summary, confidence, IOCs, evidence, and recommendations.
  */
@@ -17,7 +17,7 @@ import {
   createRustBinaryAnalyzeHandler,
 } from './rust-binary-analyze.js'
 import { StaticCapabilityTriageDataSchema } from './static-capability-triage.js'
-import { PEStructureAnalyzeDataSchema } from './pe-structure-analyze.js'
+import { PEStructureAnalyzeDataSchema } from '../plugins/pe-analysis/tools/pe-structure-analyze.js'
 import { CompilerPackerDetectDataSchema } from './compiler-packer-detect.js'
 import { createTriageWorkflowHandler } from '../workflows/triage.js'
 import { loadDynamicTraceEvidence, type DynamicTraceSummary } from '../dynamic-trace.js'

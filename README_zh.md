@@ -12,6 +12,11 @@
 - 运行时证据可回灌：静态证据、trace 导入、内存快照和语义 review 产物都能继续反灌到 reconstruct 和 report。
 - LLM 可深度介入：函数命名、函数解释、模块级重建 review 都已经是结构化 MCP workflow，而不是零散 prompt。
 - 适合长任务编排：长耗时 workflow 会返回 `job_id`、进度和 `polling_guidance`，方便客户端按建议 sleep/wait，而不是高频轮询浪费 token。
+- **分阶段非阻塞流水线**：分析按显式阶段组织（`fast_profile`、`enrich_static`、`function_map`、`reconstruct`、`dynamic_plan`、`dynamic_execute`、`summarize`），支持预览优先的工具合约和持久化运行状态。
+- **HTTP 文件服务**：内嵌 HTTP API（端口 18080），支持样本上传、产物下载、上传会话管理，API Key 认证。
+- **Web 实时监控面板**：`http://localhost:18080/dashboard` — 暗色主题，6 个标签页，展示工具、插件、样本、配置、系统资源和 SSE 事件流。
+- **SSE 实时事件**：`/api/v1/events` 实时推送分析进度、样本导入、服务器状态变更。
+- **插件 SDK**：15 个内置插件，热加载/卸载，第三方自动发现。
 
 ## 本轮新增的静态初筛能力
 
@@ -116,6 +121,8 @@
 - `sandbox.execute`
 - `dynamic.trace.import`
 - `dynamic.memory.import`
+- `dynamic.auto_hook` - 基于静态证据自动生成 Frida hook
+- `dynamic.memory_dump` - 运行时内存转储与模式扫描
 - `attack.map`
 - `ioc.export`
 - `report.summarize`
@@ -125,19 +132,55 @@
 - `artifacts.diff`
 - `tool.help`
 
+### Android / APK 分析
+
+- `apk.structure.analyze` - APK 清单、权限、组件提取
+- `apk.packer.detect` - APK 加壳/混淆检测
+- `dex.decompile` - DEX 转 Java 反编译（jadx）
+- `dex.classes.list` - DEX 类/方法枚举
+
+### 符号执行与 CrackMe
+
+- `symbolic.explore` - 基于 angr 的符号执行
+- `keygen.verify` - 注册机/许可证验证（Qiling/angr）
+- `constraint.solve` - Z3/angr 约束求解
+
+### 恶意软件分析
+
+- `malware.config.extract` - 恶意软件配置提取
+- `malware.classify` - 家族分类（YARA + capa + 行为）
+- `c2.extract` - C2 基础设施提取
+
+### 跨平台与可视化
+
+- `elf.macho.parse` - ELF/Mach-O 头部/段解析（Rizin）
+- `rizin.diff` - 二进制差异比较（函数/基本块级别）
+- `cfg.visualize` - 控制流图可视化（DOT/SVG/JSON）
+- `timeline.correlate` - 多源事件时间线关联
+- `cross_module.xref` - 跨模块交叉引用分析
+- `kb.search` - 知识库语义搜索
+
 ### 语义 review 与重建
 
-- `code.function.rename.prepare`
-- `code.function.rename.review`
-- `code.function.rename.apply`
-- `code.function.explain.prepare`
-- `code.function.explain.review`
-- `code.function.explain.apply`
-- `code.module.review.prepare`
-- `code.module.review`
-- `code.module.review.apply`
+- `code.function.rename.prepare`（已废弃，使用 `llm.analyze`）
+- `code.function.rename.review`（已废弃，使用 `llm.analyze`）
+- `code.function.rename.apply`（已废弃，使用 `llm.analyze`）
+- `code.function.explain.prepare`（已废弃，使用 `llm.analyze`）
+- `code.function.explain.review`（已废弃，使用 `llm.analyze`）
+- `code.function.explain.apply`（已废弃，使用 `llm.analyze`）
+- `code.module.review.prepare`（已废弃，使用 `llm.analyze`）
+- `code.module.review`（已废弃，使用 `llm.analyze`）
+- `code.module.review.apply`（已废弃，使用 `llm.analyze`）
 - `code.reconstruct.plan`
 - `code.reconstruct.export`
+
+### LLM 辅助分析
+
+- `llm.analyze` - 统一 LLM 分析接口（替代已废弃的三步骤工具）
+  - `task: 'summarize'` - 精简摘要
+  - `task: 'explain'` - 清晰解释
+  - `task: 'recommend'` - 可操作建议
+  - `task: 'review'` - 代码审查
 
 ## 高层 Workflow
 
@@ -350,7 +393,7 @@ pip install frida frida-tools
 
 ## 当前开发进度
 
-### 最新 Release: v1.0.0-beta.1
+### 最新 Release: v1.0.0-beta.2
 
 **稳定功能** (生产环境可用)：
 - PE 初筛与静态分析 (`static.capability.triage`, `pe.structure.analyze`, `compiler.packer.detect`)
@@ -359,18 +402,53 @@ pip install frida frida-tools
 - Rust 和 .NET 恢复路径
 - 源码风格重建，支持 LLM 辅助 review 层
 - 运行时证据导入与关联
+- Android/APK 分析 (`apk.structure.analyze`, `dex.decompile`, `dex.classes.list`, `apk.packer.detect`)
+- 符号执行与 CrackMe 工具 (`symbolic.explore`, `keygen.verify`, `constraint.solve`)
+- 恶意软件分析 (`malware.config.extract`, `malware.classify`, `c2.extract`)
+- 跨平台二进制解析 (`elf.macho.parse`, `rizin.diff`)
+- 可视化与关联 (`cfg.visualize`, `timeline.correlate`, `cross_module.xref`, `kb.search`)
+- Frida 动态 Instrumentation (`frida.runtime.instrument`, `frida.script.inject`, `frida.trace.capture`)
+- HTTP 文件服务 REST API（端口 18080）— 样本上传、产物 CRUD、SSE 事件
+- **Web 监控面板** (`http://localhost:18080/dashboard`) — 工具、插件、样本、配置、系统实时监控
+- **插件 SDK**：15 个内置插件，热加载/卸载，第三方自动发现
+- **生产基础设施**：限流、配置校验、分页、重试、批量分析、SBOM 生成
+- **SSE 实时事件**：Server-Sent Events 实时推送分析进度
 
-### 开发中 (beta 后续迭代)
+### 服务全景（Docker）
 
-**Frida 动态 Instrumentation** - 实现已完成，正在并入 v1 beta 线：
-- `frida.runtime.instrument` - Spawn 和 attach 模式 instrumentation
-- `frida.script.inject` - 预构建和自定义脚本注入
-- `frida.trace.capture` - 规范化 trace schema，支持过滤/聚合
-- 与 `dynamic.trace.import`, `report.generate`, `report.summarize` 完全集成
-- 101 个单元测试 + 集成测试覆盖
-- 完整文档见 `docs/EXAMPLES.md`
+Docker 部署时（`docker-compose up -d`），容器暴露：
 
-**测试覆盖**: 所有 101 个测试通过，包括 Frida instrumentation 套件。
+| 服务 | 访问方式 | 说明 |
+|------|----------|------|
+| MCP Server | stdio (`docker exec -i`) | 160 个工具、3 个 prompt、16 个 resource |
+| HTTP API | `http://localhost:18080/api/v1/*` | 样本/产物/上传/健康检查 REST API |
+| Web 面板 | `http://localhost:18080/dashboard` | 实时监控 SPA（6 标签页，暗色主题） |
+| SSE 事件 | `http://localhost:18080/api/v1/events` | 分析事件实时推送 |
+| 面板 API | `http://localhost:18080/api/v1/dashboard/*` | 7 个 JSON 端点 |
+
+### 内置插件（15 个）
+
+| 插件 | ID | 工具数 | 说明 |
+|------|----|--------|------|
+| Android / APK | `android` | 4 | APK 清单、DEX 反编译、加壳检测 |
+| 恶意软件分析 | `malware` | 4 | C2 提取、配置解析、家族分类、沙箱报告 |
+| CrackMe 自动化 | `crackme` | 4 | 验证定位、符号执行、补丁、注册机 |
+| 动态分析 | `dynamic` | 3 | 自动 Frida hook、trace 归因、内存转储 |
+| Frida Instrumentation | `frida` | 3 | 运行时 instrumentation、脚本注入、trace 采集 |
+| Ghidra 集成 | `ghidra` | 2 | 无头 Ghidra 分析与健康检查 |
+| 跨模块分析 | `cross-module` | 3 | 跨二进制比较、调用图、DLL 依赖树 |
+| 可视化 | `visualization` | 3 | HTML 报告、行为时间线、数据流图 |
+| 知识库 | `kb-collaboration` | 2 | 函数签名匹配、分析模板 |
+| PE 分析 | `pe-analysis` | 6 | PE 结构、导入、导出、指纹、pdata、符号恢复 |
+| 漏洞扫描 | `vuln-scanner` | 2 | 漏洞模式扫描与摘要 |
+| 威胁情报 | `threat-intel` | 2 | ATT&CK 映射与 IOC 导出 |
+| 调试会话 | `debug-session` | 6 | GDB/LLDB 调试会话管理 |
+| 内存取证 | `memory-forensics` | 6 | 内存转储分析、volatility 集成 |
+| 可观测性 | `observability` | 1 | 工具调用 hook 追踪与指标 |
+
+插件通过 `PLUGINS` 环境变量控制（`*` = 全部, `android,malware` = 指定, `-dynamic` = 排除）。详见 [`docs/PLUGINS.md`](./docs/PLUGINS.md)。
+
+### 开发中（beta 后续迭代）
 
 对于新的静态初筛能力，最常见的可选依赖是：
 
@@ -401,14 +479,31 @@ pip install frida frida-tools
 bin/                         npm CLI 入口
 dist/                        编译后的 TypeScript 输出
 ghidra_scripts/              Ghidra 辅助脚本
+frida_scripts/               Frida instrumentation 脚本（同时作为 MCP resource）
 helpers/DotNetMetadataProbe/ .NET 元数据辅助项目
 src/                         MCP Server 源码
-tests/                       单元与集成测试
+  index.ts                   入口（~90 行）
+  server.ts                  MCPServer 类
+  tool-registry.ts           集中式工具/prompt/resource 注册
+  plugins.ts                 插件框架（15 个内置 + 自动发现）
+  safe-command.ts            命令注入防护
+  python-process-pool.ts     Python worker 并发池
+  streaming-progress.ts      MCP 进度通知
+  config-validator.ts        运行时配置校验
+  logger.ts                  Pino 结构化日志
+  tools/                     工具定义与处理器（~90 个文件）
+  plugins/                   插件目录（15 个内置插件）
+  api/
+    file-server.ts           HTTP API（端口 18080）
+    rate-limiter.ts          请求限流
+    sse-events.ts            Server-Sent Events
+    dashboard/index.html     Web 监控面板
+    routes/
+      dashboard-api.ts       面板 JSON API（7 个端点）
+tests/                       单元与集成测试（207 个测试文件）
 workers/                     Python worker、YARA 规则、动态分析辅助
-install-to-codex.ps1         Codex 本地安装脚本
-install-to-copilot.ps1       GitHub Copilot 本地安装脚本
-install-to-claude.ps1        Claude Code 本地安装脚本
-docs/QUALITY_EVALUATION.md   回归与发版质量检查说明
+packages/plugin-sdk/         独立 Plugin SDK npm 包
+docs/                        文档
 ```
 
 ## 环境要求

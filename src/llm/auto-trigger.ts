@@ -4,6 +4,8 @@
  * Tasks: llm-assisted-analysis-enhancement 1.3
  */
 
+import { logger } from '../logger.js'
+
 export interface TriggerDecision {
   shouldTrigger: boolean
   reason: string
@@ -158,6 +160,5 @@ export function logTriggerDecision(
   decision: TriggerDecision,
   context: any
 ): void {
-  // TODO: Implement logging
-  console.log(`[LLM Trigger] Sample: ${sampleId}, Decision: ${decision.shouldTrigger}, Reason: ${decision.reason}`)
+  logger.info({ sampleId, shouldTrigger: decision.shouldTrigger, reason: decision.reason }, 'LLM trigger decision')
 }

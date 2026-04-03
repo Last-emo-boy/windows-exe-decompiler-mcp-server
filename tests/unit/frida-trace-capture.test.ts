@@ -15,7 +15,7 @@ import {
   aggregateTraceEvents,
   deduplicateTraceEvents,
   convertToCompactFormat,
-} from '../../src/tools/frida-trace-capture.js'
+} from '../../src/plugins/frida/tools/frida-trace-capture.js'
 
 describe('FridaTraceCaptureInputSchema', () => {
   test('should accept valid input with all optional fields', () => {
@@ -126,7 +126,7 @@ describe('normalizeTraceEvent', () => {
 })
 
 describe('filterTraceEvents', () => {
-  const events: ReturnType<typeof import('../../src/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
+  const events: ReturnType<typeof import('../../src/plugins/frida/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
     { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll', timestamp: 1000 },
     { type: 'api_call', function: 'ReadFile', module: 'kernel32.dll', timestamp: 1500 },
     { type: 'string_access', function: 'strlen', module: 'ntdll.dll', timestamp: 2000 },
@@ -183,7 +183,7 @@ describe('filterTraceEvents', () => {
 })
 
 describe('aggregateTraceEvents', () => {
-  const events: ReturnType<typeof import('../../src/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
+  const events: ReturnType<typeof import('../../src/plugins/frida/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
     { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll' },
     { type: 'api_call', function: 'ReadFile', module: 'kernel32.dll' },
     { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll' },
@@ -215,7 +215,7 @@ describe('aggregateTraceEvents', () => {
 
 describe('deduplicateTraceEvents', () => {
   test('should remove duplicate events', () => {
-    const events: ReturnType<typeof import('../../src/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
+    const events: ReturnType<typeof import('../../src/plugins/frida/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
       { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll', args: ['C:\\test.txt'] },
       { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll', args: ['C:\\test.txt'] },
       { type: 'api_call', function: 'ReadFile', module: 'kernel32.dll', args: [0x100] },
@@ -227,7 +227,7 @@ describe('deduplicateTraceEvents', () => {
   })
 
   test('should preserve order of unique events', () => {
-    const events: ReturnType<typeof import('../../src/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
+    const events: ReturnType<typeof import('../../src/plugins/frida/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
       { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll', args: ['C:\\a.txt'] },
       { type: 'api_call', function: 'ReadFile', module: 'kernel32.dll', args: [0x100] },
       { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll', args: ['C:\\a.txt'] },
@@ -241,7 +241,7 @@ describe('deduplicateTraceEvents', () => {
   })
 
   test('should handle events without distinguishing fields', () => {
-    const events: ReturnType<typeof import('../../src/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
+    const events: ReturnType<typeof import('../../src/plugins/frida/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
       { type: 'unknown' },
       { type: 'unknown' },
       { type: 'api_call', function: 'test' },
@@ -254,7 +254,7 @@ describe('deduplicateTraceEvents', () => {
 })
 
 describe('convertToCompactFormat', () => {
-  const events: ReturnType<typeof import('../../src/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
+  const events: ReturnType<typeof import('../../src/plugins/frida/tools/frida-trace-capture.js').normalizeTraceEvent>[] = [
     { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll' },
     { type: 'api_call', function: 'CreateFileW', module: 'kernel32.dll' },
     { type: 'api_call', function: 'ReadFile', module: 'kernel32.dll' },

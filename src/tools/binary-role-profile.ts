@@ -7,8 +7,8 @@ import type { CacheManager } from '../cache-manager.js'
 import type { JobQueue } from '../job-queue.js'
 import { generateCacheKey } from '../cache-manager.js'
 import { formatCacheWarning } from './cache-observability.js'
-import { createPEExportsExtractHandler } from './pe-exports-extract.js'
-import { createPEImportsExtractHandler } from './pe-imports-extract.js'
+import { createPEExportsExtractHandler } from '../plugins/pe-analysis/tools/pe-exports-extract.js'
+import { createPEImportsExtractHandler } from '../plugins/pe-analysis/tools/pe-imports-extract.js'
 import { createStringsExtractHandler } from './strings-extract.js'
 import { createRuntimeDetectHandler } from './runtime-detect.js'
 import { createPackerDetectHandler } from './packer-detect.js'
@@ -359,10 +359,10 @@ export function createBinaryRoleProfileHandler(
 ) {
   const exportsHandler =
     dependencies?.exportsHandler ||
-    createPEExportsExtractHandler(workspaceManager, database, cacheManager)
+    createPEExportsExtractHandler({ workspaceManager, database, cacheManager } as any)
   const importsHandler =
     dependencies?.importsHandler ||
-    createPEImportsExtractHandler(workspaceManager, database, cacheManager)
+    createPEImportsExtractHandler({ workspaceManager, database, cacheManager } as any)
   const stringsHandler =
     dependencies?.stringsHandler ||
     createStringsExtractHandler(workspaceManager, database, cacheManager)

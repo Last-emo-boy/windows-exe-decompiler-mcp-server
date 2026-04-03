@@ -21,15 +21,15 @@ import {
 import {
   peFingerprintToolDefinition,
   createPEFingerprintHandler
-} from '../../src/tools/pe-fingerprint.js'
+} from '../../src/plugins/pe-analysis/tools/pe-fingerprint.js'
 import {
   peImportsExtractToolDefinition,
   createPEImportsExtractHandler
-} from '../../src/tools/pe-imports-extract.js'
+} from '../../src/plugins/pe-analysis/tools/pe-imports-extract.js'
 import {
   peExportsExtractToolDefinition,
   createPEExportsExtractHandler
-} from '../../src/tools/pe-exports-extract.js'
+} from '../../src/plugins/pe-analysis/tools/pe-exports-extract.js'
 import {
   stringsExtractToolDefinition,
   createStringsExtractHandler
@@ -109,15 +109,15 @@ describe('MCP Tools Integration Tests', () => {
     )
     server.registerTool(
       peFingerprintToolDefinition,
-      createPEFingerprintHandler(workspaceManager, database, cacheManager)
+      createPEFingerprintHandler({ workspaceManager, database, cacheManager } as any)
     )
     server.registerTool(
       peImportsExtractToolDefinition,
-      createPEImportsExtractHandler(workspaceManager, database, cacheManager)
+      createPEImportsExtractHandler({ workspaceManager, database, cacheManager } as any)
     )
     server.registerTool(
       peExportsExtractToolDefinition,
-      createPEExportsExtractHandler(workspaceManager, database, cacheManager)
+      createPEExportsExtractHandler({ workspaceManager, database, cacheManager } as any)
     )
     server.registerTool(
       stringsExtractToolDefinition,

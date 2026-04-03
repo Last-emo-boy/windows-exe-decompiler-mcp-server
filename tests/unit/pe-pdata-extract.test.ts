@@ -4,7 +4,7 @@ import path from 'path'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
 import { CacheManager } from '../../src/cache-manager.js'
-import { createPEPdataExtractHandler } from '../../src/tools/pe-pdata-extract.js'
+import { createPEPdataExtractHandler } from '../../src/plugins/pe-analysis/tools/pe-pdata-extract.js'
 
 function createMinimalAmd64PdataPE(): Buffer {
   const dosHeader = Buffer.alloc(0x80, 0)
@@ -143,7 +143,7 @@ describe('pe.pdata.extract tool', () => {
   })
 
   test('should parse x64 runtime functions from the PE exception directory', async () => {
-    const handler = createPEPdataExtractHandler(workspaceManager, database, cacheManager)
+    const handler = createPEPdataExtractHandler({ workspaceManager, database, cacheManager } as any)
     const result = await handler({ sample_id: sampleId })
 
     expect(result.ok).toBe(true)

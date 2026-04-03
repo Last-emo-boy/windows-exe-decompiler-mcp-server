@@ -124,7 +124,7 @@ services:
 
     # Port mappings (optional - for API access and durable upload sessions)
     ports:
-      - "18080:18080"  # API File Server + MCP upload sessions
+      - "18080:18080"  # API File Server + MCP upload sessions + Web Dashboard (http://localhost:18080/dashboard)
       
     # Extra hosts for host.docker.internal support
     extra_hosts:

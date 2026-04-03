@@ -257,6 +257,117 @@ curl -H "X-API-Key: your-api-key" \
 }
 ```
 
+## MCP Resources
+
+The server exposes helper scripts as MCP resources. Clients discover them via
+the standard MCP `resources/list` method and read content via `resources/read`.
+
+### `resources/list`
+
+Returns all registered resources.
+
+**Example response (partial):**
+```json
+{
+  "resources": [
+    {
+      "uri": "script://frida/api_trace.js",
+      "name": "Frida: api_trace.js",
+      "description": "Windows API tracing with argument logging",
+      "mimeType": "text/javascript"
+    },
+    {
+      "uri": "script://ghidra/ExtractFunctions.java",
+      "name": "Ghidra: ExtractFunctions.java",
+      "description": "Function extraction",
+      "mimeType": "text/x-java-source"
+    }
+  ]
+}
+```
+
+### `resources/read`
+
+Read the content of a specific resource by URI.
+
+**Request:**
+```json
+{
+  "method": "resources/read",
+  "params": {
+    "uri": "script://frida/api_trace.js"
+  }
+}
+```
+
+**Response:**
+```json
+{
+  "contents": [
+    {
+      "uri": "script://frida/api_trace.js",
+      "mimeType": "text/javascript",
+      "text": "// api_trace.js\n'use strict';\n..."
+    }
+  ]
+}
+```
+
+### Available resources
+
+| URI | Type | Description |
+|-----|------|-------------|
+| `script://frida/api_trace.js` | Frida | Windows API tracing with argument logging |
+| `script://frida/string_decoder.js` | Frida | Runtime string decryption |
+| `script://frida/anti_debug_bypass.js` | Frida | Anti-debug bypass |
+| `script://frida/crypto_finder.js` | Frida | Cryptographic API detection |
+| `script://frida/file_registry_monitor.js` | Frida | File/registry monitoring |
+| `script://ghidra/ExtractFunctions.java` | Ghidra | Function extraction |
+| `script://ghidra/ExtractFunctions.py` | Ghidra | Function extraction (Python) |
+| `script://ghidra/DecompileFunction.java` | Ghidra | Function decompilation |
+| `script://ghidra/DecompileFunction.py` | Ghidra | Function decompilation (Python) |
+| `script://ghidra/ExtractCFG.java` | Ghidra | CFG extraction |
+| `script://ghidra/ExtractCFG.py` | Ghidra | CFG extraction (Python) |
+| `script://ghidra/AnalyzeCrossReferences.java` | Ghidra | Cross-reference analysis |
+| `script://ghidra/SearchFunctionReferences.java` | Ghidra | Function reference search |
+
+## MCP Progress Notifications
+
+Long-running tools support progress reporting via MCP `notifications/progress`.
+
+### Requesting progress updates
+
+Include `_meta.progressToken` in the tool call:
+
+```json
+{
+  "method": "tools/call",
+  "params": {
+    "name": "workflow.analyze.start",
+    "arguments": { "sample_id": "sha256:abc123..." },
+    "_meta": { "progressToken": "my-progress-1" }
+  }
+}
+```
+
+### Progress notification format
+
+```json
+{
+  "method": "notifications/progress",
+  "params": {
+    "progressToken": "my-progress-1",
+    "progress": 50,
+    "total": 100,
+    "message": "Enriching static analysis..."
+  }
+}
+```
+
+Progress ranges from 0 to 100. Not all tools emit progress notifications — only
+those with significant runtimes.
+```
+
 ## Error Handling
 
 All errors follow this format:

@@ -8,7 +8,7 @@ import { generateCacheKey } from '../cache-manager.js'
 import { createStringsExtractHandler } from './strings-extract.js'
 import { createStringsFlossDecodeHandler } from './strings-floss-decode.js'
 import { createAnalysisContextLinkHandler } from './analysis-context-link.js'
-import { createPEImportsExtractHandler } from './pe-imports-extract.js'
+import { createPEImportsExtractHandler } from '../plugins/pe-analysis/tools/pe-imports-extract.js'
 import { createStaticCapabilityTriageHandler } from './static-capability-triage.js'
 import { loadDynamicTraceEvidence, type DynamicEvidenceScope, type DynamicTraceSummary } from '../dynamic-trace.js'
 import { buildDeferredToolResponse, shouldDeferLargeSample } from '../nonblocking-analysis.js'
@@ -411,7 +411,7 @@ export function createCryptoIdentifyHandler(
   const analysisContextLinkHandler =
     dependencies.analysisContextLink || createAnalysisContextLinkHandler(workspaceManager, database, cacheManager)
   const peImportsExtractHandler =
-    dependencies.peImportsExtract || createPEImportsExtractHandler(workspaceManager, database, cacheManager)
+    dependencies.peImportsExtract || createPEImportsExtractHandler({ workspaceManager, database, cacheManager } as any)
   const staticCapabilityTriageHandler =
     dependencies.staticCapabilityTriage || createStaticCapabilityTriageHandler(workspaceManager, database)
   const dynamicTraceLoader = dependencies.loadDynamicTrace || loadDynamicTraceEvidence

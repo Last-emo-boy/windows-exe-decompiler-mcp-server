@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect, beforeEach, jest } from '@jest/globals'
-import { createPEFingerprintHandler, PEFingerprintInputSchema } from '../../src/tools/pe-fingerprint.js'
+import { createPEFingerprintHandler, PEFingerprintInputSchema } from '../../src/plugins/pe-analysis/tools/pe-fingerprint.js'
 import type { WorkspaceManager } from '../../src/workspace-manager.js'
 import type { DatabaseManager } from '../../src/database.js'
 import type { CacheManager } from '../../src/cache-manager.js'
@@ -81,11 +81,7 @@ describe('pe.fingerprint tool', () => {
 
   describe('Tool handler', () => {
     test('should return error when sample not found', async () => {
-      const handler = createPEFingerprintHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEFingerprintHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       mockDatabase.findSample.mockReturnValue(undefined)
 
@@ -98,11 +94,7 @@ describe('pe.fingerprint tool', () => {
     })
 
     test('should return cached result when available', async () => {
-      const handler = createPEFingerprintHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEFingerprintHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -141,11 +133,7 @@ describe('pe.fingerprint tool', () => {
     })
 
     test('should generate correct cache key', async () => {
-      const handler = createPEFingerprintHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEFingerprintHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -184,11 +172,7 @@ describe('pe.fingerprint tool', () => {
 
   describe('Cache key generation', () => {
     test('should generate different keys for different fast values', async () => {
-      const handler = createPEFingerprintHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEFingerprintHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',

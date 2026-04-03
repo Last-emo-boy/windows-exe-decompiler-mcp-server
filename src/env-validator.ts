@@ -5,7 +5,7 @@
 
 import fs from 'fs'
 import path from 'path'
-import { execSync } from 'child_process'
+import { safeCommandExists, safeGetCommandVersion } from './safe-command.js'
 import type { Config } from './config.js'
 
 export interface ValidationResult {
@@ -30,12 +30,7 @@ function pathExists(path: string): boolean {
  * Check if a command is available in PATH
  */
 function commandExists(command: string): boolean {
-  try {
-    execSync(`which ${command}`, { stdio: 'ignore' })
-    return true
-  } catch {
-    return false
-  }
+  return safeCommandExists(command)
 }
 
 /**
@@ -179,7 +174,7 @@ function validatePythonWorker(staticConfig: Config['workers']['static']): {
 
   // Check Python version
   try {
-    const version = execSync(`${pythonCmd} --version`, { encoding: 'utf-8' })
+    const version = safeGetCommandVersion(pythonCmd, '--version') || ''
     const match = version.match(/Python (\d+)\.(\d+)/)
     if (match) {
       const major = parseInt(match[1], 10)

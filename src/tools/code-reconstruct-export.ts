@@ -15,8 +15,8 @@ import type { CacheManager } from '../cache-manager.js'
 import { generateCacheKey } from '../cache-manager.js'
 import { lookupCachedResult, formatCacheWarning } from './cache-observability.js'
 import { createCodeFunctionsReconstructHandler } from './code-functions-reconstruct.js'
-import { createPEImportsExtractHandler } from './pe-imports-extract.js'
-import { createPEExportsExtractHandler } from './pe-exports-extract.js'
+import { createPEImportsExtractHandler } from '../plugins/pe-analysis/tools/pe-imports-extract.js'
+import { createPEExportsExtractHandler } from '../plugins/pe-analysis/tools/pe-exports-extract.js'
 import { createPackerDetectHandler } from './packer-detect.js'
 import { createStringsExtractHandler } from './strings-extract.js'
 import {
@@ -4857,10 +4857,10 @@ export function createCodeReconstructExportHandler(
     createCodeFunctionsReconstructHandler(workspaceManager, database, cacheManager)
   const importsExtractHandler =
     dependencies?.importsExtractHandler ||
-    createPEImportsExtractHandler(workspaceManager, database, cacheManager)
+    createPEImportsExtractHandler({ workspaceManager, database, cacheManager } as any)
   const exportsExtractHandler =
     dependencies?.exportsExtractHandler ||
-    createPEExportsExtractHandler(workspaceManager, database, cacheManager)
+    createPEExportsExtractHandler({ workspaceManager, database, cacheManager } as any)
   const packerDetectHandler =
     dependencies?.packerDetectHandler ||
     createPackerDetectHandler(workspaceManager, database, cacheManager)

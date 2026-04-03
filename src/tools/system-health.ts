@@ -13,6 +13,7 @@ import type { ToolDefinition, ToolArgs, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
 import type { DatabaseManager } from '../database.js'
 import type { CacheManager } from '../cache-manager.js'
+import { pythonProcessPool } from '../python-process-pool.js'
 import { checkGhidraHealth, type GhidraHealthStatus } from '../ghidra-config.js'
 import { resolvePackagePath } from '../runtime-paths.js'
 import { lookupCachedResult } from './cache-observability.js'
@@ -742,6 +743,7 @@ export function createSystemHealthHandler(
             cache: cacheComponent,
           },
           cache_observability: cacheObservability,
+          python_process_pool: pythonProcessPool.getStats(),
           recommendations,
           setup_actions: setupActions,
           required_user_inputs: requiredUserInputs,

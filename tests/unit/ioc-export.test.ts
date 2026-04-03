@@ -6,7 +6,7 @@ import crypto from 'crypto'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
 import { CacheManager } from '../../src/cache-manager.js'
-import { createIOCExportHandler } from '../../src/tools/ioc-export.js'
+import { createIOCExportHandler } from '../../src/plugins/threat-intel/tools/ioc-export.js'
 
 jest.setTimeout(15000)
 
@@ -22,7 +22,7 @@ describe('ioc.export tool', () => {
     workspaceManager = new WorkspaceManager(path.join(tempDir, 'workspaces'))
     database = new DatabaseManager(path.join(tempDir, 'test.db'))
     cacheManager = new CacheManager(path.join(tempDir, 'cache'), database)
-    handler = createIOCExportHandler(workspaceManager, database, cacheManager)
+    handler = createIOCExportHandler({ workspaceManager, database, cacheManager } as any)
   })
 
   afterEach(async () => {

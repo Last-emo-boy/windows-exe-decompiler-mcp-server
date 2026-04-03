@@ -33,7 +33,7 @@ import {
   createRustBinaryAnalyzeHandler,
 } from './rust-binary-analyze.js';
 import { StaticCapabilityTriageDataSchema } from './static-capability-triage.js';
-import { PEStructureAnalyzeDataSchema } from './pe-structure-analyze.js';
+import { PEStructureAnalyzeDataSchema } from '../plugins/pe-analysis/tools/pe-structure-analyze.js';
 import { CompilerPackerDetectDataSchema } from './compiler-packer-detect.js';
 import { buildReportConfidenceSemantics } from '../confidence-semantics.js';
 import {

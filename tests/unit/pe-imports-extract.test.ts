@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect, beforeEach, jest } from '@jest/globals'
-import { createPEImportsExtractHandler, PEImportsExtractInputSchema } from '../../src/tools/pe-imports-extract.js'
+import { createPEImportsExtractHandler, PEImportsExtractInputSchema } from '../../src/plugins/pe-analysis/tools/pe-imports-extract.js'
 import type { WorkspaceManager } from '../../src/workspace-manager.js'
 import type { DatabaseManager } from '../../src/database.js'
 import type { CacheManager } from '../../src/cache-manager.js'
@@ -81,11 +81,7 @@ describe('pe.imports.extract tool', () => {
 
   describe('Tool handler', () => {
     test('should return error when sample not found', async () => {
-      const handler = createPEImportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEImportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       mockDatabase.findSample.mockReturnValue(undefined)
 
@@ -98,11 +94,7 @@ describe('pe.imports.extract tool', () => {
     })
 
     test('should return cached result when available', async () => {
-      const handler = createPEImportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEImportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -137,11 +129,7 @@ describe('pe.imports.extract tool', () => {
     })
 
     test('should generate correct cache key', async () => {
-      const handler = createPEImportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEImportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -180,11 +168,7 @@ describe('pe.imports.extract tool', () => {
 
   describe('Cache key generation', () => {
     test('should generate different keys for different group_by_dll values', async () => {
-      const handler = createPEImportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEImportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -243,11 +227,7 @@ describe('pe.imports.extract tool', () => {
     })
 
     test('should extract DLL names and function names (Requirement 3.1)', async () => {
-      const handler = createPEImportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEImportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',

@@ -3823,7 +3823,7 @@ export class DecompilerWorker {
       artifacts: [],
       metrics: {
         elapsedMs,
-        peakRssMb: 0 // TODO: Implement memory tracking
+        peakRssMb: Math.round(process.memoryUsage().rss / 1024 / 1024 * 100) / 100
       }
     };
   }

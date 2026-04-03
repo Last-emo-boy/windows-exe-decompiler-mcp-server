@@ -14,6 +14,9 @@ import type { StorageManager } from '../storage/storage-manager.js'
 import type { DatabaseManager, UploadSession } from '../database.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
 import type { SampleFinalizationService } from '../sample-finalization.js'
+import { RateLimiter } from './rate-limiter.js'
+import { handleSseConnection } from './sse-events.js'
+import { handleDashboardApi } from './routes/dashboard-api.js'
 
 export interface FileServerConfig {
   port: number
@@ -43,6 +46,7 @@ export class FileServer {
   private server: http.Server | null = null
   private effectivePort: number
   private readonly authMiddleware: AuthMiddleware
+  private readonly rateLimiter: RateLimiter
 
   constructor(
     private readonly config: FileServerConfig,
@@ -53,6 +57,7 @@ export class FileServer {
       apiKey: config.apiKey,
       enabled: Boolean(config.apiKey),
     })
+    this.rateLimiter = new RateLimiter()
   }
 
   async start(): Promise<void> {
@@ -86,6 +91,7 @@ export class FileServer {
         }
         logger.info('HTTP File Server stopped')
         this.server = null
+        this.rateLimiter.destroy()
         resolve()
       })
     })
@@ -109,9 +115,30 @@ export class FileServer {
       return
     }
 
+    // Rate limiting
+    if (!this.rateLimiter.check(req, res)) {
+      return
+    }
+
     try {
+      // ── Dashboard (static HTML + API) ─────────────────────────
+      if ((pathname === '/dashboard' || pathname === '/') && req.method === 'GET') {
+        await this.serveDashboardHtml(res)
+        return
+      }
+
+      if (pathname.startsWith('/api/v1/dashboard') && req.method === 'GET') {
+        handleDashboardApi(res, pathname, url.searchParams)
+        return
+      }
+
       if (pathname === '/api/v1/health' && req.method === 'GET') {
-        await handleHealthCheck(res, '1.0.0-beta.1')
+        await handleHealthCheck(res, '1.0.0-beta.2')
+        return
+      }
+
+      if (pathname === '/api/v1/events' && req.method === 'GET') {
+        handleSseConnection(req, res, url.searchParams)
         return
       }
 
@@ -180,6 +207,20 @@ export class FileServer {
         error: 'Internal Server Error',
         message: (error as Error).message,
       })
+    }
+  }
+
+  private async serveDashboardHtml(res: ServerResponse): Promise<void> {
+    try {
+      const { fileURLToPath } = await import('url')
+      const thisDir = path.dirname(fileURLToPath(import.meta.url))
+      const htmlPath = path.join(thisDir, 'dashboard', 'index.html')
+      const html = await fs.readFile(htmlPath, 'utf-8')
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' })
+      res.end(html)
+    } catch {
+      res.writeHead(500, { 'Content-Type': 'text/plain' })
+      res.end('Dashboard HTML not found')
     }
   }
 

@@ -4,7 +4,7 @@ import path from 'path'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
 import { CacheManager } from '../../src/cache-manager.js'
-import { createPESymbolsRecoverHandler } from '../../src/tools/pe-symbols-recover.js'
+import { createPESymbolsRecoverHandler } from '../../src/plugins/pe-analysis/tools/pe-symbols-recover.js'
 
 function createMinimalAmd64PdataPE(): Buffer {
   const dosHeader = Buffer.alloc(0x80, 0)
@@ -163,10 +163,7 @@ describe('pe.symbols.recover tool', () => {
       },
     }))
 
-    const handler = createPESymbolsRecoverHandler(workspaceManager, database, cacheManager, {
-      stringsHandler,
-      runtimeHandler,
-    })
+    const handler = createPESymbolsRecoverHandler({ workspaceManager, database, cacheManager } as any)
     const result = await handler({ sample_id: sampleId })
 
     expect(result.ok).toBe(true)

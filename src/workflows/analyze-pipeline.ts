@@ -44,9 +44,9 @@ import {
 import { buildSchedulerExecutionPlan } from '../analysis-budget-scheduler.js'
 import { resolveAnalysisBackends } from '../static-backend-discovery.js'
 import { AnalysisEvidenceStateSchema } from '../analysis-evidence.js'
-import { createPEFingerprintHandler } from '../tools/pe-fingerprint.js'
+import { createPEFingerprintHandler } from '../plugins/pe-analysis/tools/pe-fingerprint.js'
 import { createRuntimeDetectHandler } from '../tools/runtime-detect.js'
-import { createPEImportsExtractHandler } from '../tools/pe-imports-extract.js'
+import { createPEImportsExtractHandler } from '../plugins/pe-analysis/tools/pe-imports-extract.js'
 import { createStringsExtractHandler } from '../tools/strings-extract.js'
 import { createStringsFlossDecodeHandler } from '../tools/strings-floss-decode.js'
 import { createYaraScanHandler } from '../tools/yara-scan.js'
@@ -54,7 +54,9 @@ import { createPackerDetectHandler } from '../tools/packer-detect.js'
 import { createCompilerPackerDetectHandler } from '../tools/compiler-packer-detect.js'
 import { createBinaryRoleProfileHandler } from '../tools/binary-role-profile.js'
 import { createStaticCapabilityTriageHandler } from '../tools/static-capability-triage.js'
-import { createPEStructureAnalyzeHandler } from '../tools/pe-structure-analyze.js'
+import { createPEStructureAnalyzeHandler } from '../plugins/pe-analysis/tools/pe-structure-analyze.js'
+import { createElfStructureAnalyzeHandler } from '../tools/elf-structure-analyze.js'
+import { createMachoStructureAnalyzeHandler } from '../tools/macho-structure-analyze.js'
 import { createAnalysisContextLinkHandler } from '../tools/analysis-context-link.js'
 import { createCryptoIdentifyHandler } from '../tools/crypto-identify.js'
 import { createRustBinaryAnalyzeHandler } from '../tools/rust-binary-analyze.js'
@@ -64,7 +66,7 @@ import { createTraceConditionHandler } from '../tools/trace-condition.js'
 import { createSandboxExecuteHandler } from '../tools/sandbox-execute.js'
 import { createWorkflowSummarizeHandler } from './summarize.js'
 import { createReconstructWorkflowHandler } from './reconstruct.js'
-import { createGhidraAnalyzeHandler } from '../tools/ghidra-analyze.js'
+import { createGhidraAnalyzeHandler } from '../plugins/ghidra/tools/ghidra-analyze.js'
 import {
   createAngrAnalyzeHandler,
   createPandaInspectHandler,
@@ -277,6 +279,8 @@ export interface AnalyzePipelineDependencies {
   binaryRoleProfile?: (args: ToolArgs) => Promise<WorkerResult>
   staticCapabilityTriage?: (args: ToolArgs) => Promise<WorkerResult>
   peStructureAnalyze?: (args: ToolArgs) => Promise<WorkerResult>
+  elfStructureAnalyze?: (args: ToolArgs) => Promise<WorkerResult>
+  machoStructureAnalyze?: (args: ToolArgs) => Promise<WorkerResult>
   analysisContextLink?: (args: ToolArgs) => Promise<WorkerResult>
   cryptoIdentify?: (args: ToolArgs) => Promise<WorkerResult>
   rustBinaryAnalyze?: (args: ToolArgs) => Promise<WorkerResult>
@@ -809,13 +813,13 @@ function createDependencies(
   return {
     peFingerprint:
       dependencies.peFingerprint ||
-      createPEFingerprintHandler(workspaceManager, database, cacheManager),
+      createPEFingerprintHandler({ workspaceManager, database, cacheManager } as any),
     runtimeDetect:
       dependencies.runtimeDetect ||
       createRuntimeDetectHandler(workspaceManager, database, cacheManager),
     peImportsExtract:
       dependencies.peImportsExtract ||
-      createPEImportsExtractHandler(workspaceManager, database, cacheManager),
+      createPEImportsExtractHandler({ workspaceManager, database, cacheManager } as any),
     stringsExtract:
       dependencies.stringsExtract ||
       createStringsExtractHandler(workspaceManager, database, cacheManager, jobQueue),
@@ -839,7 +843,13 @@ function createDependencies(
       createStaticCapabilityTriageHandler(workspaceManager, database),
     peStructureAnalyze:
       dependencies.peStructureAnalyze ||
-      createPEStructureAnalyzeHandler(workspaceManager, database),
+      createPEStructureAnalyzeHandler({ workspaceManager, database } as any),
+    elfStructureAnalyze:
+      dependencies.elfStructureAnalyze ||
+      createElfStructureAnalyzeHandler(workspaceManager, database),
+    machoStructureAnalyze:
+      dependencies.machoStructureAnalyze ||
+      createMachoStructureAnalyzeHandler(workspaceManager, database),
     analysisContextLink:
       dependencies.analysisContextLink ||
       createAnalysisContextLinkHandler(workspaceManager, database, cacheManager, {}, jobQueue),
@@ -869,7 +879,7 @@ function createDependencies(
       createReconstructWorkflowHandler(workspaceManager, database, cacheManager),
     ghidraAnalyze:
       dependencies.ghidraAnalyze ||
-      createGhidraAnalyzeHandler(workspaceManager, database),
+      (createGhidraAnalyzeHandler({ workspaceManager, database } as any) as any),
     rizinAnalyze:
       dependencies.rizinAnalyze ||
       createRizinAnalyzeHandler(workspaceManager, database),
@@ -1215,12 +1225,25 @@ async function runEnrichStaticStage(
   forceRefresh: boolean
 ): Promise<{ result: Record<string, unknown>; artifacts: ArtifactRef[] }> {
   const deps = context.dependencies
+
+  // Format-aware structural analysis: route to the correct tool based on file_type
+  const sample = context.database.findSample(sampleId)
+  const fileType = sample?.file_type ?? 'PE'
+  let structureAnalyzePromise: Promise<WorkerResult>
+  if (fileType === 'ELF' && deps.elfStructureAnalyze) {
+    structureAnalyzePromise = deps.elfStructureAnalyze({ sample_id: sampleId })
+  } else if ((fileType === 'Mach-O' || fileType === 'Mach-O-Fat') && deps.machoStructureAnalyze) {
+    structureAnalyzePromise = deps.machoStructureAnalyze({ sample_id: sampleId })
+  } else {
+    structureAnalyzePromise = deps.peStructureAnalyze!({ sample_id: sampleId })
+  }
+
   const [stringsResult, flossResult, binaryRoleResult, capabilityResult, peStructureResult, contextLinkResult, cryptoResult, rustResult] = await Promise.all([
     deps.stringsExtract!({ sample_id: sampleId, mode: 'full', force_refresh: forceRefresh, defer_if_slow: false }),
     deps.stringsFlossDecode!({ sample_id: sampleId, force_refresh: forceRefresh, defer_if_slow: false }),
     deps.binaryRoleProfile!({ sample_id: sampleId, mode: 'full', force_refresh: forceRefresh, defer_if_slow: false }),
     deps.staticCapabilityTriage!({ sample_id: sampleId }),
-    deps.peStructureAnalyze!({ sample_id: sampleId }),
+    structureAnalyzePromise,
     deps.analysisContextLink!({ sample_id: sampleId, mode: 'full', force_refresh: forceRefresh, defer_if_slow: false }),
     deps.cryptoIdentify!({ sample_id: sampleId, mode: 'full', force_refresh: forceRefresh, defer_if_slow: false }),
     deps.rustBinaryAnalyze!({ sample_id: sampleId, force_refresh: forceRefresh }),
@@ -1586,9 +1609,18 @@ async function runDynamicExecuteStage(
           force_refresh: false,
           defer_if_slow: false,
         }),
-        context.dependencies.peStructureAnalyze!({
-          sample_id: unpackedSampleId,
-        }),
+        // Format-aware: route unpacked sample to correct structural analysis
+        (() => {
+          const unpackedSample = context.database.findSample(unpackedSampleId!)
+          const ft = unpackedSample?.file_type ?? 'PE'
+          if (ft === 'ELF' && context.dependencies.elfStructureAnalyze) {
+            return context.dependencies.elfStructureAnalyze({ sample_id: unpackedSampleId! })
+          }
+          if ((ft === 'Mach-O' || ft === 'Mach-O-Fat') && context.dependencies.machoStructureAnalyze) {
+            return context.dependencies.machoStructureAnalyze({ sample_id: unpackedSampleId! })
+          }
+          return context.dependencies.peStructureAnalyze!({ sample_id: unpackedSampleId! })
+        })(),
       ])
       const packedDiff = buildPackedVsUnpackedDiffDigest({
         sampleId,
@@ -2201,7 +2233,25 @@ function buildRunEnvelope(
         reused,
         execution_state: executionState,
         current_stage: (runSummary.latest_stage || FAST_PROFILE_STAGE) as AnalysisPipelineStage,
-        run: runSummary,
+        // Strip raw_results from historical stage results to keep response
+        // within LLM token budgets. The current stage_result (below) retains
+        // its own raw_results so the caller still gets full detail for the
+        // most recent stage.
+        run: {
+          ...runSummary,
+          stages: runSummary.stages.map((stage) => {
+            if (
+              stage.result &&
+              typeof stage.result === 'object' &&
+              !Array.isArray(stage.result) &&
+              'raw_results' in (stage.result as Record<string, unknown>)
+            ) {
+              const { raw_results: _stripped, ...rest } = stage.result as Record<string, unknown>
+              return { ...stage, result: rest }
+            }
+            return stage
+          }),
+        },
         recovery_state: runSummary.recovery_state,
         recoverable_stages: runSummary.recoverable_stages,
         stage_result: stageResult,

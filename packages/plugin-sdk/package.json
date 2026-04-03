@@ -1,0 +1,33 @@
+{
+  "name": "@anthropic/windows-exe-decompiler-plugin-sdk",
+  "version": "1.0.0-beta.2",
+  "description": "Plugin SDK for windows-exe-decompiler-mcp-server — types and utilities for third-party plugin authors.",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true})\""
+  },
+  "keywords": [
+    "mcp",
+    "plugin-sdk",
+    "reverse-engineering",
+    "decompiler"
+  ],
+  "license": "MIT",
+  "peerDependencies": {
+    "zod": "^3.0.0"
+  }
+}

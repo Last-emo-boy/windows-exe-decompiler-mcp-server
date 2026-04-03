@@ -10,7 +10,7 @@ import { DatabaseManager } from '../../src/database.js'
 import {
   createFridaRuntimeInstrumentHandler,
   FridaRuntimeInstrumentInputSchema,
-} from '../../src/tools/frida-runtime-instrument.js'
+} from '../../src/plugins/frida/tools/frida-runtime-instrument.js'
 
 describe('FridaRuntimeInstrumentInputSchema', () => {
   test('should accept valid input with all fields', () => {
@@ -174,7 +174,7 @@ describe('createFridaRuntimeInstrumentHandler', () => {
     const dummyFile = path.join((await workspaceManager.getWorkspace(sampleId)).original, 'test.exe')
     await fs.writeFile(dummyFile, 'dummy content')
 
-    const handler = createFridaRuntimeInstrumentHandler(workspaceManager, database)
+    const handler = createFridaRuntimeInstrumentHandler({ workspaceManager, database } as any)
     const result = await handler({ sample_id: sampleId, mode: 'attach' })
 
     expect(result.ok).toBe(false)

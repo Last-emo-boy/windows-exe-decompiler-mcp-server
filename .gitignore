@@ -78,6 +78,10 @@ V0.2_*.md
 workers/*_IMPLEMENTATION.md
 spec/
 
+# Development-only agent/skill files
+.github/prompts/
+.github/skills/
+
 # MCP client local configuration
 .codex/
 .claude/

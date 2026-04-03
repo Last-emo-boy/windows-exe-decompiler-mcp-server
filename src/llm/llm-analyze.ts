@@ -5,6 +5,7 @@
  */
 
 import { z } from 'zod'
+import { logger } from '../logger.js'
 import type { ToolArgs, ToolDefinition, WorkerResult } from '../types.js'
 import type { MCPServer } from '../server.js'
 import type { CreateMessageRequest } from '@modelcontextprotocol/sdk/types.js'
@@ -183,9 +184,7 @@ function extractResponseText(result: any): string {
  * Log LLM usage for token tracking
  */
 function logLlmUsage(sampleId: string, task: string, tokenCount: number): void {
-  // TODO: Integrate with centralized token tracking system
-  // For now, log to console for monitoring
-  console.log(`[LLM Usage] Sample: ${sampleId}, Task: ${task}, Tokens: ${tokenCount}`)
+  logger.info({ sampleId, task, tokenCount }, 'LLM usage')
 }
 
 export const llmAnalyzeToolDefinition: ToolDefinition = {

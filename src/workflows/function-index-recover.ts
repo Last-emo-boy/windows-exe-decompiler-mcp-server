@@ -4,7 +4,7 @@ import type { WorkspaceManager } from '../workspace-manager.js'
 import type { DatabaseManager } from '../database.js'
 import type { CacheManager } from '../cache-manager.js'
 import { createCodeFunctionsSmartRecoverHandler } from '../tools/code-functions-smart-recover.js'
-import { createPESymbolsRecoverHandler } from '../tools/pe-symbols-recover.js'
+import { createPESymbolsRecoverHandler } from '../plugins/pe-analysis/tools/pe-symbols-recover.js'
 import { createCodeFunctionsDefineHandler } from '../tools/code-functions-define.js'
 import { DecompilerWorker } from '../decompiler-worker.js'
 
@@ -212,7 +212,7 @@ export function createFunctionIndexRecoverWorkflowHandler(
     createCodeFunctionsSmartRecoverHandler(workspaceManager, database, cacheManager)
   const symbolsRecoverHandler =
     dependencies.symbolsRecoverHandler ||
-    createPESymbolsRecoverHandler(workspaceManager, database, cacheManager)
+    createPESymbolsRecoverHandler({ workspaceManager, database, cacheManager } as any)
   const defineHandler =
     dependencies.defineHandler || createCodeFunctionsDefineHandler(workspaceManager, database)
 

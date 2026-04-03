@@ -23,11 +23,12 @@ ARG UPX_VERSION=5.1.1
 ARG RIZIN_VERSION=0.8.2
 ARG RETDEC_VERSION=5.0
 ARG ANGR_VERSION=9.2.205
+ARG JADX_VERSION=1.5.1
 
 # =============================================================================
 # Stage 1: TypeScript Builder
 # =============================================================================
-FROM node:20-slim AS builder
+FROM node:22-slim AS builder
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python3 \
@@ -253,7 +254,7 @@ ENV HTTP_PROXY="${HTTP_PROXY}" \
     NO_PROXY="${NO_PROXY}"
 
 LABEL maintainer="windows-exe-decompiler-mcp-server"
-LABEL version="0.1.4"
+LABEL version="1.0.0-beta.2"
 LABEL description="MCP server for Windows binary reverse engineering - full Linux analysis stack"
 LABEL node_version="20.x"
 LABEL python_version="3.11"
@@ -295,6 +296,9 @@ COPY --from=builder /usr/local/lib/node_modules /usr/local/lib/node_modules
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist ./dist
 COPY --from=builder /app/package.json ./
+
+# Dashboard static assets (not handled by tsc)
+COPY src/api/dashboard/ ./dist/api/dashboard/
 
 COPY --from=python-base /usr/local/bin /usr/local/bin
 COPY --from=python-base /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
@@ -352,6 +356,18 @@ RUN ln -sf /opt/rizin/bin/rizin /usr/local/bin/rizin && \
     ln -sf /opt/rizin/bin/rz-hash /usr/local/bin/rz-hash && \
     ln -sf /opt/retdec/bin/retdec-decompiler /usr/local/bin/retdec-decompiler && \
     ln -sf /opt/retdec/bin/retdec-fileinfo /usr/local/bin/retdec-fileinfo
+
+# Install jadx (Android DEX/APK decompiler)
+ARG JADX_VERSION
+RUN set -eux; \
+    apt-get update && apt-get install -y --no-install-recommends unzip && \
+    curl -fsSL "https://github.com/skylot/jadx/releases/download/v${JADX_VERSION}/jadx-${JADX_VERSION}.zip" -o /tmp/jadx.zip && \
+    mkdir -p /opt/jadx && \
+    unzip -q /tmp/jadx.zip -d /opt/jadx && \
+    chmod +x /opt/jadx/bin/jadx /opt/jadx/bin/jadx-gui && \
+    ln -sf /opt/jadx/bin/jadx /usr/local/bin/jadx && \
+    rm -f /tmp/jadx.zip && \
+    rm -rf /var/lib/apt/lists/*
 
 COPY --from=ghidra-stage /opt/java/openjdk /opt/java/openjdk
 COPY --from=ghidra-stage /opt/ghidra /opt/ghidra
@@ -417,7 +433,8 @@ ENV NODE_ENV=production \
     ANGR_PYTHON=/opt/angr-venv/bin/python \
     PANDA_PYTHON=/usr/local/bin/python3 \
     RETDEC_PATH=/opt/retdec/bin/retdec-decompiler \
-    RETDEC_INSTALL_DIR=/opt/retdec
+    RETDEC_INSTALL_DIR=/opt/retdec \
+    JADX_PATH=/opt/jadx/bin/jadx
 
 RUN mkdir -p /app/workspaces /app/data /app/cache /app/logs /ghidra-projects /ghidra-logs /samples /tmp /opt/qiling-rootfs /root/.windows-exe-decompiler-mcp-server && \
     chown -R appuser:appuser /app && \

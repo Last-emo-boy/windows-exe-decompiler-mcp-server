@@ -4,7 +4,7 @@ import path from 'path'
 import os from 'os'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
-import { createGhidraHealthHandler } from '../../src/tools/ghidra-health.js'
+import { createGhidraHealthHandler } from '../../src/plugins/ghidra/tools/ghidra-health.js'
 
 function parseToolText(result: { content: Array<{ text?: string }> }): any {
   return JSON.parse(result.content[0]?.text || '{}')

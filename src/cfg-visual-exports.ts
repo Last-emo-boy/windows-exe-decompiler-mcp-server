@@ -2,6 +2,7 @@ import fs from 'fs/promises'
 import path from 'path'
 import { spawnSync } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
+import { validateGraphvizFormat } from './safe-command.js'
 import type { DatabaseManager, Function as DatabaseFunction } from './database.js'
 import type { ControlFlowGraph, CFGEdge, CFGNode } from './decompiler-worker.js'
 import type { ArtifactRef } from './types.js'
@@ -837,6 +838,7 @@ export async function renderGraphvizArtifact(
   const fileName = `cfg_render_${functionSegment}_${addressSegment}_${Date.now()}.${FILE_EXTENSION_BY_FORMAT[options.format]}`
   const absolutePath = path.join(reportDir, fileName)
 
+  validateGraphvizFormat(options.format)
   const result = spawnSync('dot', [`-T${options.format}`, '-o', absolutePath], {
     input: dotText,
     encoding: 'utf8',

@@ -193,7 +193,6 @@ class FileSystemCache {
       await fs.writeFile(cachePath, JSON.stringify(cached), 'utf-8')
     } catch (error) {
       // Ignore write errors (cache is optional)
-      console.warn(`Failed to write cache to filesystem: ${error}`)
     }
   }
 }

@@ -11,13 +11,13 @@ import type { ToolDefinition, ToolArgs, WorkerResult } from '../types.js'
 import type { WorkspaceManager } from '../workspace-manager.js'
 import type { DatabaseManager } from '../database.js'
 import type { CacheManager } from '../cache-manager.js'
-import { createPEFingerprintHandler } from '../tools/pe-fingerprint.js'
+import { createPEFingerprintHandler } from '../plugins/pe-analysis/tools/pe-fingerprint.js'
 import { createRuntimeDetectHandler } from '../tools/runtime-detect.js'
-import { createPEImportsExtractHandler } from '../tools/pe-imports-extract.js'
+import { createPEImportsExtractHandler } from '../plugins/pe-analysis/tools/pe-imports-extract.js'
 import { createStringsExtractHandler } from '../tools/strings-extract.js'
 import { createYaraScanHandler } from '../tools/yara-scan.js'
 import { createStaticCapabilityTriageHandler } from '../tools/static-capability-triage.js'
-import { createPEStructureAnalyzeHandler } from '../tools/pe-structure-analyze.js'
+import { createPEStructureAnalyzeHandler } from '../plugins/pe-analysis/tools/pe-structure-analyze.js'
 import { createCompilerPackerDetectHandler } from '../tools/compiler-packer-detect.js'
 import { createAnalysisContextLinkHandler } from '../tools/analysis-context-link.js'
 import {
@@ -2403,11 +2403,11 @@ export function createTriageWorkflowHandler(
 ) {
   // Create tool handlers
   const peFingerprintHandler =
-    dependencies.peFingerprint || createPEFingerprintHandler(workspaceManager, database, cacheManager)
+    dependencies.peFingerprint || createPEFingerprintHandler({ workspaceManager, database, cacheManager } as any)
   const runtimeDetectHandler =
     dependencies.runtimeDetect || createRuntimeDetectHandler(workspaceManager, database, cacheManager)
   const peImportsExtractHandler =
-    dependencies.peImportsExtract || createPEImportsExtractHandler(workspaceManager, database, cacheManager)
+    dependencies.peImportsExtract || createPEImportsExtractHandler({ workspaceManager, database, cacheManager } as any)
   const stringsExtractHandler =
     dependencies.stringsExtract || createStringsExtractHandler(workspaceManager, database, cacheManager)
   const yaraScanHandler =
@@ -2415,7 +2415,7 @@ export function createTriageWorkflowHandler(
   const staticCapabilityTriageHandler =
     dependencies.staticCapabilityTriage || createStaticCapabilityTriageHandler(workspaceManager, database)
   const peStructureAnalyzeHandler =
-    dependencies.peStructureAnalyze || createPEStructureAnalyzeHandler(workspaceManager, database)
+    dependencies.peStructureAnalyze || createPEStructureAnalyzeHandler({ workspaceManager, database } as any)
   const compilerPackerDetectHandler =
     dependencies.compilerPackerDetect || createCompilerPackerDetectHandler(workspaceManager, database)
   const analysisContextLinkHandler =

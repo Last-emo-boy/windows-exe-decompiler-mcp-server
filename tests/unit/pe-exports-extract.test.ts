@@ -4,7 +4,7 @@
  */
 
 import { describe, test, expect, beforeEach, jest } from '@jest/globals'
-import { createPEExportsExtractHandler, PEExportsExtractInputSchema } from '../../src/tools/pe-exports-extract.js'
+import { createPEExportsExtractHandler, PEExportsExtractInputSchema } from '../../src/plugins/pe-analysis/tools/pe-exports-extract.js'
 import type { WorkspaceManager } from '../../src/workspace-manager.js'
 import type { DatabaseManager } from '../../src/database.js'
 import type { CacheManager } from '../../src/cache-manager.js'
@@ -64,11 +64,7 @@ describe('pe.exports.extract tool', () => {
 
   describe('Tool handler', () => {
     test('should return error when sample not found', async () => {
-      const handler = createPEExportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEExportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       mockDatabase.findSample.mockReturnValue(undefined)
 
@@ -81,11 +77,7 @@ describe('pe.exports.extract tool', () => {
     })
 
     test('should return cached result when available', async () => {
-      const handler = createPEExportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEExportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -123,11 +115,7 @@ describe('pe.exports.extract tool', () => {
     })
 
     test('should generate correct cache key', async () => {
-      const handler = createPEExportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEExportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -165,11 +153,7 @@ describe('pe.exports.extract tool', () => {
 
   describe('Requirements validation', () => {
     test('should extract function names, ordinals, and addresses (Requirement 3.3)', async () => {
-      const handler = createPEExportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEExportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',
@@ -234,11 +218,7 @@ describe('pe.exports.extract tool', () => {
     })
 
     test('should handle PE files with no exports', async () => {
-      const handler = createPEExportsExtractHandler(
-        mockWorkspaceManager,
-        mockDatabase,
-        mockCacheManager
-      )
+      const handler = createPEExportsExtractHandler({ workspaceManager: mockWorkspaceManager, database: mockDatabase, cacheManager: mockCacheManager } as any)
 
       const mockSample = {
         id: 'sha256:abc123',

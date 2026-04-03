@@ -5,8 +5,10 @@ Windows EXE Decompiler MCP Server 的完整 Docker 容器化部署指南。
 ## 目录
 
 - [快速开始](#快速开始)
+- [Docker 服务一览](#docker-服务一览)
 - [构建镜像](#构建镜像)
 - [运行容器](#运行容器)
+- [Web Dashboard（看板）](#web-dashboard看板)
 - [MCP 客户端配置](#mcp-客户端配置)
 - [数据持久化](#数据持久化)
 - [安全配置](#安全配置)
@@ -91,7 +93,125 @@ docker images windows-exe-decompiler
 # - 应用代码
 ```
 
+```
+
+## Docker 服务一览
+
+容器启动后，以下服务同时运行在同一个 Node.js 进程中：
+
+### 1. MCP Server（stdio 传输）
+
+| 项目 | 说明 |
+|------|------|
+| 协议 | MCP (Model Context Protocol) over stdio |
+| 连接方式 | `docker exec -i <container> node dist/index.js` 或 `docker run -i` |
+| 用途 | LLM 客户端（Claude / Copilot / Codex）通过 MCP 调用分析工具 |
+
+提供 **148+ MCP 工具**、**3 MCP prompts**、**16 MCP resources**。
+
+### 2. HTTP API File Server（端口 18080）
+
+| 项目 | 说明 |
+|------|------|
+| 默认端口 | `18080`（通过 `API_PORT` 环境变量配置） |
+| 认证 | 可选 API Key（`X-API-Key` header，通过 `API_KEY` 环境变量配置） |
+| 用途 | 样本上传、产物下载、健康检查、SSE 实时事件、**Web Dashboard** |
+
+完整 HTTP 端点列表：
+
+| 方法 | 路径 | 描述 |
+|------|------|------|
+| `GET` | `/` 或 `/dashboard` | **Web Dashboard** — 系统运行看板 |
+| `GET` | `/api/v1/health` | 健康检查（uptime, version, status） |
+| `GET` | `/api/v1/events` | SSE 实时事件流（样本入库、分析完成等） |
+| `POST` | `/api/v1/samples` | 直接上传样本（multipart/form-data） |
+| `GET` | `/api/v1/samples/:id` | 获取样本元数据或下载原始文件 |
+| `GET` | `/api/v1/artifacts` | 列出分析产物（可按 sample_id 过滤） |
+| `GET` | `/api/v1/artifacts/:id` | 获取/下载单个产物 |
+| `DELETE` | `/api/v1/artifacts/:id` | 删除指定产物 |
+| `POST` | `/api/v1/uploads/:token` | 上传会话续传 |
+| `GET` | `/api/v1/uploads/:token` | 上传会话状态查询 |
+| `GET` | `/api/v1/dashboard/overview` | Dashboard API — 服务总览（uptime、版本、工具/插件/样本计数、内存） |
+| `GET` | `/api/v1/dashboard/tools` | Dashboard API — 全部工具列表（按类别分组） |
+| `GET` | `/api/v1/dashboard/plugins` | Dashboard API — 插件状态 |
+| `GET` | `/api/v1/dashboard/samples` | Dashboard API — 样本列表（分页） |
+| `GET` | `/api/v1/dashboard/workers` | Dashboard API — 进程/系统资源统计 |
+| `GET` | `/api/v1/dashboard/config` | Dashboard API — 配置校验报告 |
+| `GET` | `/api/v1/dashboard/system` | Dashboard API — 系统信息（CPU/内存/主机名） |
+
+### 3. Web Dashboard（看板）
+
+浏览器访问 `http://localhost:18080/dashboard` 即可打开暗色主题看板。
+
+| 选项卡 | 内容 |
+|--------|------|
+| **Overview** | 服务运行时间、版本、工具/插件/样本数量、内存使用、最近 24h 分析统计 |
+| **Tools** | 148+ MCP 工具按类别（pe / code / ghidra / dynamic 等）分组展示，支持搜索 |
+| **Plugins** | 9 个内建插件 + 自定义插件的加载状态（loaded / skipped / error） |
+| **Samples** | 已入库样本分页表格（名称、SHA-256、大小、入库时间） |
+| **Config** | 当前配置概要 + 配置校验诊断结果 |
+| **System** | 主机名、CPU、内存、Node.js 版本、日志级别 |
+
+看板还包括：
+- **SSE 实时事件面板**：自动订阅 `/api/v1/events`，实时展示分析事件
+- **自动刷新**：Overview 标签每 15 秒自动拉取最新数据
+
+### 4. 后台分析引擎
+
+| 组件 | 说明 |
+|------|------|
+| **AnalysisTaskRunner** | 后台异步任务执行器，处理排队的分析任务 |
+| **JobQueue** | 持久化作业队列（SQLite），支持任务状态查询、取消、清扫 |
+| **Python Worker Pool** | 并发受限的 Python 进程池（`MAX_PYTHON_WORKERS`），用于 capa/FLOSS/Rizin 等 |
+| **Plugin Manager** | 9 内建插件 + 第三方插件自动发现和热加载 |
+
+### 服务架构图
+
+```
+┌──────────────────────────────────────────────────────────┐
+│                    Docker Container                       │
+│                                                          │
+│  ┌─────────────────────┐   ┌──────────────────────────┐  │
+│  │   MCP Server        │   │  HTTP File Server :18080 │  │
+│  │   (stdio transport) │   │                          │  │
+│  │                     │   │  /dashboard  → Web UI    │  │
+│  │  148+ tools         │   │  /api/v1/samples → CRUD  │  │
+│  │  3 prompts          │   │  /api/v1/artifacts       │  │
+│  │  16 resources       │   │  /api/v1/events → SSE    │  │
+│  │  9 plugins          │   │  /api/v1/dashboard/* API │  │
+│  └────────┬────────────┘   └────────────┬─────────────┘  │
+│           │                             │                │
+│  ┌────────┴─────────────────────────────┴──────────────┐ │
+│  │              Shared Core Infrastructure              │ │
+│  │                                                     │ │
+│  │  DatabaseManager (SQLite)  │  WorkspaceManager      │ │
+│  │  CacheManager              │  StorageManager        │ │
+│  │  PolicyGuard (audit)       │  PluginManager         │ │
+│  │  JobQueue + TaskRunner     │  Python Worker Pool    │ │
+│  └─────────────────────────────────────────────────────┘ │
+│                                                          │
+│  ┌─────────────────────────────────────────────────────┐ │
+│  │              Bundled Analysis Toolchain              │ │
+│  │                                                     │ │
+│  │  Ghidra 12.0.4  │  capa + rules  │  DIE (diec)     │ │
+│  │  Rizin           │  FLOSS         │  YARA-X         │ │
+│  │  UPX             │  Wine/winedbg  │  Graphviz       │ │
+│  │  RetDec          │  frida-tools   │  jadx           │ │
+│  │  angr (venv)     │  Qiling (venv) │  pandare        │ │
+│  └─────────────────────────────────────────────────────┘ │
+└──────────────────────────────────────────────────────────┘
+```
+
+### 端口映射
+
+| 宿主机端口 | 容器端口 | 服务 |
+|-----------|----------|------|
+| `18080` | `18080` | HTTP File Server + Dashboard + SSE |
+| _stdio_ | _stdio_ | MCP Server（通过 `docker exec -i` 或 `docker run -i`） |
+
 ## 运行容器
+
+> **提示**：容器启动后将同时运行以下服务，详见 [Docker 服务一览](#docker-服务一览)。
 
 ### 基本运行（测试模式）
 
@@ -201,6 +321,49 @@ docker-compose down
 - `Qiling` 不会自带 Windows DLL/注册表，必须通过卷挂载方式提供 `QILING_ROOTFS`
 - `Wine` / `winedbg` 适合 Linux 下的 Windows 用户态辅助调试，不是完整 Windows VM 替代
 - `RetDec` 体积较大，建议走 artifact-first 流程而不是把结果整段塞回 MCP 响应
+
+## Web Dashboard（看板）
+
+Docker 容器启动后，在浏览器中访问：
+
+```
+http://localhost:18080/dashboard
+```
+
+即可打开 Web 看板。看板完全内嵌于 HTTP File Server，无需额外端口或配置。
+
+### 功能概览
+
+- **6 个选项卡**：Overview / Tools / Plugins / Samples / Config / System
+- **暗色主题**：GitHub Dark 风格，对比度友好
+- **SSE 实时推送**：右侧事件面板自动展示来自 `/api/v1/events` 的分析事件流
+- **工具搜索**：在 Tools 选项卡中搜索关键词，快速定位工具
+- **分页浏览**：Samples 支持翻页（默认每页 50 条）
+- **自动刷新**：Overview 选项卡每 15 秒自动拉取最新数据
+
+### Dashboard API
+
+所有 Dashboard 数据均通过 JSON API 提供，方便自定义集成：
+
+```bash
+# 查看总览
+curl http://localhost:18080/api/v1/dashboard/overview
+
+# 查看所有工具
+curl http://localhost:18080/api/v1/dashboard/tools
+
+# 查看插件状态
+curl http://localhost:18080/api/v1/dashboard/plugins
+
+# 分页查看样本（limit/offset）
+curl "http://localhost:18080/api/v1/dashboard/samples?limit=20&offset=0"
+
+# 查看系统信息
+curl http://localhost:18080/api/v1/dashboard/system
+
+# 查看配置校验
+curl http://localhost:18080/api/v1/dashboard/config
+```
 
 ## MCP 客户端配置
 

@@ -6,7 +6,7 @@ import crypto from 'crypto'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
 import { CacheManager } from '../../src/cache-manager.js'
-import { createAttackMapHandler, mapIndicatorsToAttack } from '../../src/tools/attack-map.js'
+import { createAttackMapHandler, mapIndicatorsToAttack } from '../../src/plugins/threat-intel/tools/attack-map.js'
 
 jest.setTimeout(15000)
 
@@ -22,7 +22,7 @@ describe('attack.map tool', () => {
     workspaceManager = new WorkspaceManager(path.join(tempDir, 'workspaces'))
     database = new DatabaseManager(path.join(tempDir, 'test.db'))
     cacheManager = new CacheManager(path.join(tempDir, 'cache'), database)
-    handler = createAttackMapHandler(workspaceManager, database, cacheManager)
+    handler = createAttackMapHandler({ workspaceManager, database, cacheManager } as any)
   })
 
   afterEach(async () => {

@@ -4,7 +4,7 @@ import path from 'path'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
 import { createStaticCapabilityTriageHandler } from '../../src/tools/static-capability-triage.js'
-import { createPEStructureAnalyzeHandler } from '../../src/tools/pe-structure-analyze.js'
+import { createPEStructureAnalyzeHandler } from '../../src/plugins/pe-analysis/tools/pe-structure-analyze.js'
 import { createCompilerPackerDetectHandler } from '../../src/tools/compiler-packer-detect.js'
 
 describe('static analysis tools', () => {
@@ -134,8 +134,9 @@ describe('static analysis tools', () => {
 
   test('pe.structure.analyze should merge backend detail and persist canonical PE structure output', async () => {
     const sampleId = 'sha256:' + 'e'.repeat(64)
-    const handler = createPEStructureAnalyzeHandler(workspaceManager, database, {
-      callWorker: async () => ({
+    const handler = createPEStructureAnalyzeHandler({ workspaceManager, database } as any)
+    // callWorker DI removed in plugin migration; test uses default worker path
+    void ({
         job_id: 'worker-job-pe-structure',
         ok: true,
         warnings: [],

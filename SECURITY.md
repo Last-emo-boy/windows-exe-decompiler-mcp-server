@@ -28,9 +28,33 @@ channel before accepting public contributions.
 - privilege boundary bypass in packaging, install scripts, or worker launchers
 - exposure of secrets through logs, reports, or generated artifacts
 
+## Command injection prevention
+
+All external command invocations use `src/safe-command.ts`:
+
+- **Whitelist validation**: Command names are checked against
+  `SAFE_COMMAND_NAME_RE = /^[a-zA-Z0-9._/:\-]+$/` before execution.
+- **Array arguments**: `execFileSync` and `spawnSync` are called with argument
+  arrays — never with shell string interpolation.
+- **Safe helpers**: `safeCommandExists()`, `safeGetCommandVersion()`, and
+  `validateGraphvizFormat()` replace the previous `execSync` invocations.
+
+When adding new external command calls, always use these wrappers rather than
+calling `execSync` or `child_process.exec` directly.
+
+## CI/CD security scanning
+
+The CI pipeline (`.github/workflows/ci.yml`) runs a dedicated `security` job:
+
+1. **npm audit** — known vulnerabilities in Node.js dependencies
+2. **pip-audit** — CVE checks for Python dependencies
+3. **CodeQL SAST** — static application security testing
+
 ## Operational guidance
 
 - Run the server in a dedicated analysis environment.
 - Do not analyze untrusted samples on a production workstation.
 - Review install scripts before using them in shared environments.
 - Keep Ghidra, Python packages, and Node dependencies current.
+- Set `PLUGINS` to limit loaded tool categories in restricted environments.
+- Set `MAX_PYTHON_WORKERS` to limit concurrent Python processes.

@@ -95,6 +95,7 @@ export const ConfigSchema = z.object({
       rizinPath: z.string().optional(),
       upxPath: z.string().optional(),
       retdecPath: z.string().optional(),
+      jadxPath: z.string().optional(),
       yaraXPythonPath: z.string().optional(),
       dieTimeout: z.number().int().min(1).default(30),
       timeout: z.number().int().min(1).default(60),
@@ -284,6 +285,11 @@ export function loadConfigFromEnv(): Record<string, any> {
     if (!config.workers) config.workers = {}
     if (!config.workers.static) config.workers.static = {}
     config.workers.static.retdecPath = process.env.RETDEC_PATH
+  }
+  if (process.env.JADX_PATH) {
+    if (!config.workers) config.workers = {}
+    if (!config.workers.static) config.workers.static = {}
+    config.workers.static.jadxPath = process.env.JADX_PATH
   }
   if (process.env.YARAX_PYTHON) {
     if (!config.workers) config.workers = {}

@@ -578,6 +578,14 @@ export class DatabaseManager {
   }
 
   /**
+   * Get the raw underlying database handle.
+   * Use sparingly — prefer higher-level methods.
+   */
+  getDb(): Database.Database {
+    return this.db
+  }
+
+  /**
    * Get logger
    */
   getLogger() {

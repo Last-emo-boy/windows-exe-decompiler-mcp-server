@@ -47,6 +47,20 @@ export function detectFileType(data: Buffer): string {
     return 'ELF'
   }
 
+  if (data.length >= 4) {
+    const magic32 = data.readUInt32BE(0)
+    // Mach-O 32-bit, 64-bit, and fat binary magic numbers (both endiannesses)
+    if (
+      magic32 === 0xfeedface || magic32 === 0xfeedfacf ||
+      magic32 === 0xcefaedfe || magic32 === 0xcffaedfe
+    ) {
+      return 'Mach-O'
+    }
+    if (magic32 === 0xcafebabe || magic32 === 0xbebafeca) {
+      return 'Mach-O-Fat'
+    }
+  }
+
   return 'unknown'
 }
 

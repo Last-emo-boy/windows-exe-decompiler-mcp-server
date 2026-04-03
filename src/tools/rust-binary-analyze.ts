@@ -12,7 +12,7 @@ import {
 import { createRuntimeDetectHandler } from './runtime-detect.js'
 import { createStringsExtractHandler } from './strings-extract.js'
 import { createCodeFunctionsSmartRecoverHandler } from './code-functions-smart-recover.js'
-import { createPESymbolsRecoverHandler } from './pe-symbols-recover.js'
+import { createPESymbolsRecoverHandler } from '../plugins/pe-analysis/tools/pe-symbols-recover.js'
 import { buildLibraryProfile } from '../workflows/triage.js'
 
 const TOOL_NAME = 'rust_binary.analyze'
@@ -317,7 +317,7 @@ export function createRustBinaryAnalyzeHandler(
     createCodeFunctionsSmartRecoverHandler(workspaceManager, database, cacheManager)
   const symbolsRecoverHandler =
     dependencies.symbolsRecoverHandler ||
-    createPESymbolsRecoverHandler(workspaceManager, database, cacheManager)
+    createPESymbolsRecoverHandler({ workspaceManager, database, cacheManager } as any)
   const binaryRoleHandler =
     dependencies.binaryRoleHandler ||
     createBinaryRoleProfileHandler(workspaceManager, database, cacheManager)

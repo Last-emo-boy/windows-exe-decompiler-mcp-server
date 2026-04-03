@@ -1,0 +1,497 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>MCP Server Dashboard</title>
+<style>
+*,*::before,*::after{box-sizing:border-box;margin:0;padding:0}
+:root{--bg:#0d1117;--bg2:#161b22;--bg3:#21262d;--border:#30363d;--text:#c9d1d9;--text2:#8b949e;--accent:#58a6ff;--accent2:#1f6feb;--green:#3fb950;--yellow:#d29922;--red:#f85149;--purple:#bc8cff;--radius:8px;--shadow:0 1px 3px rgba(0,0,0,.4)}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Helvetica,Arial,sans-serif;background:var(--bg);color:var(--text);line-height:1.5;min-height:100vh}
+a{color:var(--accent);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* Layout */
+.header{background:var(--bg2);border-bottom:1px solid var(--border);padding:12px 24px;display:flex;align-items:center;gap:16px;position:sticky;top:0;z-index:100}
+.header h1{font-size:18px;font-weight:600;display:flex;align-items:center;gap:8px}
+.header h1 .icon{font-size:24px}
+.header .version{font-size:12px;background:var(--accent2);color:#fff;padding:2px 8px;border-radius:12px}
+.header .status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);display:inline-block;animation:pulse 2s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.5}}
+.header nav{margin-left:auto;display:flex;gap:4px}
+.header nav button{background:transparent;border:1px solid var(--border);color:var(--text2);padding:6px 14px;border-radius:var(--radius);cursor:pointer;font-size:13px;transition:all .15s}
+.header nav button:hover,.header nav button.active{background:var(--bg3);color:var(--text);border-color:var(--accent)}
+
+.main{max-width:1400px;margin:0 auto;padding:20px 24px}
+
+/* Cards */
+.grid{display:grid;gap:16px;margin-bottom:24px}
+.grid-4{grid-template-columns:repeat(auto-fill,minmax(200px,1fr))}
+.grid-3{grid-template-columns:repeat(auto-fill,minmax(320px,1fr))}
+.grid-2{grid-template-columns:repeat(auto-fill,minmax(440px,1fr))}
+.card{background:var(--bg2);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+.card h3{font-size:13px;color:var(--text2);text-transform:uppercase;letter-spacing:.5px;margin-bottom:8px}
+.card .value{font-size:28px;font-weight:700;color:var(--text)}
+.card .sub{font-size:12px;color:var(--text2);margin-top:4px}
+
+/* Section */
+.section{margin-bottom:32px}
+.section-title{font-size:16px;font-weight:600;margin-bottom:12px;display:flex;align-items:center;gap:8px}
+.section-title .badge{background:var(--bg3);color:var(--text2);font-size:12px;padding:2px 8px;border-radius:10px;font-weight:400}
+
+/* Table */
+.table-wrap{overflow-x:auto;border:1px solid var(--border);border-radius:var(--radius)}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--bg3);padding:8px 12px;text-align:left;font-weight:600;color:var(--text2);position:sticky;top:0;white-space:nowrap}
+td{padding:8px 12px;border-top:1px solid var(--border);vertical-align:top}
+tr:hover td{background:rgba(88,166,255,.04)}
+.mono{font-family:'SFMono-Regular',Consolas,monospace;font-size:12px}
+
+/* Status badges */
+.badge-status{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.badge-loaded{background:rgba(63,185,80,.15);color:var(--green)}
+.badge-skipped{background:rgba(210,153,34,.15);color:var(--yellow)}
+.badge-error{background:rgba(248,81,73,.15);color:var(--red)}
+.badge-ok{background:rgba(63,185,80,.15);color:var(--green)}
+.badge-warn{background:rgba(210,153,34,.15);color:var(--yellow)}
+
+/* Tool categories */
+.tool-category{margin-bottom:12px}
+.tool-category summary{cursor:pointer;padding:8px 12px;background:var(--bg3);border-radius:var(--radius);font-weight:600;font-size:14px;display:flex;align-items:center;gap:8px;list-style:none}
+.tool-category summary::-webkit-details-marker{display:none}
+.tool-category summary::before{content:'▸';font-size:12px;transition:transform .2s}
+.tool-category[open] summary::before{transform:rotate(90deg)}
+.tool-category .tool-list{padding:8px 0 4px 0}
+.tool-item{padding:4px 12px;font-size:13px;display:flex;gap:8px}
+.tool-item .tool-name{color:var(--accent);font-family:monospace;min-width:280px;flex-shrink:0}
+.tool-item .tool-desc{color:var(--text2);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* Config diagnostic */
+.diag-item{display:flex;align-items:center;gap:8px;padding:6px 12px;font-size:13px;border-bottom:1px solid var(--border)}
+.diag-item:last-child{border-bottom:none}
+.diag-icon{width:16px;text-align:center}
+
+/* Tabs */
+.tab-content{display:none}
+.tab-content.active{display:block}
+
+/* Live indicator */
+.live-dot{width:6px;height:6px;border-radius:50%;background:var(--green);display:inline-block;margin-right:4px;animation:pulse 2s infinite}
+
+/* Search */
+.search-box{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:8px 12px;color:var(--text);font-size:13px;width:100%;max-width:360px;margin-bottom:12px;outline:none}
+.search-box:focus{border-color:var(--accent)}
+.search-box::placeholder{color:var(--text2)}
+
+/* Progress bar */
+.progress-bar{height:4px;background:var(--bg3);border-radius:2px;overflow:hidden;margin-top:8px}
+.progress-bar .fill{height:100%;background:var(--accent);border-radius:2px;transition:width .3s}
+
+/* Responsive */
+@media(max-width:768px){.grid-4{grid-template-columns:1fr 1fr}.grid-3,.grid-2{grid-template-columns:1fr}.header{flex-wrap:wrap}.header nav{width:100%;overflow-x:auto}}
+
+/* Loading */
+.spinner{display:inline-block;width:16px;height:16px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:spin .6s linear infinite}
+@keyframes spin{to{transform:rotate(360deg)}}
+.loading{text-align:center;padding:40px;color:var(--text2)}
+</style>
+</head>
+<body>
+<header class="header">
+  <h1><span class="icon">🔬</span> MCP Server Dashboard</h1>
+  <span class="version" id="version">v1.0.0-beta.2</span>
+  <span class="status-dot" id="statusDot"></span>
+  <span style="font-size:12px;color:var(--text2)" id="uptimeText">—</span>
+  <nav>
+    <button class="active" data-tab="overview">Overview</button>
+    <button data-tab="tools">Tools</button>
+    <button data-tab="plugins">Plugins</button>
+    <button data-tab="samples">Samples</button>
+    <button data-tab="config">Config</button>
+    <button data-tab="system">System</button>
+  </nav>
+</header>
+
+<main class="main">
+  <!-- ═══════════ OVERVIEW TAB ═══════════ -->
+  <div class="tab-content active" id="tab-overview">
+    <div class="grid grid-4" id="overviewCards">
+      <div class="card"><h3>Tools</h3><div class="value" id="ov-tools">—</div><div class="sub">MCP tool definitions</div></div>
+      <div class="card"><h3>Plugins</h3><div class="value" id="ov-plugins">—</div><div class="sub" id="ov-plugins-sub">loaded / total</div></div>
+      <div class="card"><h3>Samples</h3><div class="value" id="ov-samples">—</div><div class="sub" id="ov-samples-sub">ingested binaries</div></div>
+      <div class="card"><h3>SSE Clients</h3><div class="value" id="ov-sse">—</div><div class="sub">live connections</div></div>
+    </div>
+    <div class="grid grid-4">
+      <div class="card"><h3>Memory (RSS)</h3><div class="value" id="ov-rss">—</div><div class="sub">MB</div></div>
+      <div class="card"><h3>Heap Used</h3><div class="value" id="ov-heap">—</div><div class="sub">MB</div></div>
+      <div class="card"><h3>Uptime</h3><div class="value" id="ov-uptime">—</div><div class="sub" id="ov-started">—</div></div>
+      <div class="card"><h3>Recent (24h)</h3><div class="value" id="ov-recent">—</div><div class="sub">analyses</div></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title"><span class="live-dot"></span> Live Event Stream</div>
+      <div class="card" style="max-height:300px;overflow-y:auto;font-family:monospace;font-size:12px;padding:12px" id="eventLog">
+        <div style="color:var(--text2)">Connecting to SSE…</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ TOOLS TAB ═══════════ -->
+  <div class="tab-content" id="tab-tools">
+    <div class="section">
+      <div class="section-title">Tool Registry <span class="badge" id="toolCount">0</span></div>
+      <input class="search-box" id="toolSearch" placeholder="Search tools…" />
+      <div id="toolCategories"><div class="loading"><div class="spinner"></div> Loading tools…</div></div>
+    </div>
+  </div>
+
+  <!-- ═══════════ PLUGINS TAB ═══════════ -->
+  <div class="tab-content" id="tab-plugins">
+    <div class="section">
+      <div class="section-title">Plugin System <span class="badge" id="pluginCount">0</span></div>
+      <div class="grid grid-4" id="pluginSummary"></div>
+      <div class="table-wrap" style="margin-top:16px">
+        <table>
+          <thead><tr><th>Plugin</th><th>Version</th><th>Status</th><th>Tools</th><th>Description</th></tr></thead>
+          <tbody id="pluginTableBody"><tr><td colspan="5" class="loading"><div class="spinner"></div></td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ SAMPLES TAB ═══════════ -->
+  <div class="tab-content" id="tab-samples">
+    <div class="section">
+      <div class="section-title">Sample Inventory <span class="badge" id="sampleCount">0</span></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>#</th><th>ID</th><th>Original Name</th><th>SHA-256</th><th>Size</th><th>Ingested</th></tr></thead>
+          <tbody id="sampleTableBody"><tr><td colspan="6" class="loading"><div class="spinner"></div></td></tr></tbody>
+        </table>
+      </div>
+      <div style="margin-top:12px;display:flex;gap:8px">
+        <button id="samplePrev" style="padding:6px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);cursor:pointer">← Prev</button>
+        <span style="line-height:32px;font-size:13px;color:var(--text2)" id="samplePageInfo">—</span>
+        <button id="sampleNext" style="padding:6px 12px;background:var(--bg3);border:1px solid var(--border);color:var(--text);border-radius:var(--radius);cursor:pointer">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ CONFIG TAB ═══════════ -->
+  <div class="tab-content" id="tab-config">
+    <div class="section">
+      <div class="section-title">Configuration Diagnostics</div>
+      <div class="grid grid-2">
+        <div class="card">
+          <h3>Active Configuration</h3>
+          <div id="configActive"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+        <div class="card">
+          <h3>Validation Report</h3>
+          <div id="configDiagnostics"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════ SYSTEM TAB ═══════════ -->
+  <div class="tab-content" id="tab-system">
+    <div class="section">
+      <div class="section-title">System Information</div>
+      <div class="grid grid-2">
+        <div class="card">
+          <h3>Host</h3>
+          <div id="systemHost"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+        <div class="card">
+          <h3>Process</h3>
+          <div id="systemProcess"><div class="loading"><div class="spinner"></div></div></div>
+        </div>
+      </div>
+      <div class="card" style="margin-top:16px">
+        <h3>CPUs</h3>
+        <div id="systemCpus"><div class="loading"><div class="spinner"></div></div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script>
+// ══════════════════════════════════════════════════════════════════════════
+// Dashboard Client
+// ══════════════════════════════════════════════════════════════════════════
+const API = '/api/v1/dashboard'
+const $=s=>document.querySelector(s)
+const $$=s=>document.querySelectorAll(s)
+
+// ── Tab switching ──────────────────────────────────────────────────────
+$$('.header nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    $$('.header nav button').forEach(b => b.classList.remove('active'))
+    btn.classList.add('active')
+    $$('.tab-content').forEach(t => t.classList.remove('active'))
+    $(`#tab-${btn.dataset.tab}`).classList.add('active')
+    loadTab(btn.dataset.tab)
+  })
+})
+
+// ── Data fetching ──────────────────────────────────────────────────────
+async function api(path) {
+  try {
+    const r = await fetch(API + path)
+    if (!r.ok) throw new Error(`HTTP ${r.status}`)
+    return await r.json()
+  } catch(e) {
+    console.error('API error:', path, e)
+    return null
+  }
+}
+
+// ── Overview ───────────────────────────────────────────────────────────
+async function loadOverview() {
+  const d = await api('/overview')
+  if (!d) return
+  $('#ov-tools').textContent = d.counts.tools
+  $('#ov-plugins').textContent = d.counts.plugins_loaded
+  $('#ov-plugins-sub').textContent = `${d.counts.plugins_loaded} loaded / ${d.counts.plugins_total} total`
+  $('#ov-samples').textContent = d.counts.samples
+  $('#ov-sse').textContent = d.counts.sse_clients
+  $('#ov-rss').textContent = d.memory.rss_mb
+  $('#ov-heap').textContent = d.memory.heap_used_mb
+  $('#ov-uptime').textContent = d.server.uptime_human
+  $('#ov-started').textContent = 'since ' + new Date(d.server.started_at).toLocaleString()
+  $('#ov-recent').textContent = d.counts.recent_analyses_24h
+  $('#version').textContent = 'v' + d.server.version
+  $('#uptimeText').textContent = '⏱ ' + d.server.uptime_human
+}
+
+// ── Tools ──────────────────────────────────────────────────────────────
+let toolsData = null
+async function loadTools() {
+  if (toolsData) { renderTools(toolsData); return }
+  const d = await api('/tools')
+  if (!d) return
+  toolsData = d
+  $('#toolCount').textContent = d.total
+  renderTools(d)
+}
+
+function renderTools(d, filter='') {
+  const container = $('#toolCategories')
+  const lf = filter.toLowerCase()
+  let html = ''
+  for (const cat of d.categories) {
+    const filtered = lf ? cat.tools.filter(t => t.name.toLowerCase().includes(lf) || t.description.toLowerCase().includes(lf)) : cat.tools
+    if (filtered.length === 0) continue
+    html += `<details class="tool-category"${!lf ? '' : ' open'}><summary>${esc(cat.category)} <span class="badge">${filtered.length}</span></summary><div class="tool-list">`
+    for (const t of filtered) {
+      html += `<div class="tool-item"><span class="tool-name">${esc(t.name)}</span><span class="tool-desc">${esc(t.description)}</span></div>`
+    }
+    html += '</div></details>'
+  }
+  container.innerHTML = html || '<div style="padding:20px;color:var(--text2)">No tools match the filter.</div>'
+}
+
+$('#toolSearch').addEventListener('input', e => {
+  if (toolsData) renderTools(toolsData, e.target.value)
+})
+
+// ── Plugins ────────────────────────────────────────────────────────────
+async function loadPlugins() {
+  const d = await api('/plugins')
+  if (!d) return
+  $('#pluginCount').textContent = d.total
+
+  $('#pluginSummary').innerHTML = `
+    <div class="card"><h3>Total</h3><div class="value">${d.total}</div></div>
+    <div class="card"><h3>Loaded</h3><div class="value" style="color:var(--green)">${d.loaded}</div></div>
+    <div class="card"><h3>Skipped</h3><div class="value" style="color:var(--yellow)">${d.skipped}</div></div>
+    <div class="card"><h3>Errors</h3><div class="value" style="color:${d.errored>0?'var(--red)':'var(--text2)'}">${d.errored}</div></div>
+  `
+
+  let rows = ''
+  for (const p of d.plugins) {
+    const cls = p.status==='loaded'?'badge-loaded':p.status==='error'?'badge-error':'badge-skipped'
+    rows += `<tr>
+      <td><strong>${esc(p.name)}</strong><br><span class="mono" style="color:var(--text2)">${esc(p.id)}</span></td>
+      <td class="mono">${p.version||'—'}</td>
+      <td><span class="badge-status ${cls}">${esc(p.status)}</span></td>
+      <td>${p.tool_count}</td>
+      <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${esc(p.description||'—')}</td>
+    </tr>`
+  }
+  $('#pluginTableBody').innerHTML = rows || '<tr><td colspan="5" style="color:var(--text2)">No plugins found</td></tr>'
+}
+
+// ── Samples ────────────────────────────────────────────────────────────
+let sampleOffset = 0
+const SAMPLE_LIMIT = 30
+
+async function loadSamples() {
+  const d = await api(`/samples?limit=${SAMPLE_LIMIT}&offset=${sampleOffset}`)
+  if (!d) return
+  $('#sampleCount').textContent = d.total
+
+  let rows = ''
+  d.samples.forEach((s,i) => {
+    const sha = s.sha256 ? s.sha256.substring(0,16)+'…' : '—'
+    const size = s.file_size ? formatBytes(s.file_size) : '—'
+    rows += `<tr>
+      <td>${sampleOffset+i+1}</td>
+      <td class="mono" style="font-size:11px">${esc(s.id)}</td>
+      <td>${esc(s.original_name||'—')}</td>
+      <td class="mono" style="font-size:11px" title="${esc(s.sha256||'')}">${sha}</td>
+      <td>${size}</td>
+      <td>${s.created_at ? new Date(s.created_at).toLocaleString() : '—'}</td>
+    </tr>`
+  })
+  $('#sampleTableBody').innerHTML = rows || '<tr><td colspan="6" style="color:var(--text2)">No samples ingested yet</td></tr>'
+  const totalPages = Math.ceil(d.total / SAMPLE_LIMIT) || 1
+  const currentPage = Math.floor(sampleOffset / SAMPLE_LIMIT) + 1
+  $('#samplePageInfo').textContent = `Page ${currentPage} / ${totalPages} (${d.total} total)`
+  $('#samplePrev').disabled = sampleOffset === 0
+  $('#sampleNext').disabled = sampleOffset + SAMPLE_LIMIT >= d.total
+}
+
+$('#samplePrev').addEventListener('click', ()=>{ sampleOffset = Math.max(0, sampleOffset - SAMPLE_LIMIT); loadSamples() })
+$('#sampleNext').addEventListener('click', ()=>{ sampleOffset += SAMPLE_LIMIT; loadSamples() })
+
+// ── Config ─────────────────────────────────────────────────────────────
+async function loadConfig() {
+  const d = await api('/config')
+  if (!d) return
+
+  // Active config
+  let activeHtml = '<div style="font-size:13px">'
+  for (const [k,v] of Object.entries(d.active)) {
+    const display = typeof v === 'boolean' ? (v ? '✅' : '❌') : esc(String(v))
+    activeHtml += `<div class="diag-item"><span style="color:var(--text2);min-width:180px;display:inline-block">${esc(k)}</span> <span class="mono">${display}</span></div>`
+  }
+  activeHtml += '</div>'
+  $('#configActive').innerHTML = activeHtml
+
+  // Diagnostics
+  if (d.validation && d.validation.diagnostics) {
+    const icons = { ok:'🟢', warn:'🟡', error:'🔴' }
+    let diagHtml = `<div style="margin-bottom:8px;font-size:13px;font-weight:600">
+      ✅ ${d.validation.summary.ok} OK &nbsp; ⚠️ ${d.validation.summary.warn} Warn &nbsp; ❌ ${d.validation.summary.error} Error
+    </div>`
+    diagHtml += '<div style="font-size:13px">'
+    for (const item of d.validation.diagnostics) {
+      diagHtml += `<div class="diag-item"><span class="diag-icon">${icons[item.status]||'❓'}</span> <span class="mono">${esc(item.key)}</span> — ${esc(item.message)}</div>`
+    }
+    diagHtml += '</div>'
+    $('#configDiagnostics').innerHTML = diagHtml
+  }
+}
+
+// ── System ─────────────────────────────────────────────────────────────
+async function loadSystem() {
+  const d = await api('/system')
+  if (!d) return
+
+  const memPct = d.memory.usage_percent
+  $('#systemHost').innerHTML = `<div style="font-size:13px">
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Hostname</span>${esc(d.hostname)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Platform</span>${esc(d.platform)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Architecture</span>${esc(d.arch)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Host Uptime</span>${formatDuration(d.uptime_host_seconds)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Memory</span>${d.memory.free_gb} GB free / ${d.memory.total_gb} GB total (${memPct}%)
+      <div class="progress-bar" style="width:200px;display:inline-block;vertical-align:middle;margin-left:8px"><div class="fill" style="width:${memPct}%;background:${memPct>90?'var(--red)':memPct>70?'var(--yellow)':'var(--green)'}"></div></div>
+    </div>
+  </div>`
+
+  $('#systemProcess').innerHTML = `<div style="font-size:13px">
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Node</span>${esc(d.node)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">PID</span>${d.pid}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">Process Uptime</span>${formatDuration(d.uptime_process_seconds)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">NODE_ENV</span>${esc(d.env.NODE_ENV)}</div>
+    <div class="diag-item"><span style="color:var(--text2);width:120px;display:inline-block">LOG_LEVEL</span>${esc(d.env.LOG_LEVEL)}</div>
+  </div>`
+
+  let cpuHtml = '<div style="font-size:13px;display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:4px">'
+  d.cpus.forEach((c,i) => {
+    cpuHtml += `<div class="diag-item"><span style="color:var(--text2);width:50px;display:inline-block">CPU ${i}</span> ${esc(c.model)} @ ${c.speed}MHz</div>`
+  })
+  cpuHtml += '</div>'
+  $('#systemCpus').innerHTML = cpuHtml
+}
+
+// ── SSE Live Events ────────────────────────────────────────────────────
+function connectSSE() {
+  const log = $('#eventLog')
+  const evtSource = new EventSource('/api/v1/events')
+
+  evtSource.addEventListener('connected', (e) => {
+    addLogEntry(log, '● Connected to event stream', 'var(--green)')
+  })
+
+  evtSource.addEventListener('heartbeat', (e) => {
+    // silent
+  })
+
+  evtSource.addEventListener('progress', (e) => {
+    const d = tryParse(e.data)
+    addLogEntry(log, `⏳ [progress] ${d?.payload?.message || e.data}`, 'var(--accent)')
+  })
+
+  evtSource.addEventListener('result', (e) => {
+    const d = tryParse(e.data)
+    addLogEntry(log, `✅ [result] stream=${d?.stream || '?'}: ${JSON.stringify(d?.payload).substring(0,200)}`, 'var(--green)')
+  })
+
+  evtSource.addEventListener('error', (e) => {
+    if (evtSource.readyState === EventSource.CLOSED) {
+      addLogEntry(log, '● Disconnected — reconnecting…', 'var(--red)')
+    }
+  })
+
+  evtSource.addEventListener('status', (e) => {
+    const d = tryParse(e.data)
+    addLogEntry(log, `ℹ [status] ${JSON.stringify(d?.payload).substring(0,200)}`, 'var(--purple)')
+  })
+
+  // Also catch generic messages
+  evtSource.onmessage = (e) => {
+    addLogEntry(log, e.data, 'var(--text2)')
+  }
+}
+
+function addLogEntry(container, text, color) {
+  const ts = new Date().toLocaleTimeString()
+  const line = document.createElement('div')
+  line.style.color = color || 'var(--text2)'
+  line.style.marginBottom = '2px'
+  line.textContent = `[${ts}] ${text}`
+  container.prepend(line)
+  // Keep max 200 entries
+  while (container.children.length > 200) container.removeChild(container.lastChild)
+}
+
+// ── Tab loader ─────────────────────────────────────────────────────────
+const loaded = new Set()
+function loadTab(tab) {
+  switch(tab) {
+    case 'overview': loadOverview(); break
+    case 'tools': loadTools(); break
+    case 'plugins': loadPlugins(); break
+    case 'samples': loadSamples(); break
+    case 'config': loadConfig(); break
+    case 'system': loadSystem(); break
+  }
+}
+
+// ── Utilities ──────────────────────────────────────────────────────────
+function esc(s) { const d=document.createElement('div'); d.textContent=s; return d.innerHTML }
+function formatBytes(b) { if(b<1024) return b+'B'; if(b<1048576) return (b/1024).toFixed(1)+'KB'; return (b/1048576).toFixed(1)+'MB' }
+function formatDuration(s) { const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); return (d?d+'d ':'')+(h?h+'h ':'')+(m?m+'m ':'')+(s%60)+'s' }
+function tryParse(s) { try{return JSON.parse(s)}catch{return null} }
+
+// ── Init ───────────────────────────────────────────────────────────────
+loadOverview()
+connectSSE()
+// Auto-refresh overview every 15s
+setInterval(loadOverview, 15000)
+</script>
+</body>
+</html>

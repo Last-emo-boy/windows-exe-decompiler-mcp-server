@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
-import { createGhidraAnalyzeHandler } from '../../src/tools/ghidra-analyze.js'
+import { createGhidraAnalyzeHandler } from '../../src/plugins/ghidra/tools/ghidra-analyze.js'
 import { DecompilerWorker } from '../../src/decompiler-worker.js'
 
 describe('ghidra.analyze tool', () => {
@@ -80,11 +80,7 @@ describe('ghidra.analyze tool', () => {
     })
 
     const enqueue = jest.fn(async () => 'job-should-not-be-used')
-    const handler = createGhidraAnalyzeHandler(
-      workspaceManager,
-      database,
-      { enqueue } as any
-    )
+    const handler = createGhidraAnalyzeHandler({ workspaceManager, database, jobQueue: { enqueue } } as any)
 
     const result = await handler({ sample_id: sampleId })
     const payload = JSON.parse(String(result.content[0]?.text || '{}'))
@@ -104,11 +100,7 @@ describe('ghidra.analyze tool', () => {
     insertSample(sampleId, '2')
 
     const enqueue = jest.fn(async () => 'job-123')
-    const handler = createGhidraAnalyzeHandler(
-      workspaceManager,
-      database,
-      { enqueue } as any
-    )
+    const handler = createGhidraAnalyzeHandler({ workspaceManager, database, jobQueue: { enqueue } } as any)
 
     const result = await handler({
       sample_id: sampleId,
@@ -148,7 +140,7 @@ describe('ghidra.analyze tool', () => {
       })
 
     try {
-      const handler = createGhidraAnalyzeHandler(workspaceManager, database)
+      const handler = createGhidraAnalyzeHandler({ workspaceManager, database } as any)
       const result = await handler({
         sample_id: sampleId,
         options: {

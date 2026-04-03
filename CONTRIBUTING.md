@@ -116,13 +116,40 @@ echo '{"jsonrpc":"2.0","method":"initialize","params":{}}' | \
   docker run -i --rm windows-exe-decompiler:latest node dist/index.js
 ```
 
+## Adding tools and plugins
+
+### Registering a new tool
+
+All MCP tools are registered in `src/tool-registry.ts` (not `src/index.ts`).
+
+1. Create `src/tools/my-tool.ts` exporting a tool definition and handler factory.
+2. Import both in `src/tool-registry.ts`.
+3. Add `server.registerTool(definition, handler)` in the appropriate category section.
+4. Add `tests/unit/my-tool.test.ts`.
+5. Rebuild and run tests:
+
+```powershell
+npm run build
+npm test -- --testPathPattern my-tool
+```
+
+See [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md) for the full `ToolDeps`
+interface and handler factory pattern.
+
+### Developing a plugin
+
+If your tool belongs to a toggleable category (e.g. a new analysis backend),
+consider packaging it as a plugin. See [docs/PLUGINS.md](./docs/PLUGINS.md) for
+the `Plugin` interface, lifecycle, and registration instructions.
+
 ## Repository conventions
 
 - Keep MCP tool schemas, tool descriptions, and `tool.help` output aligned.
 - Prefer stable artifacts over untracked workspace files.
 - Preserve provenance fields when adding new report or workflow outputs.
-- When adding a new MCP tool or prompt, register it in `src/index.ts` and make
-  sure route coverage tests still pass.
+- Register new tools in `src/tool-registry.ts` (the centralised registry).
+- Use `src/safe-command.ts` wrappers for any external command invocations.
+- Use `src/logger.ts` (Pino) instead of `console.log` / `console.error`.
 - Avoid committing generated workspace outputs, caches, and temporary reports.
 - Include Docker configuration changes in the same commit as code changes.
 

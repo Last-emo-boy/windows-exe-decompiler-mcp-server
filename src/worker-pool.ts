@@ -67,11 +67,20 @@ export class WorkerPool extends EventEmitter {
   private heartbeatTimer?: NodeJS.Timeout;
   private allocationTimer?: NodeJS.Timeout;
   private isRunning = false;
+  private jobHandlers?: Map<string, (job: Job) => Promise<unknown>>;
 
   constructor(jobQueue: JobQueue, config: WorkerPoolConfig = {}) {
     super();
     this.jobQueue = jobQueue;
     this.config = { ...DEFAULT_CONFIG, ...config };
+    this.jobHandlers = new Map();
+  }
+
+  /**
+   * Register a handler function for a given job type or tool name.
+   */
+  registerHandler(key: string, handler: (job: Job) => Promise<unknown>): void {
+    this.jobHandlers!.set(key, handler);
   }
 
   /**
@@ -567,31 +576,61 @@ export class WorkerPool extends EventEmitter {
 
     const startTime = Date.now();
 
-    // TODO: Implement actual worker execution
-    // For now, this is a placeholder that simulates work
-    
     logger.debug({
       jobId: job.id,
       type: job.type,
       tool: job.tool
-    }, 'Executing job (placeholder)');
+    }, 'Executing job via worker dispatch');
 
-    // Simulate work - use longer time for decompile jobs to test concurrency
-    const simulationTime = job.type === 'decompile' ? 500 : 100;
-    await new Promise(resolve => setTimeout(resolve, simulationTime));
-
-    return {
-      jobId: job.id,
-      ok: true,
-      data: { placeholder: true },
-      errors: [],
-      warnings: [],
-      artifacts: [],
-      metrics: {
-        elapsedMs: Date.now() - startTime,
-        peakRssMb: 0
+    try {
+      // Dispatch to the appropriate handler registered on the pool
+      const handler = this.jobHandlers?.get(job.type) ?? this.jobHandlers?.get(job.tool);
+      if (handler) {
+        const result = await handler(job);
+        const memUsage = process.memoryUsage();
+        return {
+          jobId: job.id,
+          ok: true,
+          data: result,
+          errors: [],
+          warnings: [],
+          artifacts: [],
+          metrics: {
+            elapsedMs: Date.now() - startTime,
+            peakRssMb: Math.round(memUsage.rss / 1024 / 1024 * 100) / 100
+          }
+        };
       }
-    };
+
+      // Fallback: no handler registered — return a descriptive error
+      logger.warn({ jobId: job.id, type: job.type }, 'No handler registered for job type');
+      return {
+        jobId: job.id,
+        ok: false,
+        data: null,
+        errors: [`No execution handler registered for job type '${job.type}'`],
+        warnings: [],
+        artifacts: [],
+        metrics: {
+          elapsedMs: Date.now() - startTime,
+          peakRssMb: Math.round(process.memoryUsage().rss / 1024 / 1024 * 100) / 100
+        }
+      };
+    } catch (err) {
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      return {
+        jobId: job.id,
+        ok: false,
+        data: null,
+        errors: [errorMsg],
+        warnings: [],
+        artifacts: [],
+        metrics: {
+          elapsedMs: Date.now() - startTime,
+          peakRssMb: Math.round(process.memoryUsage().rss / 1024 / 1024 * 100) / 100
+        }
+      };
+    }
   }
 
   /**

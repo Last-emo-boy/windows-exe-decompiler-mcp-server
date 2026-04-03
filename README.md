@@ -15,6 +15,8 @@ An MCP server for Windows reverse engineering. It exposes PE triage, Ghidra-back
 - Full Linux analysis image: the Docker distribution now bundles Graphviz, Rizin, YARA-X, UPX, Wine/winedbg, Frida CLI, Qiling, angr, PANDA bindings, and RetDec in addition to the baseline Ghidra/capa/DIE/FLOSS stack.
 - **Staged nonblocking pipeline**: analysis is organized into explicit stages (`fast_profile`, `enrich_static`, `function_map`, `reconstruct`, `dynamic_plan`, `dynamic_execute`, `summarize`), with preview-first tool contracts and persisted run state for reuse.
 - **HTTP File Server**: Embedded HTTP API on port 18080 for direct sample uploads, artifact downloads, and upload session management with API key authentication.
+- **Web Dashboard**: Dark-themed real-time monitoring dashboard at `http://localhost:18080/dashboard` — shows all tools, plugins, samples, config diagnostics, system resources, and SSE event stream.
+- **Server-Sent Events (SSE)**: Real-time event streaming at `/api/v1/events` for analysis progress, sample ingestion, and server state changes.
 
 ## New in the staged analysis pipeline
 
@@ -206,6 +208,8 @@ It is designed to help MCP clients:
 - `sandbox.execute`
 - `dynamic.trace.import`
 - `dynamic.memory.import`
+- `dynamic.auto_hook` - Automated Frida hook generation from static evidence
+- `dynamic.memory_dump` - Runtime memory dump with pattern scanning
 - `attack.map`
 - `ioc.export`
 - `report.summarize`
@@ -214,6 +218,34 @@ It is designed to help MCP clients:
 - `artifact.read`
 - `artifacts.diff`
 - `tool.help`
+
+### Android / APK analysis
+
+- `apk.structure.analyze` - APK manifest, permissions, component extraction
+- `apk.packer.detect` - APK packer/obfuscator detection
+- `dex.decompile` - DEX-to-Java decompilation via jadx
+- `dex.classes.list` - DEX class/method enumeration
+
+### Symbolic execution & CrackMe
+
+- `symbolic.explore` - angr-backed symbolic execution
+- `keygen.verify` - Keygen/license verification (Qiling/angr)
+- `constraint.solve` - Z3/angr constraint solver
+
+### Malware analysis
+
+- `malware.config.extract` - Malware configuration extraction
+- `malware.classify` - Family classification (YARA + capa + behavioral)
+- `c2.extract` - C2 infrastructure extraction
+
+### Cross-platform & visualization
+
+- `elf.macho.parse` - ELF/Mach-O header/section parsing via Rizin
+- `rizin.diff` - Binary diffing (function/basic-block level)
+- `cfg.visualize` - Control flow graph visualization (DOT/SVG/JSON)
+- `timeline.correlate` - Multi-source event timeline correlation
+- `cross_module.xref` - Cross-module cross-reference analysis
+- `kb.search` - Knowledge base semantic search
 
 ### Semantic review and reconstruction
 
@@ -437,7 +469,7 @@ See [`docs/EXAMPLES.md`](./docs/EXAMPLES.md#场景 -9-frida-运行时 instrument
 
 ## Current Development Status
 
-### Latest Release: v1.0.0-beta.1
+### Latest Release: v1.0.0-beta.2
 
 **Stable Features** (Production Ready):
 - PE triage and static analysis (`static.capability.triage`, `pe.structure.analyze`, `compiler.packer.detect`)
@@ -446,18 +478,53 @@ See [`docs/EXAMPLES.md`](./docs/EXAMPLES.md#场景 -9-frida-运行时 instrument
 - Rust and .NET recovery paths
 - Source-like reconstruction with LLM-assisted review layers
 - Runtime evidence ingestion and correlation
+- Android/APK analysis (`apk.structure.analyze`, `dex.decompile`, `dex.classes.list`, `apk.packer.detect`)
+- Symbolic execution and CrackMe tools (`symbolic.explore`, `keygen.verify`, `constraint.solve`)
+- Malware analysis (`malware.config.extract`, `malware.classify`, `c2.extract`)
+- Cross-platform binary parsing (`elf.macho.parse`, `rizin.diff`)
+- Visualization and correlation (`cfg.visualize`, `timeline.correlate`, `cross_module.xref`, `kb.search`)
+- Frida dynamic instrumentation (`frida.runtime.instrument`, `frida.script.inject`, `frida.trace.capture`)
+- HTTP File Server with REST API (port 18080) — sample upload, artifact CRUD, SSE events
+- **Web Dashboard** at `http://localhost:18080/dashboard` — real-time monitoring of tools, plugins, samples, config, system
+- **Plugin SDK** with 15 built-in plugins, hot-load/unload, third-party auto-discovery
+- **Production infrastructure**: Rate limiting, config validation, pagination, retry, batch analysis, SBOM generation
+- **SSE real-time events**: Server-Sent Events for live analysis progress streaming
+
+### Full Service Inventory (Docker)
+
+When running in Docker (`docker-compose up -d`), the container exposes:
+
+| Service | Access | Description |
+|---------|--------|-------------|
+| MCP Server | stdio (`docker exec -i`) | 160 tools, 3 prompts, 16 resources for LLM clients |
+| HTTP API | `http://localhost:18080/api/v1/*` | REST API for samples, artifacts, uploads, health, SSE |
+| Web Dashboard | `http://localhost:18080/dashboard` | Real-time monitoring SPA (6 tabs, dark theme) |
+| SSE Events | `http://localhost:18080/api/v1/events` | Real-time event stream for analysis events |
+| Dashboard API | `http://localhost:18080/api/v1/dashboard/*` | 7 JSON endpoints powering the dashboard |
+
+### Built-in Plugins (15)
+
+| Plugin | ID | Tools | Description |
+|--------|----|-------|-------------|
+| Android / APK | `android` | 4 | APK manifest, DEX decompilation, packer detection |
+| Malware Analysis | `malware` | 4 | C2 extraction, config parsing, family classification, sandbox reports |
+| CrackMe Automation | `crackme` | 4 | Validation location, symbolic execution, patching, keygen |
+| Dynamic Analysis | `dynamic` | 3 | Auto Frida hooks, trace attribution, memory dumps |
+| Frida Instrumentation | `frida` | 3 | Runtime instrumentation, script injection, trace capture |
+| Ghidra Integration | `ghidra` | 2 | Headless Ghidra analysis and health checks |
+| Cross-Module Analysis | `cross-module` | 3 | Cross-binary comparison, call graphs, DLL dependency trees |
+| Visualization | `visualization` | 3 | HTML reports, behavior timelines, data-flow maps |
+| Knowledge Base | `kb-collaboration` | 2 | Function signature matching, analysis templates |
+| PE Analysis | `pe-analysis` | 6 | PE structure, imports, exports, fingerprint, pdata, symbol recovery |
+| Vulnerability Scanner | `vuln-scanner` | 2 | Vulnerability pattern scanning and summary |
+| Threat Intelligence | `threat-intel` | 2 | ATT&CK mapping and IOC export |
+| Debug Session | `debug-session` | 6 | GDB/LLDB debug session management |
+| Memory Forensics | `memory-forensics` | 6 | Memory dump analysis, volatility integration |
+| Observability | `observability` | 1 | Tool call hook tracing and metrics |
+
+Plugins are controlled via the `PLUGINS` environment variable (`*` = all, `android,malware` = specific, `-dynamic` = exclude). See [`docs/PLUGINS.md`](./docs/PLUGINS.md).
 
 ### In Development (Post-beta roadmap)
-
-**Frida Dynamic Instrumentation** - Completed implementation, rolling into the v1 beta line:
-- `frida.runtime.instrument` - Spawn and attach mode instrumentation
-- `frida.script.inject` - Pre-built and custom script injection
-- `frida.trace.capture` - Canonical trace schema with filtering/aggregation
-- Full integration with `dynamic.trace.import`, `report.generate`, `report.summarize`
-- 101 unit tests + integration test coverage
-- Comprehensive documentation in `docs/EXAMPLES.md`
-
-**Test Coverage**: All 101 tests passing including Frida instrumentation suite.
 
 For the new static triage foundation, the most common optional requirements are:
 
@@ -513,20 +580,93 @@ This summary is surfaced through:
 - `report.summarize`
 - `report.generate`
 
+## Architecture
+
+The server uses a **centralised tool registry** (`src/tool-registry.ts`) that
+imports and wires 109 core MCP tools, 3 prompts, and 16 resources in one place.
+An additional 51 tools are registered by the 15 built-in plugins, bringing the
+total to 160 MCP tools.
+The entry point (`src/index.ts`) is kept under 90 lines.
+
+All 15 tool categories — from PE analysis and vulnerability scanning to Android,
+Malware, Frida, Ghidra, and debug sessions — are managed as **plugins** that
+can be toggled via the `PLUGINS` environment variable (default: all enabled).
+See [docs/PLUGINS.md](./docs/PLUGINS.md).
+
+Other infrastructure:
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| Safe command execution | `src/safe-command.ts` | Whitelist-validated, array-based command invocation — prevents shell injection |
+| Python process pool | `src/python-process-pool.ts` | Concurrency-limited worker pool (`MAX_PYTHON_WORKERS` env var) |
+| Streaming progress | `src/streaming-progress.ts` | MCP `notifications/progress` for long-running tools |
+| MCP resources | `src/tool-registry.ts` | 8 Frida + 8 Ghidra scripts discoverable via `resources/list` |
+| HTTP File Server | `src/api/file-server.ts` | REST API (port 18080) for sample upload, artifact CRUD, SSE events, and dashboard |
+| Web Dashboard | `src/api/dashboard/index.html` | Dark-themed SPA at `/dashboard` — tools, plugins, samples, config, system info |
+| Dashboard API | `src/api/routes/dashboard-api.ts` | 7 JSON endpoints (`/api/v1/dashboard/*`) powering the web dashboard |
+| SSE Events | `src/api/sse-events.ts` | Server-Sent Events for real-time analysis progress and server state |
+| Rate Limiter | `src/api/rate-limiter.ts` | Request rate limiting for the HTTP API |
+| Config Validator | `src/config-validator.ts` | Validates runtime config and surfaces diagnostics via dashboard |
+| CI security scanning | `.github/workflows/ci.yml` | npm audit + pip-audit + CodeQL SAST |
+| Structured logging | `src/logger.ts` | Pino JSON logging, child loggers, audit events |
+
+Full details: [docs/ARCHITECTURE.md](./docs/ARCHITECTURE.md)
+
 ## Project layout
 
 ```text
 bin/                         npm CLI entrypoint
 dist/                        compiled TypeScript output
 ghidra_scripts/              Ghidra helper scripts used by the server
+frida_scripts/               Frida instrumentation scripts (also MCP resources)
 helpers/DotNetMetadataProbe/ .NET metadata helper project
 src/                         TypeScript MCP server source
-tests/                       unit and integration tests
-workers/                     Python worker, YARA rules, dynamic helpers
-install-to-codex.ps1         local Codex MCP install helper
-install-to-copilot.ps1       local GitHub Copilot MCP install helper
-install-to-claude.ps1        local Claude Code MCP install helper
-docs/QUALITY_EVALUATION.md   evaluation checklist for regression and release readiness
+  index.ts                   Entry point (~90 lines)
+  server.ts                  MCPServer class (tools, prompts, resources)
+  tool-registry.ts           Centralised tool/prompt/resource registration
+  plugins.ts                 Plugin framework (15 built-in + auto-discovery)
+  safe-command.ts            Command injection prevention
+  python-process-pool.ts     Concurrency-limited Python worker pool
+  streaming-progress.ts      MCP progress notification support
+  config-validator.ts        Runtime config validation with diagnostics
+  logger.ts                  Pino structured logging
+  tools/                     Individual tool definitions and handlers (~90 files)
+  plugins/
+    sdk.ts                   Plugin contract and shared types
+    android/                 Android/APK analysis plugin
+    crackme/                 CrackMe automation plugin
+    cross-module/            Cross-binary analysis plugin
+    debug-session/           GDB/LLDB debug session plugin
+    dynamic/                 Dynamic analysis plugin
+    frida/                   Frida instrumentation plugin
+    ghidra/                  Ghidra integration plugin
+    kb-collaboration/        Knowledge base plugin
+    malware/                 Malware analysis plugin
+    memory-forensics/        Memory forensics plugin
+    observability/           Tool call tracing plugin
+    pe-analysis/             PE binary analysis plugin
+    threat-intel/            Threat intelligence plugin
+    visualization/           Reporting and visualization plugin
+    vuln-scanner/            Vulnerability pattern detection plugin
+  api/
+    file-server.ts           HTTP API server (port 18080)
+    rate-limiter.ts          Request rate limiting
+    auth-middleware.ts       API key authentication
+    sse-events.ts            Server-Sent Events for real-time streaming
+    dashboard/index.html     Web dashboard SPA (dark theme, 6 tabs)
+    routes/
+      health.ts              Health check endpoint
+      dashboard-api.ts       Dashboard JSON API (7 endpoints)
+tests/                       unit and integration tests (207 test files)
+workers/                     Python workers, YARA rules, dynamic helpers
+packages/plugin-sdk/         Standalone Plugin SDK npm package
+docs/                        Documentation
+  ARCHITECTURE.md            Internal architecture guide
+  PLUGINS.md                 Plugin system guide
+  DOCKER.md                  Docker deployment guide (with service inventory)
+  API-FILE-SERVER.md         HTTP API usage guide
+  API-REFERENCE.md           Complete API reference
+  QUALITY_EVALUATION.md      Evaluation checklist for release readiness
 ```
 
 ## Prerequisites
@@ -827,6 +967,8 @@ Current non-goals:
 ## Contributing and release process
 
 - Contributor guide: [`CONTRIBUTING.md`](./CONTRIBUTING.md)
+- Architecture overview: [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md)
+- Plugin development: [`docs/PLUGINS.md`](./docs/PLUGINS.md)
 - Quality evaluation notes: [`docs/QUALITY_EVALUATION.md`](./docs/QUALITY_EVALUATION.md)
 - Example benchmark corpus: [`examples/benchmark-corpus.example.json`](./examples/benchmark-corpus.example.json)
 - Security policy: [`SECURITY.md`](./SECURITY.md)

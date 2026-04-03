@@ -10,7 +10,7 @@ import { DatabaseManager } from '../../src/database.js'
 import {
   createFridaScriptInjectHandler,
   FridaScriptInjectInputSchema,
-} from '../../src/tools/frida-script-inject.js'
+} from '../../src/plugins/frida/tools/frida-script-inject.js'
 
 describe('FridaScriptInjectInputSchema', () => {
   test('should accept valid input with all fields', () => {
@@ -152,7 +152,7 @@ describe('createFridaScriptInjectHandler', () => {
   })
 
   test('should return error when script file not found', async () => {
-    const handler = createFridaScriptInjectHandler(workspaceManager, database)
+    const handler = createFridaScriptInjectHandler({ workspaceManager, database } as any)
     const result = await handler({
       pid: 1234,
       script_path: '/nonexistent/path/script.js',

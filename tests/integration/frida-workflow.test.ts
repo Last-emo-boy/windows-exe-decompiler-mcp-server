@@ -6,9 +6,9 @@
 import { describe, test, expect, beforeAll, afterAll } from '@jest/globals'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
-import { createFridaRuntimeInstrumentHandler } from '../../src/tools/frida-runtime-instrument.js'
-import { createFridaScriptInjectHandler } from '../../src/tools/frida-script-inject.js'
-import { createFridaTraceCaptureHandler } from '../../src/tools/frida-trace-capture.js'
+import { createFridaRuntimeInstrumentHandler } from '../../src/plugins/frida/tools/frida-runtime-instrument.js'
+import { createFridaScriptInjectHandler } from '../../src/plugins/frida/tools/frida-script-inject.js'
+import { createFridaTraceCaptureHandler } from '../../src/plugins/frida/tools/frida-trace-capture.js'
 import { createSampleIngestHandler } from '../../src/tools/sample-ingest.js'
 import { PolicyGuard } from '../../src/policy-guard.js'
 import fs from 'fs/promises'
@@ -77,7 +77,7 @@ describe('Frida Integration Tests', () => {
    * Helper to ingest a test sample
    */
   async function ingestTestSample(peBuffer: Buffer): Promise<string> {
-    const ingestHandler = createSampleIngestHandler(workspaceManager, database, policyGuard)
+    const ingestHandler = createSampleIngestHandler({ workspaceManager, database, policyGuard } as any)
     const result = await ingestHandler({
       bytes_b64: peBuffer.toString('base64'),
       filename: 'test-sample.exe',

@@ -148,24 +148,50 @@ export class ContextManager {
    * Delete context
    */
   async deleteContext(sampleId: string): Promise<void> {
-    // Implementation depends on storage strategy
-    // For now, this is a placeholder
+    try {
+      const db = this.database.getDb()
+      db.prepare('DELETE FROM analysis_contexts WHERE sample_id = ?').run(sampleId)
+    } catch {
+      // Table may not exist yet — ignore
+    }
   }
 
   /**
    * Load context from storage
    */
   private async loadContext(sampleId: string): Promise<AnalysisContext | null> {
-    // TODO: Implement database storage
-    // For now, return null (will create new context)
-    return null
+    try {
+      this.ensureTable()
+      const db = this.database.getDb()
+      const row = db.prepare('SELECT context_json FROM analysis_contexts WHERE sample_id = ?').get(sampleId) as { context_json: string } | undefined
+      if (!row) return null
+      return JSON.parse(row.context_json) as AnalysisContext
+    } catch {
+      return null
+    }
   }
 
   /**
    * Save context to storage
    */
   private async saveContext(context: AnalysisContext): Promise<void> {
-    // TODO: Implement database storage
+    this.ensureTable()
+    const db = this.database.getDb()
+    db.prepare(
+      'INSERT OR REPLACE INTO analysis_contexts (sample_id, context_json, updated_at) VALUES (?, ?, ?)'
+    ).run(context.sampleId, JSON.stringify(context), context.updatedAt)
+  }
+
+  /** Ensure the storage table exists (lazy creation). */
+  private ensureTable(): void {
+    const db = this.database.getDb()
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS analysis_contexts (
+        sample_id TEXT PRIMARY KEY,
+        context_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+      )
+    `)
   }
 
   /**

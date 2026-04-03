@@ -5,6 +5,7 @@
  */
 
 import fs from 'fs'
+import { logger } from './logger.js'
 import path from 'path'
 
 // ============================================================================
@@ -349,9 +350,8 @@ export class PolicyGuard {
     try {
       fs.appendFileSync(this.auditLogPath, logLine, 'utf-8')
     } catch (error) {
-      // Log to console if file write fails
-      console.error('Failed to write audit log:', error)
-      console.error('Audit event:', event)
+      // Log to stderr if file write fails
+      logger.error({ err: error, event }, 'Failed to write audit log')
     }
   }
 
