@@ -149,6 +149,19 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
 /* Breadcrumb / back */
 .back-btn{background:var(--bg3);border:1px solid var(--border);color:var(--text);padding:6px 14px;border-radius:var(--radius);cursor:pointer;font-size:13px;margin-bottom:12px;display:inline-flex;align-items:center;gap:4px}
 .back-btn:hover{border-color:var(--accent)}
+
+/* Log viewer */
+.log-container{max-height:400px;overflow-y:auto;font-family:'SFMono-Regular',Consolas,monospace;font-size:12px;padding:12px}
+.log-line{margin-bottom:1px;padding:1px 4px;border-radius:2px}
+.log-line:hover{background:rgba(255,255,255,.03)}
+.log-time{color:var(--text2);margin-right:6px}
+.log-level{display:inline-block;width:44px;text-align:center;font-weight:600;font-size:10px;border-radius:3px;padding:1px 4px;margin-right:6px}
+.log-level-trace{background:rgba(139,148,158,.15);color:var(--text2)}
+.log-level-debug{background:rgba(139,148,158,.15);color:var(--text2)}
+.log-level-info{background:rgba(88,166,255,.15);color:var(--accent)}
+.log-level-warn{background:rgba(210,153,34,.15);color:var(--yellow)}
+.log-level-error{background:rgba(248,81,73,.15);color:var(--red)}
+.log-level-fatal{background:rgba(248,81,73,.3);color:var(--red)}
 </style>
 </head>
 <body>
@@ -196,6 +209,24 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
       <div class="section-title"><span class="live-dot"></span> Live Event Stream</div>
       <div class="card" style="max-height:300px;overflow-y:auto;font-family:monospace;font-size:12px;padding:12px" id="eventLog">
         <div style="color:var(--text2)">Connecting to SSE…</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title"><span class="live-dot"></span> Server Logs <span class="badge" id="logCountBadge">0</span></div>
+      <div class="filter-bar">
+        <select id="logLevelFilter">
+          <option value="">All Levels</option>
+          <option value="debug">Debug+</option>
+          <option value="info" selected>Info+</option>
+          <option value="warn">Warn+</option>
+          <option value="error">Error+</option>
+        </select>
+        <button class="back-btn" id="logRefreshBtn" style="margin:0">↻ Refresh</button>
+        <button class="back-btn" id="logAutoScrollBtn" style="margin:0">⏬ Auto-scroll: ON</button>
+      </div>
+      <div class="card log-container" id="logViewer">
+        <div style="color:var(--text2)">Loading logs…</div>
       </div>
     </div>
   </div>
@@ -450,10 +481,11 @@ async function loadPlugins() {
   let rows = ''
   for (const p of d.plugins) {
     const cls = p.status==='loaded'?'badge-loaded':p.status==='error'?'badge-error':'badge-skipped'
+    const errorHint = p.error ? `<br><span style="font-size:11px;color:var(--text2)">${esc(p.error)}</span>` : ''
     rows += `<tr>
       <td><strong>${esc(p.name)}</strong><br><span class="mono" style="color:var(--text2)">${esc(p.id)}</span></td>
       <td class="mono">${p.version||'—'}</td>
-      <td><span class="badge-status ${cls}">${esc(p.status)}</span></td>
+      <td><span class="badge-status ${cls}">${esc(p.status)}</span>${errorHint}</td>
       <td>${p.tool_count}</td>
       <td style="max-width:300px;overflow:hidden;text-overflow:ellipsis">${esc(p.description||'—')}</td>
     </tr>`
@@ -886,6 +918,56 @@ function jsonToHtml(val, indent) {
   return String(val)
 }
 
+// ── Server Logs ────────────────────────────────────────────────────────
+let logAutoScroll = true
+
+async function loadLogs() {
+  const level = $('#logLevelFilter').value
+  const params = `limit=200${level ? '&level='+level : ''}`
+  const d = await api(`/logs?${params}`)
+  if (!d) return
+  renderLogEntries(d.logs, false)
+  $('#logCountBadge').textContent = d.total
+}
+
+function renderLogEntries(entries, append) {
+  const container = $('#logViewer')
+  if (!append) container.innerHTML = ''
+  for (const e of entries) {
+    appendLogLine(container, e)
+  }
+  if (logAutoScroll) container.scrollTop = container.scrollHeight
+}
+
+function appendLogLine(container, e) {
+  const line = document.createElement('div')
+  line.className = 'log-line'
+  const ts = e.time ? new Date(e.time).toLocaleTimeString() : ''
+  const lvl = e.levelLabel || 'info'
+  line.innerHTML = `<span class="log-time">${ts}</span><span class="log-level log-level-${lvl}">${lvl.toUpperCase()}</span><span>${esc(e.msg || '')}</span>`
+  container.appendChild(line)
+  // Keep max 500 entries
+  while (container.children.length > 500) container.removeChild(container.firstChild)
+}
+
+function handleSseLog(data) {
+  const container = $('#logViewer')
+  if (!container) return
+  const entry = { time: data.time, levelLabel: data.level, msg: data.msg }
+  appendLogLine(container, entry)
+  if (logAutoScroll) container.scrollTop = container.scrollHeight
+  // Update count
+  const badge = $('#logCountBadge')
+  badge.textContent = parseInt(badge.textContent || '0') + 1
+}
+
+$('#logLevelFilter').addEventListener('change', () => loadLogs())
+$('#logRefreshBtn').addEventListener('click', () => loadLogs())
+$('#logAutoScrollBtn').addEventListener('click', () => {
+  logAutoScroll = !logAutoScroll
+  $('#logAutoScrollBtn').textContent = logAutoScroll ? '⏬ Auto-scroll: ON' : '⏬ Auto-scroll: OFF'
+})
+
 // ── Config ─────────────────────────────────────────────────────────────
 async function loadConfig() {
   const d = await api('/config')
@@ -981,6 +1063,11 @@ function connectSSE() {
     addLogEntry(log, `ℹ [status] ${JSON.stringify(d?.payload).substring(0,200)}`, 'var(--purple)')
   })
 
+  evtSource.addEventListener('log', (e) => {
+    const d = tryParse(e.data)
+    if (d && d.payload) handleSseLog(d.payload)
+  })
+
   // Also catch generic messages
   evtSource.onmessage = (e) => {
     addLogEntry(log, e.data, 'var(--text2)')
@@ -1025,6 +1112,7 @@ function tryParse(s) { try{return JSON.parse(s)}catch{return null} }
 
 // ── Init ───────────────────────────────────────────────────────────────
 loadOverview()
+loadLogs()
 connectSSE()
 // Auto-refresh overview every 15s
 setInterval(loadOverview, 15000)

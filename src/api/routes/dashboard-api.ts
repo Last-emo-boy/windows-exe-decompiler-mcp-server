@@ -25,8 +25,8 @@ import type { WorkspaceManager } from '../../workspace-manager.js'
 import { getPluginManager } from '../../plugins.js'
 import { validateConfig, type ValidationReport } from '../../config-validator.js'
 import { config } from '../../config.js'
-import { getActiveSseClients } from '../sse-events.js'
-import { logger } from '../../logger.js'
+import { getActiveSseClients, eventBus } from '../sse-events.js'
+import { logger, logRingBuffer, type LogEntry } from '../../logger.js'
 
 const SERVER_START_TIME = Date.now()
 
@@ -40,6 +40,15 @@ let _deps: DashboardDeps | null = null
 
 export function initDashboard(deps: DashboardDeps): void {
   _deps = deps
+
+  // Forward new log entries to SSE stream so the dashboard can display them in real time
+  logRingBuffer.onEntry((entry: LogEntry) => {
+    eventBus.publish('server-logs', 'log', {
+      level: entry.levelLabel,
+      time: entry.time,
+      msg: entry.msg,
+    })
+  })
 }
 
 function sendJson(res: ServerResponse, status: number, data: unknown): void {
@@ -102,6 +111,9 @@ export function handleDashboardApi(
       return true
     case '/config':
       handleConfig(res)
+      return true
+    case '/logs':
+      handleLogs(res, _searchParams)
       return true
     case '/system':
       handleSystem(res)
@@ -273,6 +285,21 @@ function handleConfig(res: ServerResponse): void {
       frida_enabled: config.workers.frida.enabled,
     },
   })
+}
+
+// ── Logs ────────────────────────────────────────────────────────────────
+
+const LEVEL_NAME_TO_NUM: Record<string, number> = {
+  trace: 10, debug: 20, info: 30, warn: 40, error: 50, fatal: 60,
+}
+
+function handleLogs(res: ServerResponse, params: URLSearchParams): void {
+  const limit = Math.min(parseInt(params.get('limit') || '100', 10) || 100, 500)
+  const levelParam = params.get('level')?.toLowerCase()
+  const minLevel = levelParam ? (LEVEL_NAME_TO_NUM[levelParam] ?? undefined) : undefined
+
+  const entries = logRingBuffer.getRecent(limit, minLevel)
+  sendJson(res, 200, { logs: entries, total: entries.length })
 }
 
 function handleSystem(res: ServerResponse): void {

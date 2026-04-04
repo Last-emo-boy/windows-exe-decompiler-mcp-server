@@ -16,7 +16,7 @@ import { logger } from '../logger.js'
 // ═══════════════════════════════════════════════════════════════════════════
 
 export interface AnalysisEvent {
-  type: 'progress' | 'result' | 'error' | 'status' | 'heartbeat'
+  type: 'progress' | 'result' | 'error' | 'status' | 'heartbeat' | 'log'
   stream: string
   timestamp: string
   payload: unknown

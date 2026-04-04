@@ -498,9 +498,9 @@ When running in Docker (`docker-compose up -d`), the container exposes:
 |---------|--------|-------------|
 | MCP Server | stdio (`docker exec -i`) | 160 tools, 3 prompts, 16 resources for LLM clients |
 | HTTP API | `http://localhost:18080/api/v1/*` | REST API for samples, artifacts, uploads, health, SSE |
-| Web Dashboard | `http://localhost:18080/dashboard` | Real-time monitoring SPA (6 tabs, dark theme) |
+| Web Dashboard | `http://localhost:18080/dashboard` | Real-time monitoring SPA (8 tabs, dark theme) |
 | SSE Events | `http://localhost:18080/api/v1/events` | Real-time event stream for analysis events |
-| Dashboard API | `http://localhost:18080/api/v1/dashboard/*` | 7 JSON endpoints powering the dashboard |
+| Dashboard API | `http://localhost:18080/api/v1/dashboard/*` | 12 JSON endpoints powering the dashboard |
 
 ### Built-in Plugins (15)
 
@@ -603,7 +603,7 @@ Other infrastructure:
 | MCP resources | `src/tool-registry.ts` | 8 Frida + 8 Ghidra scripts discoverable via `resources/list` |
 | HTTP File Server | `src/api/file-server.ts` | REST API (port 18080) for sample upload, artifact CRUD, SSE events, and dashboard |
 | Web Dashboard | `src/api/dashboard/index.html` | Dark-themed SPA at `/dashboard` — tools, plugins, samples, config, system info |
-| Dashboard API | `src/api/routes/dashboard-api.ts` | 7 JSON endpoints (`/api/v1/dashboard/*`) powering the web dashboard |
+| Dashboard API | `src/api/routes/dashboard-api.ts` | 12 JSON endpoints (`/api/v1/dashboard/*`) powering the web dashboard |
 | SSE Events | `src/api/sse-events.ts` | Server-Sent Events for real-time analysis progress and server state |
 | Rate Limiter | `src/api/rate-limiter.ts` | Request rate limiting for the HTTP API |
 | Config Validator | `src/config-validator.ts` | Validates runtime config and surfaces diagnostics via dashboard |
@@ -653,10 +653,10 @@ src/                         TypeScript MCP server source
     rate-limiter.ts          Request rate limiting
     auth-middleware.ts       API key authentication
     sse-events.ts            Server-Sent Events for real-time streaming
-    dashboard/index.html     Web dashboard SPA (dark theme, 6 tabs)
+    dashboard/index.html     Web dashboard SPA (dark theme, 8 tabs)
     routes/
       health.ts              Health check endpoint
-      dashboard-api.ts       Dashboard JSON API (7 endpoints)
+      dashboard-api.ts       Dashboard JSON API (12 endpoints)
 tests/                       unit and integration tests (207 test files)
 workers/                     Python workers, YARA rules, dynamic helpers
 packages/plugin-sdk/         Standalone Plugin SDK npm package

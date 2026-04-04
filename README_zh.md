@@ -14,7 +14,7 @@
 - 适合长任务编排：长耗时 workflow 会返回 `job_id`、进度和 `polling_guidance`，方便客户端按建议 sleep/wait，而不是高频轮询浪费 token。
 - **分阶段非阻塞流水线**：分析按显式阶段组织（`fast_profile`、`enrich_static`、`function_map`、`reconstruct`、`dynamic_plan`、`dynamic_execute`、`summarize`），支持预览优先的工具合约和持久化运行状态。
 - **HTTP 文件服务**：内嵌 HTTP API（端口 18080），支持样本上传、产物下载、上传会话管理，API Key 认证。
-- **Web 实时监控面板**：`http://localhost:18080/dashboard` — 暗色主题，6 个标签页，展示工具、插件、样本、配置、系统资源和 SSE 事件流。
+- **Web 实时监控面板**：`http://localhost:18080/dashboard` — 暗色主题，8 个标签页，展示工具、插件、样本、分析历史、报告查看器、配置、系统资源和 SSE 事件流。支持实时日志流显示。
 - **SSE 实时事件**：`/api/v1/events` 实时推送分析进度、样本导入、服务器状态变更。
 - **插件 SDK**：15 个内置插件，热加载/卸载，第三方自动发现。
 
@@ -409,7 +409,7 @@ pip install frida frida-tools
 - 可视化与关联 (`cfg.visualize`, `timeline.correlate`, `cross_module.xref`, `kb.search`)
 - Frida 动态 Instrumentation (`frida.runtime.instrument`, `frida.script.inject`, `frida.trace.capture`)
 - HTTP 文件服务 REST API（端口 18080）— 样本上传、产物 CRUD、SSE 事件
-- **Web 监控面板** (`http://localhost:18080/dashboard`) — 工具、插件、样本、配置、系统实时监控
+- **Web 监控面板** (`http://localhost:18080/dashboard`) — 工具、插件、样本、分析历史、报告查看器（Markdown/JSON/HTML/SVG）、配置、系统实时监控，支持服务器日志流
 - **插件 SDK**：15 个内置插件，热加载/卸载，第三方自动发现
 - **生产基础设施**：限流、配置校验、分页、重试、批量分析、SBOM 生成
 - **SSE 实时事件**：Server-Sent Events 实时推送分析进度
@@ -422,9 +422,9 @@ Docker 部署时（`docker-compose up -d`），容器暴露：
 |------|----------|------|
 | MCP Server | stdio (`docker exec -i`) | 160 个工具、3 个 prompt、16 个 resource |
 | HTTP API | `http://localhost:18080/api/v1/*` | 样本/产物/上传/健康检查 REST API |
-| Web 面板 | `http://localhost:18080/dashboard` | 实时监控 SPA（6 标签页，暗色主题） |
+| Web 面板 | `http://localhost:18080/dashboard` | 实时监控 SPA（8 标签页，暗色主题） |
 | SSE 事件 | `http://localhost:18080/api/v1/events` | 分析事件实时推送 |
-| 面板 API | `http://localhost:18080/api/v1/dashboard/*` | 7 个 JSON 端点 |
+| 面板 API | `http://localhost:18080/api/v1/dashboard/*` | 12 个 JSON 端点 |
 
 ### 内置插件（15 个）
 
@@ -499,7 +499,7 @@ src/                         MCP Server 源码
     sse-events.ts            Server-Sent Events
     dashboard/index.html     Web 监控面板
     routes/
-      dashboard-api.ts       面板 JSON API（7 个端点）
+      dashboard-api.ts       面板 JSON API（12 个端点）
 tests/                       单元与集成测试（207 个测试文件）
 workers/                     Python worker、YARA 规则、动态分析辅助
 packages/plugin-sdk/         独立 Plugin SDK npm 包

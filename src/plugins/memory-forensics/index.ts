@@ -61,7 +61,7 @@ const memoryForensicsPlugin: Plugin = {
       execFileSync(vol3, ['--help'], { timeout: 5000, stdio: 'pipe' })
       return true
     } catch {
-      return false
+      throw new Error(`Volatility 3 (${vol3}) not found. Install with: pip install volatility3, or set VOLATILITY3_PATH env var.`)
     }
   },
 

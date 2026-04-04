@@ -13,6 +13,7 @@
  */
 
 import pino from 'pino';
+import { Writable } from 'stream';
 import { config } from './config.js';
 
 /**
@@ -52,6 +53,72 @@ export interface AuditEvent {
   metadata?: Record<string, unknown>;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Log Ring Buffer — captures recent log entries for the dashboard
+// ═══════════════════════════════════════════════════════════════════════════
+
+export interface LogEntry {
+  level: number
+  levelLabel: string
+  time: string
+  msg: string
+  [key: string]: unknown
+}
+
+const LOG_LEVEL_LABELS: Record<number, string> = {
+  10: 'trace', 20: 'debug', 30: 'info', 40: 'warn', 50: 'error', 60: 'fatal',
+}
+
+class LogRingBuffer {
+  private buffer: LogEntry[] = []
+  private maxSize: number
+  private _onEntry: ((entry: LogEntry) => void) | null = null
+
+  constructor(maxSize = 500) {
+    this.maxSize = maxSize
+  }
+
+  push(raw: string): void {
+    try {
+      const obj = JSON.parse(raw)
+      const entry: LogEntry = {
+        ...obj,
+        levelLabel: LOG_LEVEL_LABELS[obj.level] || 'unknown',
+      }
+      this.buffer.push(entry)
+      if (this.buffer.length > this.maxSize) {
+        this.buffer.shift()
+      }
+      if (this._onEntry) this._onEntry(entry)
+    } catch {
+      // ignore malformed lines
+    }
+  }
+
+  getRecent(limit = 100, minLevel?: number): LogEntry[] {
+    let entries = this.buffer
+    if (minLevel != null) {
+      entries = entries.filter(e => e.level >= minLevel)
+    }
+    return entries.slice(-limit)
+  }
+
+  clear(): void {
+    this.buffer = []
+  }
+
+  get size(): number {
+    return this.buffer.length
+  }
+
+  /** Register a callback for each new log entry (used to forward to SSE). */
+  onEntry(cb: (entry: LogEntry) => void): void {
+    this._onEntry = cb
+  }
+}
+
+export const logRingBuffer = new LogRingBuffer(500)
+
 /**
  * 创建 pino logger 实例
  *
@@ -60,10 +127,24 @@ export interface AuditEvent {
 function createLogger() {
   // Create destination that writes to stderr (fd 2)
   // Use sync mode to ensure logs are written immediately
-  const destination = pino.destination({ dest: 2, sync: true });
+  const stderrDest = pino.destination({ dest: 2, sync: true });
+
+  // Create a writable stream that captures logs into the ring buffer
+  const bufferStream = new Writable({
+    write(chunk, _encoding, callback) {
+      logRingBuffer.push(chunk.toString())
+      callback()
+    },
+  })
+
+  // Use multistream to write to both stderr and the ring buffer
+  const multiDest = pino.multistream([
+    { stream: stderrDest, level: (config.logging.level || 'info') as pino.Level },
+    { stream: bufferStream, level: 'debug' as pino.Level },
+  ])
 
   return pino({
-    level: config.logging.level || 'info',
+    level: 'debug',  // Let multistream filter per-destination
     // Simple text format for MCP stdio compatibility
     messageKey: 'msg',
     // 基础字段
@@ -78,7 +159,7 @@ function createLogger() {
       err: pino.stdSerializers.err,
       error: pino.stdSerializers.err,
     },
-  }, destination);
+  }, multiDest);
 }
 
 /**

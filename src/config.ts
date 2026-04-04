@@ -101,12 +101,12 @@ export const ConfigSchema = z.object({
       timeout: z.number().int().min(1).default(60),
     }).default({}),
     dotnet: z.object({
-      enabled: z.boolean().default(false),
+      enabled: z.boolean().default(true),
       ilspyPath: z.string().optional(),
       timeout: z.number().int().min(1).default(60),
     }).default({}),
     sandbox: z.object({
-      enabled: z.boolean().default(false),
+      enabled: z.boolean().default(true),
       winePath: z.string().optional(),
       winedbgPath: z.string().optional(),
       qilingPythonPath: z.string().optional(),
@@ -116,7 +116,7 @@ export const ConfigSchema = z.object({
       timeout: z.number().int().min(1).default(120),
     }).default({}),
     frida: z.object({
-      enabled: z.boolean().default(false),
+      enabled: z.boolean().default(true),
       path: z.string().optional(),
       scriptRoot: z.string().optional(),
       timeout: z.number().int().min(1).default(30),
