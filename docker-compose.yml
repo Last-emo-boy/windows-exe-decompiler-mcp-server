@@ -116,7 +116,7 @@ services:
 
     # Health check
     healthcheck:
-      test: ["CMD", "node", "-e", "console.log('healthy')"]
+      test: ["CMD", "node", "-e", "const http=require('http');const r=http.get('http://localhost:18080/api/v1/health',res=>{process.exit(res.statusCode===200?0:1)});r.on('error',()=>process.exit(1));r.setTimeout(5000,()=>process.exit(1))"]
       interval: 30s
       timeout: 10s
       retries: 3

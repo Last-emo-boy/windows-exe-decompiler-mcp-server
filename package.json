@@ -55,6 +55,7 @@
     "copy-static": "node -e \"const fs=require('fs'),p=require('path');const s='src/api/dashboard',d='dist/api/dashboard';fs.mkdirSync(d,{recursive:true});fs.readdirSync(s).forEach(f=>fs.copyFileSync(p.join(s,f),p.join(d,f)));\"",
     "clean": "node -e \"const fs=require('fs'); for (const p of ['dist']) { fs.rmSync(p,{recursive:true,force:true}); }\"",
     "dev": "tsx watch src/index.ts",
+    "dev:dashboard": "node -e \"const fs=require('fs'),p=require('path');const s='src/api/dashboard',d='dist/api/dashboard';fs.mkdirSync(d,{recursive:true});const cp=()=>{fs.readdirSync(s).forEach(f=>fs.copyFileSync(p.join(s,f),p.join(d,f)));console.log('Dashboard copied',new Date().toLocaleTimeString())};cp();fs.watch(s,{recursive:true},cp)\"",
     "start": "node dist/index.js",
     "test": "cross-env NODE_OPTIONS=--experimental-vm-modules jest",
     "test:watch": "cross-env NODE_OPTIONS=--experimental-vm-modules jest --watch",

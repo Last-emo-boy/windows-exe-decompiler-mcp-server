@@ -18,6 +18,10 @@ export class AuthMiddleware {
     this.config = config
   }
 
+  isEnabled(): boolean {
+    return this.config.enabled
+  }
+
   /**
    * Validate API Key from request headers
    */

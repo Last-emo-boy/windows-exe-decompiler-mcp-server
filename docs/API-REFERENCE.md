@@ -433,3 +433,98 @@ Invoke-RestMethod `
   -Uri "http://localhost:18080/api/v1/samples/$($response.data.sample_id)" `
   -Headers @{ "X-API-Key" = "your-key" }
 ```
+
+---
+
+## Dashboard API
+
+The dashboard API powers the built-in web dashboard at `/dashboard`. All endpoints return JSON. When `API_KEY` is set, dashboard routes require authentication via `X-API-Key` header or `?key=` query parameter.
+
+**Base path:** `/api/v1/dashboard`
+
+### `GET /api/v1/dashboard/overview`
+
+Server overview with counts, memory usage, and uptime.
+
+```json
+{
+  "server": { "version": "1.0.0-beta.2", "uptime_human": "2h 15m 30s", "started_at": "..." },
+  "counts": { "tools": 163, "plugins_loaded": 12, "plugins_total": 15, "samples": 42, "sse_clients": 1, "recent_analyses_24h": 5 },
+  "memory": { "rss_mb": 120, "heap_used_mb": 80, "heap_total_mb": 150 }
+}
+```
+
+### `GET /api/v1/dashboard/tools`
+
+Full tool listing grouped by category. Cached (ETag, 30s).
+
+```json
+{ "total": 163, "categories": [{ "category": "static", "count": 25, "tools": [{ "name": "static.triage", "description": "..." }] }] }
+```
+
+### `GET /api/v1/dashboard/plugins`
+
+Plugin statuses with error details. Cached (ETag, 15s).
+
+```json
+{ "total": 15, "loaded": 12, "skipped": 2, "errored": 1, "plugins": [{ "id": "ghidra", "name": "Ghidra", "version": "1.0.0", "status": "loaded", "tool_count": 8, "error": null }] }
+```
+
+### `GET /api/v1/dashboard/samples`
+
+Paginated sample listing.
+
+| Param    | Type   | Default | Description              |
+|----------|--------|---------|--------------------------|
+| `limit`  | number | 50      | Max rows (1-200)         |
+| `offset` | number | 0       | Pagination offset        |
+| `search` | string | —       | Filter by SHA-256 prefix |
+
+### `GET /api/v1/dashboard/samples/:id`
+
+Sample detail with analyses, artifacts, and top functions.
+
+### `GET /api/v1/dashboard/analyses`
+
+Paginated analysis listing.
+
+| Param    | Type   | Default | Description              |
+|----------|--------|---------|--------------------------|
+| `limit`  | number | 50      | Max rows (1-200)         |
+| `offset` | number | 0       | Pagination offset        |
+| `status` | string | —       | Filter: done/running/queued/failed |
+
+### `GET /api/v1/dashboard/artifacts`
+
+Paginated artifact listing with type filter.
+
+| Param    | Type   | Default | Description       |
+|----------|--------|---------|-------------------|
+| `limit`  | number | 50      | Max rows (1-200)  |
+| `offset` | number | 0       | Pagination offset |
+| `type`   | string | —       | Filter by artifact type |
+
+### `GET /api/v1/dashboard/artifacts/:id/content`
+
+Artifact file content for inline rendering. Returns parsed content with format detection (markdown, json, html, svg, code).
+
+### `GET /api/v1/dashboard/logs`
+
+Server log entries from in-memory ring buffer.
+
+| Param   | Type   | Default | Description                |
+|---------|--------|---------|----------------------------|
+| `limit` | number | 100     | Max entries (1-500)        |
+| `level` | string | —       | Min level: trace/debug/info/warn/error/fatal |
+
+### `GET /api/v1/dashboard/config`
+
+Active configuration values and validation diagnostics.
+
+### `GET /api/v1/dashboard/system`
+
+Host and process information (hostname, platform, CPU, memory, Node version). Cached (ETag, 10s).
+
+### `GET /api/v1/dashboard/workers`
+
+Worker pool statistics.

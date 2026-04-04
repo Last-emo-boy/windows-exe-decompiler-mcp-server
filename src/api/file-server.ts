@@ -105,7 +105,22 @@ export class FileServer {
     const url = new URL(req.url || '/', `http://127.0.0.1:${this.effectivePort || this.config.port}`)
     const pathname = url.pathname
 
-    res.setHeader('Access-Control-Allow-Origin', '*')
+    // ── Security headers (applied to every response) ────────────────
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('X-Frame-Options', 'DENY')
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin')
+    res.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-src 'self'; connect-src 'self'")
+
+    // ── CORS — allow same-origin and explicitly configured origins only ─
+    const origin = req.headers.origin
+    if (origin) {
+      // Only reflect origin for localhost / same-host requests
+      const originUrl = new URL(origin)
+      if (originUrl.hostname === 'localhost' || originUrl.hostname === '127.0.0.1') {
+        res.setHeader('Access-Control-Allow-Origin', origin)
+      }
+      // Otherwise, no Access-Control-Allow-Origin header → browser blocks cross-origin
+    }
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS')
     res.setHeader('Access-Control-Allow-Headers', 'Content-Type, X-API-Key')
 
@@ -123,12 +138,15 @@ export class FileServer {
     try {
       // ── Dashboard (static HTML + API) ─────────────────────────
       if ((pathname === '/dashboard' || pathname === '/') && req.method === 'GET') {
+        // Dashboard requires API key when auth is enabled (supports ?key= query param for browser access)
+        if (!this.checkDashboardAuth(req, res, url.searchParams)) return
         await this.serveDashboardHtml(res)
         return
       }
 
       if (pathname.startsWith('/api/v1/dashboard') && req.method === 'GET') {
-        handleDashboardApi(res, pathname, url.searchParams)
+        if (!this.checkDashboardAuth(req, res, url.searchParams)) return
+        handleDashboardApi(req, res, pathname, url.searchParams)
         return
       }
 
@@ -222,6 +240,27 @@ export class FileServer {
       res.writeHead(500, { 'Content-Type': 'text/plain' })
       res.end('Dashboard HTML not found')
     }
+  }
+
+  /**
+   * Check dashboard authentication.
+   * Accepts API key from X-API-Key header OR ?key= query param (for browser convenience).
+   */
+  private checkDashboardAuth(req: IncomingMessage, res: ServerResponse, params: URLSearchParams): boolean {
+    if (!this.authMiddleware.isEnabled()) return true
+
+    // Check header first
+    if (this.authMiddleware.validateApiKey(req.headers)) return true
+
+    // Fall back to query param for browser access
+    const queryKey = params.get('key')
+    if (queryKey && this.authMiddleware.validateApiKey({ 'x-api-key': queryKey })) return true
+
+    this.sendJson(res, 401, {
+      error: 'Unauthorized',
+      message: 'Dashboard requires authentication. Use X-API-Key header or ?key=<api-key> query parameter.',
+    })
+    return false
   }
 
   private requireApiKey(req: IncomingMessage, res: ServerResponse): boolean {

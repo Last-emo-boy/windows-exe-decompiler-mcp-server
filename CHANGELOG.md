@@ -7,6 +7,38 @@ Versioning where practical.
 
 ## [Unreleased]
 
+### Security Hardening (P0)
+
+- **Security headers**: All responses now include `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`, `Referrer-Policy: strict-origin-when-cross-origin`, and a strict `Content-Security-Policy`.
+- **CORS lockdown**: Changed `Access-Control-Allow-Origin` from wildcard `*` to localhost-only origin reflection (127.0.0.1 / localhost).
+- **Dashboard authentication**: Dashboard HTML and API routes now require API key when `API_KEY` is set. Supports `X-API-Key` header or `?key=` query parameter for browser access.
+- **Docker health check**: Replaced fake `console.log('healthy')` with real HTTP GET to `/api/v1/health`.
+
+### Dashboard UX (P2)
+
+- **Toast notifications**: Error, warning, info, and success toasts with auto-dismiss. API errors now show visual feedback.
+- **Global search (Ctrl+K)**: Modal search across tools, samples, and artifacts. Debounced input with result categories and click-to-navigate.
+- **Export CSV/JSON**: Samples, Analyses, and Artifacts tabs now have export buttons to download data as CSV or JSON files.
+- **Plugin detail drawer**: Click any plugin row to open a detail panel showing config schema, tool list, error details, and status.
+- **Auto-refresh toggle**: Header toggle to auto-refresh the active tab every 10 seconds.
+- **Page jump & per-page**: All paginated tabs now support direct page jump input and configurable rows per page (30/50/100).
+
+### CI/CD (P3)
+
+- **Lint step**: Added `npm run lint` to CI pipeline (continue-on-error).
+- **Coverage reporting**: Added coverage generation step with artifact upload.
+- **Fixed CI flags**: Replaced deprecated `--testPathPattern` with `--testPathPatterns`.
+
+### API Performance (P4)
+
+- **Response caching**: Dashboard API endpoints for tools, plugins, config, and system now include `Cache-Control`, `ETag` headers. Supports `If-None-Match` → 304 Not Modified.
+- **Dashboard API documentation**: Added complete Dashboard API section to `docs/API-REFERENCE.md` documenting all 13 endpoints with parameters and response examples.
+
+### Developer Experience (P5)
+
+- **Dashboard hot-reload**: New `npm run dev:dashboard` script watches `src/api/dashboard/` and copies changes to dist on save.
+- **Docker dev compose**: New `docker-compose.dev.yml` overlay mounts source code for live editing with dashboard hot-reload.
+
 ### Dashboard Iteration
 
 - **Samples display fix**: Fixed `handleSamples` SQL query that selected non-existent columns (`original_name`, `file_size`), causing samples table to show blank rows. Now queries actual schema columns (`sha256`, `size`, `file_type`, `source`).

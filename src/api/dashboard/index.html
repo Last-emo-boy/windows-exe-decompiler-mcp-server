@@ -162,9 +162,73 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
 .log-level-warn{background:rgba(210,153,34,.15);color:var(--yellow)}
 .log-level-error{background:rgba(248,81,73,.15);color:var(--red)}
 .log-level-fatal{background:rgba(248,81,73,.3);color:var(--red)}
+
+/* Toast notifications */
+.toast-container{position:fixed;top:16px;right:16px;z-index:300;display:flex;flex-direction:column;gap:8px;pointer-events:none}
+.toast{pointer-events:auto;padding:10px 16px;border-radius:var(--radius);font-size:13px;box-shadow:0 4px 12px rgba(0,0,0,.3);animation:slideIn .25s ease;max-width:400px;display:flex;align-items:center;gap:8px}
+.toast-error{background:#3d1418;border:1px solid var(--red);color:var(--red)}
+.toast-warn{background:#3d2e0f;border:1px solid var(--yellow);color:var(--yellow)}
+.toast-info{background:#0d2137;border:1px solid var(--accent);color:var(--accent)}
+.toast-success{background:#0d2d16;border:1px solid var(--green);color:var(--green)}
+@keyframes slideIn{from{transform:translateX(100%);opacity:0}to{transform:translateX(0);opacity:1}}
+.toast .toast-close{margin-left:auto;background:none;border:none;color:inherit;cursor:pointer;font-size:16px;padding:0 4px;opacity:.7}
+.toast .toast-close:hover{opacity:1}
+
+/* Global search modal */
+.search-modal-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:250;display:none;align-items:flex-start;justify-content:center;padding-top:15vh}
+.search-modal-overlay.open{display:flex}
+.search-modal{background:var(--bg2);border:1px solid var(--border);border-radius:12px;width:min(600px,90vw);box-shadow:0 8px 32px rgba(0,0,0,.5)}
+.search-modal input{width:100%;padding:14px 16px;background:transparent;border:none;border-bottom:1px solid var(--border);color:var(--text);font-size:15px;outline:none}
+.search-modal input::placeholder{color:var(--text2)}
+.search-modal-results{max-height:400px;overflow-y:auto;padding:8px 0}
+.search-result{padding:8px 16px;display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px}
+.search-result:hover,.search-result.selected{background:var(--bg3)}
+.search-result .sr-type{font-size:11px;color:var(--text2);background:var(--bg3);padding:2px 6px;border-radius:4px;min-width:50px;text-align:center}
+.search-result .sr-name{color:var(--accent);font-family:monospace}
+.search-result .sr-desc{color:var(--text2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.search-hint{padding:12px 16px;color:var(--text2);font-size:12px;text-align:center}
+
+/* Pagination controls */
+.page-controls{margin-top:12px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.page-controls .page-jump{display:flex;gap:4px;align-items:center;font-size:13px;color:var(--text2)}
+.page-controls .page-jump input{width:50px;background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text);font-size:13px;text-align:center}
+.page-controls select{background:var(--bg3);border:1px solid var(--border);border-radius:var(--radius);padding:4px 8px;color:var(--text);font-size:13px}
+
+/* Export toolbar */
+.export-bar{display:inline-flex;gap:4px;margin-left:auto}
+.export-btn{background:var(--bg3);border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:var(--radius);cursor:pointer;font-size:12px;display:inline-flex;align-items:center;gap:4px}
+.export-btn:hover{border-color:var(--accent);color:var(--text)}
+
+/* Auto-refresh indicator */
+.refresh-indicator{font-size:11px;color:var(--text2);display:inline-flex;align-items:center;gap:4px;margin-left:8px}
+.refresh-indicator .live-dot{width:5px;height:5px}
 </style>
 </head>
 <body>
+<!-- Toast notification area -->
+<div class="toast-container" id="toastContainer"></div>
+
+<!-- Global search modal (Ctrl+K) -->
+<div class="search-modal-overlay" id="searchOverlay">
+  <div class="search-modal">
+    <input type="text" id="globalSearchInput" placeholder="Search tools, samples, artifacts… (Esc to close)" autocomplete="off" />
+    <div class="search-modal-results" id="searchResults">
+      <div class="search-hint">Type to search across all data</div>
+    </div>
+  </div>
+</div>
+
+<!-- Plugin detail drawer -->
+<div class="search-modal-overlay" id="pluginDrawerOverlay" style="display:none">
+  <div class="search-modal" style="max-width:580px;max-height:80vh;overflow:auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+      <h3 style="margin:0;color:var(--accent)" id="pluginDrawerTitle">Plugin Details</h3>
+      <button class="back-btn" onclick="closePluginDrawer()" style="font-size:12px;padding:4px 8px">✕ Close</button>
+    </div>
+    <div id="pluginDrawerContent"></div>
+  </div>
+</div>
+
 <header class="header">
   <h1><span class="icon">🔬</span> MCP Server Dashboard</h1>
   <span class="version" id="version">v1.0.0-beta.2</span>
@@ -180,6 +244,10 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
     <button data-tab="config">Config</button>
     <button data-tab="system">System</button>
   </nav>
+  <div style="display:flex;gap:8px;align-items:center;margin-left:auto">
+    <button class="back-btn" onclick="document.getElementById('searchOverlay').style.display='flex';document.getElementById('globalSearchInput').focus()" style="font-size:11px;padding:3px 8px" title="Ctrl+K">🔍 Search</button>
+    <label class="refresh-indicator" style="cursor:pointer"><input type="checkbox" id="autoRefreshToggle" onchange="toggleAutoRefresh()" style="margin-right:4px" />Auto-refresh</label>
+  </div>
 </header>
 
 <!-- Drawer overlay for detail views -->
@@ -257,17 +325,21 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
   <!-- ═══════════ SAMPLES TAB ═══════════ -->
   <div class="tab-content" id="tab-samples">
     <div class="section">
-      <div class="section-title">Sample Inventory <span class="badge" id="sampleCount">0</span></div>
+      <div class="section-title">Sample Inventory <span class="badge" id="sampleCount">0</span>
+        <div class="export-bar"><button class="export-btn" onclick="exportData('samples','csv')">📥 CSV</button><button class="export-btn" onclick="exportData('samples','json')">📥 JSON</button></div>
+      </div>
       <div class="table-wrap">
         <table>
           <thead><tr><th>#</th><th>SHA-256</th><th>Size</th><th>Type</th><th>Source</th><th>Ingested</th></tr></thead>
           <tbody id="sampleTableBody"><tr><td colspan="6" class="loading"><div class="spinner"></div></td></tr></tbody>
         </table>
       </div>
-      <div style="margin-top:12px;display:flex;gap:8px">
+      <div class="page-controls">
         <button id="samplePrev" class="back-btn">← Prev</button>
-        <span style="line-height:32px;font-size:13px;color:var(--text2)" id="samplePageInfo">—</span>
+        <span style="font-size:13px;color:var(--text2)" id="samplePageInfo">—</span>
         <button id="sampleNext" class="back-btn">Next →</button>
+        <div class="page-jump">Go to <input type="number" min="1" id="samplePageJump" /> <button class="back-btn" onclick="jumpToPage('samples')">Go</button></div>
+        <select id="samplePerPage" onchange="changePerPage('samples')"><option value="30">30/page</option><option value="50">50/page</option><option value="100">100/page</option></select>
       </div>
     </div>
   </div>
@@ -275,7 +347,9 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
   <!-- ═══════════ ANALYSES TAB ═══════════ -->
   <div class="tab-content" id="tab-analyses">
     <div class="section">
-      <div class="section-title">Analysis History <span class="badge" id="analysisCount">0</span></div>
+      <div class="section-title">Analysis History <span class="badge" id="analysisCount">0</span>
+        <div class="export-bar"><button class="export-btn" onclick="exportData('analyses','csv')">📥 CSV</button><button class="export-btn" onclick="exportData('analyses','json')">📥 JSON</button></div>
+      </div>
       <div class="filter-bar">
         <select id="analysisStatusFilter">
           <option value="">All Statuses</option>
@@ -291,10 +365,12 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
           <tbody id="analysisTableBody"><tr><td colspan="8" class="loading"><div class="spinner"></div></td></tr></tbody>
         </table>
       </div>
-      <div style="margin-top:12px;display:flex;gap:8px">
+      <div class="page-controls">
         <button id="analysisPrev" class="back-btn">← Prev</button>
-        <span style="line-height:32px;font-size:13px;color:var(--text2)" id="analysisPageInfo">—</span>
+        <span style="font-size:13px;color:var(--text2)" id="analysisPageInfo">—</span>
         <button id="analysisNext" class="back-btn">Next →</button>
+        <div class="page-jump">Go to <input type="number" min="1" id="analysisPageJump" /> <button class="back-btn" onclick="jumpToPage('analyses')">Go</button></div>
+        <select id="analysisPerPage" onchange="changePerPage('analyses')"><option value="30">30/page</option><option value="50">50/page</option><option value="100">100/page</option></select>
       </div>
     </div>
   </div>
@@ -302,7 +378,9 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
   <!-- ═══════════ REPORTS / ARTIFACTS TAB ═══════════ -->
   <div class="tab-content" id="tab-reports">
     <div class="section" id="reportListSection">
-      <div class="section-title">Reports &amp; Artifacts <span class="badge" id="artifactCount">0</span></div>
+      <div class="section-title">Reports &amp; Artifacts <span class="badge" id="artifactCount">0</span>
+        <div class="export-bar"><button class="export-btn" onclick="exportData('artifacts','csv')">📥 CSV</button><button class="export-btn" onclick="exportData('artifacts','json')">📥 JSON</button></div>
+      </div>
       <div class="filter-bar">
         <select id="artifactTypeFilter">
           <option value="">All Types</option>
@@ -315,10 +393,12 @@ tr.clickable:hover td{background:rgba(88,166,255,.08)}
           <tbody id="artifactTableBody"><tr><td colspan="7" class="loading"><div class="spinner"></div></td></tr></tbody>
         </table>
       </div>
-      <div style="margin-top:12px;display:flex;gap:8px">
+      <div class="page-controls">
         <button id="artifactPrev" class="back-btn">← Prev</button>
-        <span style="line-height:32px;font-size:13px;color:var(--text2)" id="artifactPageInfo">—</span>
+        <span style="font-size:13px;color:var(--text2)" id="artifactPageInfo">—</span>
         <button id="artifactNext" class="back-btn">Next →</button>
+        <div class="page-jump">Go to <input type="number" min="1" id="artifactPageJump" /> <button class="back-btn" onclick="jumpToPage('artifacts')">Go</button></div>
+        <select id="artifactPerPage" onchange="changePerPage('artifacts')"><option value="30">30/page</option><option value="50">50/page</option><option value="100">100/page</option></select>
       </div>
     </div>
     <div id="reportViewSection" style="display:none">
@@ -412,6 +492,7 @@ async function api(path) {
     return await r.json()
   } catch(e) {
     console.error('API error:', path, e)
+    toast('error', `API ${path}: ${e.message}`)
     return null
   }
 }
@@ -482,7 +563,7 @@ async function loadPlugins() {
   for (const p of d.plugins) {
     const cls = p.status==='loaded'?'badge-loaded':p.status==='error'?'badge-error':'badge-skipped'
     const errorHint = p.error ? `<br><span style="font-size:11px;color:var(--text2)">${esc(p.error)}</span>` : ''
-    rows += `<tr>
+    rows += `<tr class="clickable" data-plugin-id="${esc(p.id)}">
       <td><strong>${esc(p.name)}</strong><br><span class="mono" style="color:var(--text2)">${esc(p.id)}</span></td>
       <td class="mono">${p.version||'—'}</td>
       <td><span class="badge-status ${cls}">${esc(p.status)}</span>${errorHint}</td>
@@ -491,13 +572,17 @@ async function loadPlugins() {
     </tr>`
   }
   $('#pluginTableBody').innerHTML = rows || '<tr><td colspan="5" style="color:var(--text2)">No plugins found</td></tr>'
+  pluginsCache = d.plugins
+  $$('#pluginTableBody tr.clickable').forEach(row => {
+    row.addEventListener('click', () => openPluginDetail(row.dataset.pluginId))
+  })
 }
 
 // ── Samples ────────────────────────────────────────────────────────────
 let sampleOffset = 0
-const SAMPLE_LIMIT = 30
 
 async function loadSamples() {
+  const SAMPLE_LIMIT = perPageState.samples
   const d = await api(`/samples?limit=${SAMPLE_LIMIT}&offset=${sampleOffset}`)
   if (!d) return
   $('#sampleCount').textContent = d.total
@@ -531,8 +616,8 @@ async function loadSamples() {
   })
 }
 
-$('#samplePrev').addEventListener('click', ()=>{ sampleOffset = Math.max(0, sampleOffset - SAMPLE_LIMIT); loadSamples() })
-$('#sampleNext').addEventListener('click', ()=>{ sampleOffset += SAMPLE_LIMIT; loadSamples() })
+$('#samplePrev').addEventListener('click', ()=>{ sampleOffset = Math.max(0, sampleOffset - perPageState.samples); loadSamples() })
+$('#sampleNext').addEventListener('click', ()=>{ sampleOffset += perPageState.samples; loadSamples() })
 
 // ── Sample detail drawer ───────────────────────────────────────────────
 async function openSampleDetail(sampleId) {
@@ -618,9 +703,9 @@ async function openSampleDetail(sampleId) {
 
 // ── Analyses ───────────────────────────────────────────────────────────
 let analysisOffset = 0
-const ANALYSIS_LIMIT = 30
 
 async function loadAnalyses() {
+  const ANALYSIS_LIMIT = perPageState.analyses
   const status = $('#analysisStatusFilter').value
   const params = `limit=${ANALYSIS_LIMIT}&offset=${analysisOffset}${status ? '&status='+status : ''}`
   const d = await api(`/analyses?${params}`)
@@ -650,16 +735,16 @@ async function loadAnalyses() {
   $('#analysisNext').disabled = analysisOffset + ANALYSIS_LIMIT >= d.total
 }
 
-$('#analysisPrev').addEventListener('click', ()=>{ analysisOffset = Math.max(0, analysisOffset - ANALYSIS_LIMIT); loadAnalyses() })
-$('#analysisNext').addEventListener('click', ()=>{ analysisOffset += ANALYSIS_LIMIT; loadAnalyses() })
+$('#analysisPrev').addEventListener('click', ()=>{ analysisOffset = Math.max(0, analysisOffset - perPageState.analyses); loadAnalyses() })
+$('#analysisNext').addEventListener('click', ()=>{ analysisOffset += perPageState.analyses; loadAnalyses() })
 $('#analysisStatusFilter').addEventListener('change', ()=>{ analysisOffset = 0; loadAnalyses() })
 
 // ── Reports / Artifacts ────────────────────────────────────────────────
 let artifactOffset = 0
-const ARTIFACT_LIMIT = 30
 let artifactTypesLoaded = false
 
 async function loadArtifacts() {
+  const ARTIFACT_LIMIT = perPageState.artifacts
   const type = $('#artifactTypeFilter').value
   const search = $('#artifactSearch').value.trim()
   const params = `limit=${ARTIFACT_LIMIT}&offset=${artifactOffset}${type ? '&type='+encodeURIComponent(type) : ''}`
@@ -704,8 +789,8 @@ async function loadArtifacts() {
   $('#artifactNext').disabled = artifactOffset + ARTIFACT_LIMIT >= d.total
 }
 
-$('#artifactPrev').addEventListener('click', ()=>{ artifactOffset = Math.max(0, artifactOffset - ARTIFACT_LIMIT); loadArtifacts() })
-$('#artifactNext').addEventListener('click', ()=>{ artifactOffset += ARTIFACT_LIMIT; loadArtifacts() })
+$('#artifactPrev').addEventListener('click', ()=>{ artifactOffset = Math.max(0, artifactOffset - perPageState.artifacts); loadArtifacts() })
+$('#artifactNext').addEventListener('click', ()=>{ artifactOffset += perPageState.artifacts; loadArtifacts() })
 $('#artifactTypeFilter').addEventListener('change', ()=>{ artifactOffset = 0; loadArtifacts() })
 $('#artifactSearch').addEventListener('input', ()=>{ loadArtifacts() })
 
@@ -1109,6 +1194,275 @@ function esc(s) { const d=document.createElement('div'); d.textContent=s; return
 function formatBytes(b) { if(b==null) return '—'; if(b<1024) return b+'B'; if(b<1048576) return (b/1024).toFixed(1)+'KB'; return (b/1048576).toFixed(1)+'MB' }
 function formatDuration(s) { if(s==null||isNaN(s)) return '—'; s=Math.floor(s); const d=Math.floor(s/86400),h=Math.floor((s%86400)/3600),m=Math.floor((s%3600)/60); return (d?d+'d ':'')+(h?h+'h ':'')+(m?m+'m ':'')+(s%60)+'s' }
 function tryParse(s) { try{return JSON.parse(s)}catch{return null} }
+
+// ── Toast Notifications ────────────────────────────────────────────────
+function toast(type, message, durationMs) {
+  const container = document.getElementById('toastContainer')
+  if (!container) return
+  const el = document.createElement('div')
+  el.className = 'toast toast-' + type
+  el.textContent = message
+  container.appendChild(el)
+  const ms = durationMs || (type === 'error' ? 6000 : 3000)
+  setTimeout(() => { el.style.opacity = '0'; setTimeout(() => el.remove(), 300) }, ms)
+}
+
+// ── Global Search (Ctrl+K) ────────────────────────────────────────────
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+    e.preventDefault()
+    const overlay = document.getElementById('searchOverlay')
+    overlay.style.display = 'flex'
+    document.getElementById('globalSearchInput').value = ''
+    document.getElementById('globalSearchInput').focus()
+    document.getElementById('searchResults').innerHTML = '<div class="search-hint">Type to search across all data</div>'
+  }
+  if (e.key === 'Escape') {
+    document.getElementById('searchOverlay').style.display = 'none'
+    closePluginDrawer()
+  }
+})
+document.getElementById('searchOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) e.target.style.display = 'none'
+})
+
+let searchDebounce = null
+document.getElementById('globalSearchInput').addEventListener('input', (e) => {
+  clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(() => runGlobalSearch(e.target.value), 250)
+})
+
+async function runGlobalSearch(query) {
+  const resultsEl = document.getElementById('searchResults')
+  const q = query.trim().toLowerCase()
+  if (!q) { resultsEl.innerHTML = '<div class="search-hint">Type to search across all data</div>'; return }
+
+  let results = []
+
+  // Search tools (cached)
+  if (toolsData) {
+    for (const cat of toolsData.categories) {
+      for (const t of cat.tools) {
+        if (t.name.toLowerCase().includes(q) || t.description.toLowerCase().includes(q)) {
+          results.push({ type: 'Tool', name: t.name, desc: t.description, action: () => {
+            document.getElementById('searchOverlay').style.display = 'none'
+            $$('.header nav button').forEach(b => { b.classList.toggle('active', b.dataset.tab === 'tools') })
+            $$('.tab-content').forEach(t => t.classList.remove('active'))
+            $('#tab-tools').classList.add('active')
+            $('#toolSearch').value = q
+            renderTools(toolsData, q)
+          }})
+        }
+      }
+    }
+  }
+
+  // Search samples API
+  try {
+    const sr = await fetch(API + '/samples?limit=5&search=' + encodeURIComponent(q))
+    if (sr.ok) {
+      const sd = await sr.json()
+      for (const s of (sd.samples || [])) {
+        const sha = s.sha256 ? s.sha256.substring(0,16) + '…' : s.id
+        results.push({ type: 'Sample', name: sha, desc: s.file_type || '', action: () => {
+          document.getElementById('searchOverlay').style.display = 'none'
+          openSampleDetail(s.id)
+        }})
+      }
+    }
+  } catch {}
+
+  // Search artifacts API
+  try {
+    const ar = await fetch(API + '/artifacts?limit=5&search=' + encodeURIComponent(q))
+    if (ar.ok) {
+      const ad = await ar.json()
+      for (const a of (ad.artifacts || [])) {
+        results.push({ type: 'Artifact', name: a.path, desc: a.type, action: () => {
+          document.getElementById('searchOverlay').style.display = 'none'
+          viewArtifact(a.id)
+        }})
+      }
+    }
+  } catch {}
+
+  if (results.length === 0) {
+    resultsEl.innerHTML = '<div class="search-hint">No results found</div>'
+    return
+  }
+
+  resultsEl.innerHTML = results.slice(0, 20).map((r, i) =>
+    `<div class="search-result" data-idx="${i}">
+      <span class="search-result-type">${esc(r.type)}</span>
+      <span class="search-result-name">${esc(r.name)}</span>
+      <span class="search-result-desc">${esc(r.desc)}</span>
+    </div>`
+  ).join('')
+
+  resultsEl.querySelectorAll('.search-result').forEach(el => {
+    el.addEventListener('click', () => {
+      const idx = parseInt(el.dataset.idx)
+      if (results[idx] && results[idx].action) results[idx].action()
+    })
+  })
+}
+
+// ── Export CSV / JSON ──────────────────────────────────────────────────
+async function exportData(tab, format) {
+  let data = []
+  let filename = tab
+
+  try {
+    if (tab === 'samples') {
+      const d = await api('/samples?limit=10000&offset=0')
+      data = d ? d.samples : []
+    } else if (tab === 'analyses') {
+      const status = $('#analysisStatusFilter').value
+      const d = await api(`/analyses?limit=10000&offset=0${status ? '&status='+status : ''}`)
+      data = d ? d.analyses : []
+    } else if (tab === 'artifacts') {
+      const type = $('#artifactTypeFilter').value
+      const d = await api(`/artifacts?limit=10000&offset=0${type ? '&type='+encodeURIComponent(type) : ''}`)
+      data = d ? d.artifacts : []
+    }
+  } catch(e) {
+    toast('error', 'Export failed: ' + e.message)
+    return
+  }
+
+  if (!data.length) { toast('warn', 'No data to export'); return }
+
+  let blob, ext
+  if (format === 'json') {
+    blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' })
+    ext = 'json'
+  } else {
+    // CSV
+    const keys = Object.keys(data[0])
+    const csvRows = [keys.join(',')]
+    for (const row of data) {
+      csvRows.push(keys.map(k => {
+        const v = row[k] == null ? '' : String(row[k])
+        return v.includes(',') || v.includes('"') || v.includes('\n') ? '"' + v.replace(/"/g, '""') + '"' : v
+      }).join(','))
+    }
+    blob = new Blob([csvRows.join('\n')], { type: 'text/csv' })
+    ext = 'csv'
+  }
+
+  const url = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = url
+  a.download = `${filename}-${new Date().toISOString().slice(0,10)}.${ext}`
+  a.click()
+  URL.revokeObjectURL(url)
+  toast('success', `Exported ${data.length} rows as ${ext.toUpperCase()}`)
+}
+
+// ── Plugin Detail Drawer ───────────────────────────────────────────────
+let pluginsCache = null
+
+async function openPluginDetail(pluginId) {
+  const overlay = document.getElementById('pluginDrawerOverlay')
+  overlay.style.display = 'flex'
+  document.getElementById('pluginDrawerTitle').textContent = 'Loading…'
+  document.getElementById('pluginDrawerContent').innerHTML = '<div class="loading"><div class="spinner"></div></div>'
+
+  if (!pluginsCache) {
+    const d = await api('/plugins')
+    if (d) pluginsCache = d.plugins
+  }
+
+  const p = (pluginsCache || []).find(x => x.id === pluginId)
+  if (!p) {
+    document.getElementById('pluginDrawerTitle').textContent = 'Plugin Not Found'
+    document.getElementById('pluginDrawerContent').innerHTML = '<div style="color:var(--text2)">Plugin data unavailable</div>'
+    return
+  }
+
+  document.getElementById('pluginDrawerTitle').textContent = p.name
+  const cls = p.status==='loaded'?'badge-loaded':p.status==='error'?'badge-error':'badge-skipped'
+  let html = `<div class="meta-grid" style="margin-bottom:16px">
+    <span class="label">ID</span><span class="mono">${esc(p.id)}</span>
+    <span class="label">Version</span><span class="mono">${p.version||'—'}</span>
+    <span class="label">Status</span><span><span class="badge-status ${cls}">${esc(p.status)}</span></span>
+    <span class="label">Tools</span><span>${p.tool_count}</span>
+    <span class="label">Description</span><span>${esc(p.description||'—')}</span>
+  </div>`
+
+  if (p.error) {
+    html += `<div style="background:rgba(255,85,85,0.1);border:1px solid var(--red);border-radius:8px;padding:12px;margin-bottom:12px">
+      <strong style="color:var(--red)">Error:</strong><br><span class="mono" style="font-size:12px;white-space:pre-wrap">${esc(p.error)}</span>
+    </div>`
+  }
+
+  if (p.tools && p.tools.length > 0) {
+    html += `<h4 style="margin:12px 0 8px;color:var(--text2)">Tools (${p.tools.length})</h4><div style="font-size:13px">`
+    for (const t of p.tools) {
+      html += `<div style="padding:4px 0;border-bottom:1px solid var(--border)"><span class="tool-name">${esc(t.name||t)}</span></div>`
+    }
+    html += '</div>'
+  }
+
+  if (p.config_schema) {
+    html += `<h4 style="margin:12px 0 8px;color:var(--text2)">Config Schema</h4><pre style="font-size:11px;background:var(--bg2);padding:12px;border-radius:8px;overflow-x:auto">${esc(JSON.stringify(p.config_schema, null, 2))}</pre>`
+  }
+
+  document.getElementById('pluginDrawerContent').innerHTML = html
+}
+
+function closePluginDrawer() {
+  document.getElementById('pluginDrawerOverlay').style.display = 'none'
+}
+
+document.getElementById('pluginDrawerOverlay').addEventListener('click', (e) => {
+  if (e.target === e.currentTarget) closePluginDrawer()
+})
+
+// ── Page Jump & Per-page ───────────────────────────────────────────────
+const perPageState = { samples: 30, analyses: 30, artifacts: 30 }
+
+function jumpToPage(tab) {
+  const prefix = tab === 'analyses' ? 'analysis' : tab.slice(0, -1)
+  const jumpInput = document.getElementById(prefix + 'PageJump')
+  if (!jumpInput) return
+  const page = parseInt(jumpInput.value)
+  if (isNaN(page) || page < 1) return
+  const limit = perPageState[tab]
+  const newOffset = (page - 1) * limit
+
+  if (tab === 'samples') { sampleOffset = newOffset; loadSamples() }
+  else if (tab === 'analyses') { analysisOffset = newOffset; loadAnalyses() }
+  else if (tab === 'artifacts') { artifactOffset = newOffset; loadArtifacts() }
+}
+
+function changePerPage(tab) {
+  const prefix = tab === 'analyses' ? 'analysis' : tab.slice(0, -1)
+  const sel = document.getElementById(prefix + 'PerPage')
+  if (!sel) return
+  perPageState[tab] = parseInt(sel.value)
+
+  if (tab === 'samples') { sampleOffset = 0; loadSamples() }
+  else if (tab === 'analyses') { analysisOffset = 0; loadAnalyses() }
+  else if (tab === 'artifacts') { artifactOffset = 0; loadArtifacts() }
+}
+
+// ── Auto-refresh ───────────────────────────────────────────────────────
+let autoRefreshInterval = null
+
+function toggleAutoRefresh() {
+  const on = document.getElementById('autoRefreshToggle').checked
+  if (autoRefreshInterval) { clearInterval(autoRefreshInterval); autoRefreshInterval = null }
+  if (on) {
+    autoRefreshInterval = setInterval(() => {
+      const active = document.querySelector('.header nav button.active')
+      if (active) loadTab(active.dataset.tab)
+    }, 10000)
+    toast('info', 'Auto-refresh ON (10s)')
+  } else {
+    toast('info', 'Auto-refresh OFF')
+  }
+}
 
 // ── Init ───────────────────────────────────────────────────────────────
 loadOverview()

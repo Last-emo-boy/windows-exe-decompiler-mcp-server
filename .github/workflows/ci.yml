@@ -43,19 +43,37 @@ jobs:
       - name: Build TypeScript
         run: npm run build
 
+      - name: Lint
+        run: npm run lint
+        continue-on-error: true
+
       - name: Validate Python worker syntax
         run: python -m py_compile workers/static_worker.py workers/speakeasy_compat.py
 
       - name: Run full unit test suite
         run: >
-          npm test -- --runInBand --forceExit --testPathPattern="tests/unit/"
+          npm test -- --runInBand --forceExit --testPathPatterns="tests/unit/"
         timeout-minutes: 20
 
       - name: Run integration tests
         run: >
-          npm test -- --runInBand --forceExit --testPathPattern="tests/integration/"
+          npm test -- --runInBand --forceExit --testPathPatterns="tests/integration/"
         timeout-minutes: 10
         continue-on-error: true
+
+      - name: Generate coverage report
+        run: >
+          npm run test:coverage -- --runInBand --forceExit --testPathPatterns="tests/unit/"
+        timeout-minutes: 20
+        continue-on-error: true
+
+      - name: Upload coverage artifact
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-report
+          path: coverage/
+          retention-days: 14
 
       - name: Validate npm package contents
         run: npm run pack:dry-run

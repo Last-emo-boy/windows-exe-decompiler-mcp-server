@@ -1,0 +1,39 @@
+# =============================================================================
+# Docker Compose - Development Override
+# =============================================================================
+# Usage:
+#   docker-compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# Mounts source code for live development. Dashboard changes are visible
+# after a page refresh (no rebuild needed).
+# =============================================================================
+
+services:
+  mcp-server:
+    # Override read-only for development
+    read_only: false
+
+    volumes:
+      # Mount source for live editing
+      - ./src:/app/src:ro
+      - ./dist:/app/dist:rw
+
+      # Dashboard hot-reload: edit src/api/dashboard/* and refresh browser
+      - ./src/api/dashboard:/app/dist/api/dashboard:ro
+
+      # Mount samples directory
+      - ./samples:/samples:ro
+
+      # Persistent data
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/workspaces:/app/workspaces:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/data:/app/data:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/cache:/app/cache:rw"
+      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/storage:/app/storage:rw"
+
+    environment:
+      - NODE_ENV=development
+      - LOG_LEVEL=debug
+
+    # Expose dashboard port for browser access
+    ports:
+      - "18080:18080"

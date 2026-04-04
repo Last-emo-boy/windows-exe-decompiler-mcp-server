@@ -15,7 +15,8 @@
  *   GET /api/v1/dashboard/system            — host/process information
  */
 
-import type { ServerResponse } from 'http'
+import type { IncomingMessage, ServerResponse } from 'http'
+import { createHash } from 'crypto'
 import fs from 'fs/promises'
 import path from 'path'
 import os from 'os'
@@ -51,9 +52,25 @@ export function initDashboard(deps: DashboardDeps): void {
   })
 }
 
-function sendJson(res: ServerResponse, status: number, data: unknown): void {
-  res.writeHead(status, { 'Content-Type': 'application/json' })
-  res.end(JSON.stringify(data))
+function sendJson(res: ServerResponse, status: number, data: unknown, req?: IncomingMessage, cacheSecs = 0): void {
+  const body = JSON.stringify(data)
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+
+  if (cacheSecs > 0) {
+    headers['Cache-Control'] = `private, max-age=${cacheSecs}`
+    const etag = '"' + createHash('md5').update(body).digest('hex').slice(0, 16) + '"'
+    headers['ETag'] = etag
+    if (req && req.headers['if-none-match'] === etag) {
+      res.writeHead(304, headers)
+      res.end()
+      return
+    }
+  } else {
+    headers['Cache-Control'] = 'no-cache'
+  }
+
+  res.writeHead(status, headers)
+  res.end(body)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
@@ -61,6 +78,7 @@ function sendJson(res: ServerResponse, status: number, data: unknown): void {
 // ══════════════════════════════════════════════════════════════════════════
 
 export function handleDashboardApi(
+  req: IncomingMessage,
   res: ServerResponse,
   pathname: string,
   _searchParams: URLSearchParams
@@ -92,10 +110,10 @@ export function handleDashboardApi(
       handleOverview(res)
       return true
     case '/tools':
-      handleTools(res)
+      handleTools(res, req)
       return true
     case '/plugins':
-      handlePlugins(res)
+      handlePlugins(res, req)
       return true
     case '/samples':
       handleSamples(res, _searchParams)
@@ -110,13 +128,13 @@ export function handleDashboardApi(
       handleWorkers(res)
       return true
     case '/config':
-      handleConfig(res)
+      handleConfig(res, req)
       return true
     case '/logs':
       handleLogs(res, _searchParams)
       return true
     case '/system':
-      handleSystem(res)
+      handleSystem(res, req)
       return true
     default:
       sendJson(res, 404, { error: 'Dashboard route not found' })
@@ -178,7 +196,7 @@ function handleOverview(res: ServerResponse): void {
   })
 }
 
-function handleTools(res: ServerResponse): void {
+function handleTools(res: ServerResponse, req?: IncomingMessage): void {
   const tools = _deps?.server?.getToolDefinitions() ?? []
 
   // Categorize tools by prefix
@@ -194,16 +212,16 @@ function handleTools(res: ServerResponse): void {
     .map(([category, items]) => ({ category, count: items.length, tools: items }))
     .sort((a, b) => b.count - a.count)
 
-  sendJson(res, 200, { total: tools.length, categories: result })
+  sendJson(res, 200, { total: tools.length, categories: result }, req, 30)
 }
 
-function handlePlugins(res: ServerResponse): void {
+function handlePlugins(res: ServerResponse, req?: IncomingMessage): void {
   let pluginMgr: ReturnType<typeof getPluginManager> | null = null
   try { pluginMgr = getPluginManager() } catch { /* not initialized */ }
 
   const statuses = pluginMgr?.getStatuses() ?? []
 
-  sendJson(res, 200, {
+  const data = {
     total: statuses.length,
     loaded: statuses.filter(s => s.status === 'loaded').length,
     skipped: statuses.filter(s => s.status.startsWith('skipped')).length,
@@ -218,7 +236,8 @@ function handlePlugins(res: ServerResponse): void {
       tools: s.tools,
       error: s.error ?? null,
     })),
-  })
+  }
+  sendJson(res, 200, data, req, 15)
 }
 
 function handleSamples(res: ServerResponse, params: URLSearchParams): void {
@@ -260,7 +279,7 @@ function handleWorkers(res: ServerResponse): void {
   })
 }
 
-function handleConfig(res: ServerResponse): void {
+function handleConfig(res: ServerResponse, req?: IncomingMessage): void {
   let report: ValidationReport | null = null
   try {
     report = validateConfig(config)
@@ -268,7 +287,7 @@ function handleConfig(res: ServerResponse): void {
     logger.warn({ err }, 'Dashboard: config validation failed')
   }
 
-  sendJson(res, 200, {
+  const data = {
     validation: report,
     active: {
       server_port: config.server.port,
@@ -284,7 +303,8 @@ function handleConfig(res: ServerResponse): void {
       sandbox_enabled: config.workers.sandbox.enabled,
       frida_enabled: config.workers.frida.enabled,
     },
-  })
+  }
+  sendJson(res, 200, data, req, 30)
 }
 
 // ── Logs ────────────────────────────────────────────────────────────────
@@ -302,8 +322,8 @@ function handleLogs(res: ServerResponse, params: URLSearchParams): void {
   sendJson(res, 200, { logs: entries, total: entries.length })
 }
 
-function handleSystem(res: ServerResponse): void {
-  sendJson(res, 200, {
+function handleSystem(res: ServerResponse, req?: IncomingMessage): void {
+  const data = {
     hostname: os.hostname(),
     platform: `${os.type()} ${os.release()}`,
     arch: os.arch(),
@@ -321,7 +341,8 @@ function handleSystem(res: ServerResponse): void {
       NODE_ENV: process.env.NODE_ENV ?? 'development',
       LOG_LEVEL: process.env.LOG_LEVEL ?? 'info',
     },
-  })
+  }
+  sendJson(res, 200, data, req, 10)
 }
 
 // ══════════════════════════════════════════════════════════════════════════
