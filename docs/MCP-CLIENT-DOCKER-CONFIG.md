@@ -4,8 +4,8 @@ Recommended deployment model:
 
 1. Start the container once with `docker compose up -d mcp-server`
 2. Point MCP clients at either:
-   - the published npm launcher: `npx -y windows-exe-decompiler-mcp-server docker-stdio`
-   - or the direct Docker path: `docker exec -i windows-exe-decompiler-mcp node dist/index.js`
+   - the published npm launcher: `npx -y rikune docker-stdio`
+   - or the direct Docker path: `docker exec -i rikune node dist/index.js`
 
 This keeps a single named container for storage, upload handling, and API access while the client gets a fresh stdio MCP process inside that container. Keep the compose container memory at `8G` or higher if you run heavy analyses.
 
@@ -16,9 +16,9 @@ Use this when you want npm and Docker separated but still strongly bound:
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "npx",
-      "args": ["-y", "windows-exe-decompiler-mcp-server", "docker-stdio"],
+      "args": ["-y", "rikune", "docker-stdio"],
       "timeout": 300000
     }
   }
@@ -32,12 +32,12 @@ The launcher will refuse to start unless the compose container is already runnin
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "exec",
         "-i",
-        "windows-exe-decompiler-mcp",
+        "rikune",
         "node",
         "dist/index.js"
       ],
@@ -94,7 +94,7 @@ compose container
   └─ long-lived service state
 
 MCP client
-  └─ docker exec -i windows-exe-decompiler-mcp node dist/index.js
+  └─ docker exec -i rikune node dist/index.js
 ```
 
 This gives you one named container to operate and keeps upload/session state aligned with the MCP worker's volumes and database.
@@ -105,5 +105,5 @@ This gives you one named container to operate and keeps upload/session state ali
 docker compose up -d mcp-server
 docker compose ps
 curl http://localhost:18080/api/v1/health
-docker exec -i windows-exe-decompiler-mcp node dist/index.js
+docker exec -i rikune node dist/index.js
 ```

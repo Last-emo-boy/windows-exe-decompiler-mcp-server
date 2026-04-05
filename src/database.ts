@@ -1,5 +1,5 @@
 /**
- * Database module for Windows EXE Decompiler MCP Server
+ * Database module for Rikune
  * Manages SQLite database schema and operations
  */
 

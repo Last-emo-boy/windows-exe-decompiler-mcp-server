@@ -8,18 +8,18 @@ import {
 describe('npm docker launcher', () => {
   test('builds docker exec config for published-package stdio mode', () => {
     const config = buildDockerLauncherConfig('docker-stdio', {
-      WINDOWS_EXE_DECOMPILER_DOCKER_CONTAINER: 'custom-mcp',
+      RIKUNE_DOCKER_CONTAINER: 'custom-mcp',
     } as NodeJS.ProcessEnv)
 
     expect(config.command).toBe('docker')
     expect(config.args).toEqual(['exec', '-i', 'custom-mcp', 'node', 'dist/index.js'])
     expect(config.containerName).toBe('custom-mcp')
-    expect(config.imageName).toBe('windows-exe-decompiler:latest')
+    expect(config.imageName).toBe('rikune:latest')
   })
 
   test('builds docker run config when explicitly requested', () => {
     const config = buildDockerLauncherConfig('docker-run', {
-      WINDOWS_EXE_DECOMPILER_DOCKER_IMAGE: 'custom-image:dev',
+      RIKUNE_DOCKER_IMAGE: 'custom-image:dev',
     } as NodeJS.ProcessEnv)
 
     expect(config.args).toEqual(['run', '--rm', '-i', 'custom-image:dev', 'node', 'dist/index.js'])
@@ -37,7 +37,7 @@ describe('npm docker launcher', () => {
   test('help text explains npm plus docker split', () => {
     const help = formatDockerLauncherHelp('docker-stdio')
 
-    expect(help).toContain('npx -y windows-exe-decompiler-mcp-server docker-stdio')
+    expect(help).toContain('npx -y rikune docker-stdio')
     expect(help).toContain('npm provides the client-side executable')
     expect(help).toContain('Docker provides the heavy reverse-engineering runtime')
   })

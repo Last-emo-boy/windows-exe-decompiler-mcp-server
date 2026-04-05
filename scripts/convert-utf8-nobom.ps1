@@ -3,7 +3,7 @@
 
 $ErrorActionPreference = "Continue"
 
-$rootPath = "D:\Playground\windows-exe-decompiler-mcp-server"
+$rootPath = "D:\Playground\rikune"
 $excludeDirs = @('node_modules', 'dist', 'openspec', '.git', '.qwen')
 
 # Get all script files

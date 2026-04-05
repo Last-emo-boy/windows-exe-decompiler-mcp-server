@@ -60,7 +60,7 @@ jobs:
         with:
           images: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
-            windows-exe-decompiler-mcp-server
+            rikune
           tags: |
             type=ref,event=branch
             type=ref,event=pr

@@ -1,6 +1,6 @@
 # 使用示例
 
-本文档提供 Windows EXE Decompiler MCP Server 的实际使用案例和最佳实践。
+本文档提供 Rikune 的实际使用案例和最佳实践。
 
 ## 目录
 

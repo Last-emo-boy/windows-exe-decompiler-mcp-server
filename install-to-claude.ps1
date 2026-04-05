@@ -1,12 +1,12 @@
 param(
-    [string]$ServerName = "windows-exe-decompiler",
+    [string]$ServerName = "rikune",
     [string]$ProjectRoot = (Get-Location).Path,
     [string]$NodePath,
     [string]$GhidraPath = "",
-    [string]$WorkspaceRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces",
-    [string]$DatabasePath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db",
-    [string]$CacheRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache",
-    [string]$AuditLogPath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log",
+    [string]$WorkspaceRoot = "$env:USERPROFILE\\.rikune\\workspaces",
+    [string]$DatabasePath = "$env:USERPROFILE\\.rikune\\data\\database.db",
+    [string]$CacheRoot = "$env:USERPROFILE\\.rikune\\cache",
+    [string]$AuditLogPath = "$env:USERPROFILE\\.rikune\\audit.log",
     [ValidateSet("local", "user", "project")]
     [string]$Scope = "user",
     [switch]$NoBackup
@@ -184,7 +184,7 @@ function Resolve-WorkspaceRoot {
         return $env:WORKSPACE_ROOT
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces"
+    return "$env:USERPROFILE\\.rikune\\workspaces"
 }
 
 function Resolve-DatabasePath {
@@ -196,7 +196,7 @@ function Resolve-DatabasePath {
         return $env:DB_PATH
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db"
+    return "$env:USERPROFILE\\.rikune\\data\\database.db"
 }
 
 function Resolve-CacheRoot {
@@ -208,7 +208,7 @@ function Resolve-CacheRoot {
         return $env:CACHE_ROOT
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache"
+    return "$env:USERPROFILE\\.rikune\\cache"
 }
 
 function Resolve-AuditLogPath {
@@ -220,7 +220,7 @@ function Resolve-AuditLogPath {
         return $env:AUDIT_LOG_PATH
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log"
+    return "$env:USERPROFILE\\.rikune\\audit.log"
 }
 
 function New-ClaudeServerConfig {
@@ -315,7 +315,7 @@ function Get-ProjectConfigPath {
     return Join-Path -Path $ProjectRootValue -ChildPath ".mcp.json"
 }
 
-Write-Host "=== Windows EXE Decompiler MCP Server - Claude Install ===" -ForegroundColor Cyan
+Write-Host "=== Rikune - Claude Install ===" -ForegroundColor Cyan
 
 Write-Step "Step 1: Validate build output and runtime"
 $projectRootFull = [System.IO.Path]::GetFullPath($ProjectRoot)

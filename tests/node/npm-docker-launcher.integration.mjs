@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process'
 import path from 'node:path'
 
 const repoRoot = process.cwd()
-const binPath = path.join(repoRoot, 'bin', 'windows-exe-decompiler-mcp-server.js')
+const binPath = path.join(repoRoot, 'bin', 'rikune.js')
 
 const printExec = spawnSync(
   process.execPath,
@@ -13,7 +13,7 @@ const printExec = spawnSync(
     encoding: 'utf8',
     env: {
       ...process.env,
-      WINDOWS_EXE_DECOMPILER_DOCKER_CONTAINER: 'integration-mcp',
+      RIKUNE_DOCKER_CONTAINER: 'integration-mcp',
     },
   }
 )
@@ -29,7 +29,7 @@ const printRun = spawnSync(
     encoding: 'utf8',
     env: {
       ...process.env,
-      WINDOWS_EXE_DECOMPILER_DOCKER_IMAGE: 'integration-image:latest',
+      RIKUNE_DOCKER_IMAGE: 'integration-image:latest',
     },
   }
 )

@@ -1,6 +1,6 @@
 # Integration Tests
 
-This directory contains integration tests that verify end-to-end functionality of the Windows EXE Decompiler MCP Server.
+This directory contains integration tests that verify end-to-end functionality of the Rikune.
 
 ## Test Files
 
@@ -193,6 +193,6 @@ When adding new integration tests:
 
 ## References
 
-- Requirements: `.kiro/specs/windows-exe-decompiler-mcp-server/requirements.md`
-- Design: `.kiro/specs/windows-exe-decompiler-mcp-server/design.md`
-- Tasks: `.kiro/specs/windows-exe-decompiler-mcp-server/tasks.md`
+- Requirements: `.kiro/specs/rikune/requirements.md`
+- Design: `.kiro/specs/rikune/design.md`
+- Tasks: `.kiro/specs/rikune/tasks.md`

@@ -1,13 +1,13 @@
 {
-  "name": "windows-exe-decompiler-mcp-server",
+  "name": "rikune",
   "version": "1.0.0-beta.2",
   "description": "MCP server for Windows binary reverse engineering, PE triage, Ghidra-assisted analysis, and reconstruction workflows.",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
   "type": "module",
   "bin": {
-    "windows-exe-decompiler-mcp-server": "./bin/windows-exe-decompiler-mcp-server.js",
-    "windows-exe-decompiler-mcp-docker": "./bin/windows-exe-decompiler-mcp-docker.js"
+    "rikune": "./bin/rikune.js",
+    "rikune-docker": "./bin/rikune-docker.js"
   },
   "exports": {
     ".": "./dist/index.js"
@@ -68,12 +68,12 @@
     "prepack": "npm run build",
     "pack:dry-run": "npm pack --dry-run",
     "release:check": "npm run build && npm pack --dry-run",
-    "docker:build": "docker build -t windows-exe-decompiler:latest .",
+    "docker:build": "docker build -t rikune:latest .",
     "docs:api": "node scripts/generate-api-docs.js",
-    "docker:run": "docker run --rm -it windows-exe-decompiler:latest bash",
-    "docker:test": "docker run --rm --entrypoint /usr/local/bin/validate-docker-full-stack.sh windows-exe-decompiler:latest",
+    "docker:run": "docker run --rm -it rikune:latest bash",
+    "docker:test": "docker run --rm --entrypoint /usr/local/bin/validate-docker-full-stack.sh rikune:latest",
     "docker:clean": "docker system prune -af && docker builder prune -af",
-    "docker:push": "docker push windows-exe-decompiler:latest"
+    "docker:push": "docker push rikune:latest"
   },
   "keywords": [
     "mcp",
@@ -90,11 +90,11 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server.git"
+    "url": "git+https://github.com/Last-emo-boy/rikune.git"
   },
-  "homepage": "https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server",
+  "homepage": "https://github.com/Last-emo-boy/rikune",
   "bugs": {
-    "url": "https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server/issues"
+    "url": "https://github.com/Last-emo-boy/rikune/issues"
   },
   "publishConfig": {
     "access": "public"

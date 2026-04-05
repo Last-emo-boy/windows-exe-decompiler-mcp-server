@@ -10,7 +10,7 @@
 >
 > 先阅读 [ANALYSIS-RUNTIME.md](./ANALYSIS-RUNTIME.md) 和 [ASYNC-JOB-PATTERN.md](./ASYNC-JOB-PATTERN.md)，再把本页当作补充字段手册使用。
 
-本文档详细介绍 Windows EXE Decompiler MCP Server V0.1 的所有工具和功能。
+本文档详细介绍 Rikune V0.1 的所有工具和功能。
 
 ## 目录
 

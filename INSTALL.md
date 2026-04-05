@@ -1,6 +1,6 @@
 # Docker 一键安装指南
 
-本文档说明如何使用一键安装脚本快速部署 Windows EXE Decompiler MCP Server。
+本文档说明如何使用一键安装脚本快速部署 Rikune。
 
 ## 快速开始
 
@@ -36,9 +36,9 @@
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "npx",
-      "args": ["-y", "windows-exe-decompiler-mcp-server", "docker-stdio"]
+      "args": ["-y", "rikune", "docker-stdio"]
     }
   }
 }
@@ -128,7 +128,7 @@ curl -H "X-API-Key: your-api-key" \
 .\install-docker.ps1
 
 # 指定数据根目录（非交互式）
-.\install-docker.ps1 -DataRoot "D:\Docker\windows-exe-decompiler-mcp-server"
+.\install-docker.ps1 -DataRoot "D:\Docker\rikune"
 
 # 跳过镜像构建（用于重新配置）
 .\install-docker.ps1 -SkipBuild
@@ -166,7 +166,7 @@ curl -H "X-API-Key: your-api-key" \
 .\start-docker.ps1
 
 # 指定数据根目录
-.\start-docker.ps1 -DataRoot "D:\Docker\windows-exe-decompiler-mcp-server"
+.\start-docker.ps1 -DataRoot "D:\Docker\rikune"
 
 # 使用 Docker Compose 模式
 .\start-docker.ps1 -Mode compose
@@ -190,7 +190,7 @@ curl -H "X-API-Key: your-api-key" \
 安装脚本会创建以下目录结构：
 
 ```
-D:\Docker\windows-exe-decompiler-mcp-server\
+D:\Docker\rikune\
 ├── samples/              # 待分析的样本文件（只读挂载）
 ├── workspaces/           # 分析工作空间
 │   └── <sha256>/
@@ -336,7 +336,7 @@ $env:HTTPS_PROXY="http://127.0.0.1:7890"
 docker build `
   --build-arg HTTP_PROXY=$env:HTTP_PROXY `
   --build-arg HTTPS_PROXY=$env:HTTPS_PROXY `
-  -t windows-exe-decompiler:latest .
+  -t rikune:latest .
 ```
 
 #### 常见问题
@@ -455,13 +455,13 @@ Start-Process powershell -Verb RunAs -ArgumentList "-NoExit", "-Command", "cd '$
 
 2. **测试 Docker 镜像**
    ```powershell
-   docker run --rm windows-exe-decompiler:latest node --version
+   docker run --rm rikune:latest node --version
    ```
 
 3. **测试 stdio 通信**
    ```powershell
    echo '{"jsonrpc":"2.0","method":"initialize","params":{}}' | `
-     docker run -i --rm windows-exe-decompiler:latest node dist/index.js
+     docker run -i --rm rikune:latest node dist/index.js
    ```
 
 ---
@@ -476,10 +476,10 @@ docker-compose down  # 如果使用 Compose
 docker stop $(docker ps -aq)  # 停止所有容器
 
 # 2. 删除镜像
-docker rmi windows-exe-decompiler:latest
+docker rmi rikune:latest
 
 # 3. 删除数据（谨慎！这会删除所有分析数据）
-Remove-Item -Recurse -Force "D:\Docker\windows-exe-decompiler-mcp-server"
+Remove-Item -Recurse -Force "D:\Docker\rikune"
 
 # 4. 删除 MCP 客户端配置
 Remove-Item "$env:APPDATA\Claude\claude_desktop_config.json" -ErrorAction SilentlyContinue
@@ -495,13 +495,13 @@ Remove-Item "$env:USERPROFILE\.codex\mcp.json" -ErrorAction SilentlyContinue
 
 ```powershell
 # 不使用缓存构建
-docker build --no-cache -t windows-exe-decompiler:latest .
+docker build --no-cache -t rikune:latest .
 
 # 多平台构建
-docker buildx build --platform linux/amd64,linux/arm64 -t windows-exe-decompiler:latest .
+docker buildx build --platform linux/amd64,linux/arm64 -t rikune:latest .
 
 # 构建时设置变量
-docker build --build-arg GHIDRA_VERSION=11.2.1 -t windows-exe-decompiler:latest .
+docker build --build-arg GHIDRA_VERSION=11.2.1 -t rikune:latest .
 ```
 
 ### 批量部署
@@ -548,5 +548,5 @@ foreach ($server in $servers) {
 
 1. **查看安装日志**: `$DataRoot\logs\install.log`
 2. **查看 Docker 日志**: `docker logs <container-id>`
-3. **提交 Issue**: https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server/issues
-4. **查看讨论区**: https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server/discussions
+3. **提交 Issue**: https://github.com/Last-emo-boy/rikune/issues
+4. **查看讨论区**: https://github.com/Last-emo-boy/rikune/discussions

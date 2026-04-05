@@ -1,6 +1,6 @@
 # Docker 故障排除指南
 
-本文档提供 Windows EXE Decompiler MCP Server Docker 部署的常见问题解决方案。
+本文档提供 Rikune Docker 部署的常见问题解决方案。
 
 ## 目录
 
@@ -32,10 +32,10 @@ ERROR: failed to solve: failed to compute cache key: failed to calculate checksu
 docker builder prune -a
 
 # 不使用缓存重新构建
-docker build --no-cache -t windows-exe-decompiler:latest .
+docker build --no-cache -t rikune:latest .
 
 # 禁用 BuildKit（备选）
-DOCKER_BUILDKIT=0 docker build -t windows-exe-decompiler:latest .
+DOCKER_BUILDKIT=0 docker build -t rikune:latest .
 ```
 
 ---
@@ -114,12 +114,12 @@ Error: Environment variable GHIDRA_INSTALL_DIR is not set
 docker run --rm -i \
   -e GHIDRA_INSTALL_DIR=/opt/ghidra \
   -e JAVA_HOME=/usr/lib/jvm/java-21-openjdk-amd64 \
-  windows-exe-decompiler:latest
+  rikune:latest
 
 # 或使用 --env-file
 docker run --rm -i \
   --env-file .env \
-  windows-exe-decompiler:latest
+  rikune:latest
 ```
 
 ---
@@ -139,12 +139,12 @@ chown: cannot change ownership: Operation not permitted
 **解决方案**:
 ```bash
 # 修复 Host 权限
-sudo chown -R 1000:1000 ~/.windows-exe-decompiler-mcp-server/
+sudo chown -R 1000:1000 ~/.rikune/
 
 # 或在容器内修复
 docker run --rm -it \
-  -v ~/.windows-exe-decompiler-mcp-server:/app \
-  windows-exe-decompiler:latest \
+  -v ~/.rikune:/app \
+  rikune:latest \
   bash
 
 # 容器内执行
@@ -169,7 +169,7 @@ Error: Sample file not found: /samples/malware.exe
 # 检查挂载
 docker run --rm -it \
   -v $(pwd)/samples:/samples:ro \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   ls -la /samples/
 
 # 确保样本文件存在
@@ -178,7 +178,7 @@ ls -la samples/
 # 使用绝对路径
 docker run --rm -i \
   -v /absolute/path/to/samples:/samples:ro \
-  windows-exe-decompiler:latest
+  rikune:latest
 ```
 
 ---
@@ -207,7 +207,7 @@ docker run -i --rm ...
 # 正确：docker run -i ...
 
 # 检查容器退出码
-docker run -i --rm windows-exe-decompiler:latest node dist/index.js
+docker run -i --rm rikune:latest node dist/index.js
 echo $?  # 应为 0
 ```
 
@@ -230,13 +230,13 @@ Timeout waiting for server response
 // 检查 MCP Client 配置
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "run",
         "-i",        // 必需：保持 stdin 打开
         "--rm",      // 推荐：自动清理
-        "windows-exe-decompiler:latest"
+        "rikune:latest"
       ]
     }
   }
@@ -244,7 +244,7 @@ Timeout waiting for server response
 
 // 测试配置
 echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | \
-  docker run -i --rm windows-exe-decompiler:latest node dist/index.js
+  docker run -i --rm rikune:latest node dist/index.js
 ```
 
 ---
@@ -272,7 +272,7 @@ docker run --rm -i \
 // claude_desktop_config.json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "timeout": 300000  // 5 分钟
     }
   }
@@ -301,7 +301,7 @@ Java exception: java.lang.OutOfMemoryError
 docker run --rm -i \
   -e JAVA_TOOL_OPTIONS="-Xmx8g" \
   --memory=12g \
-  windows-exe-decompiler:latest
+  rikune:latest
 
 # 或修改 Dockerfile
 ENV JAVA_TOOL_OPTIONS="-Xmx8g -XX:+UseG1GC"
@@ -322,7 +322,7 @@ Error: Ghidra script not found: ExtractFunctions.py
 **解决方案**:
 ```bash
 # 验证脚本存在
-docker run --rm windows-exe-decompiler:latest \
+docker run --rm rikune:latest \
   ls -la /app/ghidra_scripts/
 
 # 检查 Dockerfile 中的 COPY 指令
@@ -345,7 +345,7 @@ Java version: 11, required: 21
 **解决方案**:
 ```bash
 # 验证 Java 版本
-docker run --rm windows-exe-decompiler:latest \
+docker run --rm rikune:latest \
   java -version
 
 # 应显示：
@@ -381,7 +381,7 @@ sudo systemctl restart docker
 
 # 或使用离线导入
 # 在另一台机器导出
-docker save windows-exe-decompiler:latest | gzip > mcp-image.tar.gz
+docker save rikune:latest | gzip > mcp-image.tar.gz
 
 # 在本机导入
 docker load < mcp-image.tar.gz
@@ -401,7 +401,7 @@ docker load < mcp-image.tar.gz
 docker run --rm -i \
   --cpus=4 \
   --cpu-shares=2048 \
-  windows-exe-decompiler:latest
+  rikune:latest
 
 # 减少并发分析数（避免资源竞争）
 // config.json
@@ -430,7 +430,7 @@ Killed
 docker run --rm -i \
   -e NODE_OPTIONS="--max-old-space-size=4096" \
   --memory=8g \
-  windows-exe-decompiler:latest
+  rikune:latest
 
 # 或修改 Dockerfile
 ENV NODE_OPTIONS="--max-old-space-size=4096"
@@ -459,7 +459,7 @@ docker run --rm -i \
   --security-opt no-new-privileges:true \
   --cap-drop=ALL \
   --userns=host \
-  windows-exe-decompiler:latest
+  rikune:latest
 
 # 审查容器日志
 docker logs <container-id>
@@ -476,13 +476,13 @@ docker logs <container-id>
 **解决方案**:
 ```bash
 # 清理工作空间
-rm -rf ~/.windows-exe-decompiler-mcp-server/workspaces/*
+rm -rf ~/.rikune/workspaces/*
 
 # 重置数据库
-rm ~/.windows-exe-decompiler-mcp-server/data/database.db
+rm ~/.rikune/data/database.db
 
 # 重新构建镜像（确保无污染）
-docker build --no-cache -t windows-exe-decompiler:latest .
+docker build --no-cache -t rikune:latest .
 ```
 
 ---
@@ -502,23 +502,23 @@ echo "=== Docker Info ==="
 docker info
 
 echo "=== Image Info ==="
-docker images windows-exe-decompiler
+docker images rikune
 
 echo "=== Container Logs ==="
-docker run --rm windows-exe-decompiler:latest node dist/index.js 2>&1 | head -50
+docker run --rm rikune:latest node dist/index.js 2>&1 | head -50
 
 echo "=== Ghidra Check ==="
-docker run --rm windows-exe-decompiler:latest \
+docker run --rm rikune:latest \
   /opt/ghidra/support/analyzeHeadless -version
 
 echo "=== Java Version ==="
-docker run --rm windows-exe-decompiler:latest java -version
+docker run --rm rikune:latest java -version
 
 echo "=== Node Version ==="
-docker run --rm windows-exe-decompiler:latest node --version
+docker run --rm rikune:latest node --version
 
 echo "=== Python Version ==="
-docker run --rm windows-exe-decompiler:latest python3 --version
+docker run --rm rikune:latest python3 --version
 
 echo "=== Disk Usage ==="
 df -h
@@ -535,6 +535,6 @@ free -h
 
 如果以上方案无法解决问题：
 
-1. **查看已有 Issue**: https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server/issues
+1. **查看已有 Issue**: https://github.com/Last-emo-boy/rikune/issues
 2. **提交新 Issue**: 附上诊断信息和复现步骤
-3. **查看讨论区**: https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server/discussions
+3. **查看讨论区**: https://github.com/Last-emo-boy/rikune/discussions

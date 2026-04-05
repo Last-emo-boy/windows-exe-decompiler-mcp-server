@@ -8,7 +8,7 @@ This repository includes a helper script for local GitHub Copilot clients:
 
 By default, the script writes a stable `WORKSPACE_ROOT` under your user profile:
 
-- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+- `%USERPROFILE%/.rikune/workspaces`
 
 It also pins:
 
@@ -77,7 +77,7 @@ user-level profile route:
 ### VS Code / GitHub Copilot
 
 1. Open the repository in VS Code.
-2. Confirm that `.vscode/mcp.json` contains `windows-exe-decompiler`.
+2. Confirm that `.vscode/mcp.json` contains `rikune`.
 3. Trust the MCP server when VS Code prompts you.
 4. Ask Copilot to call `tool.help` or `workflow.triage`.
 
@@ -92,7 +92,7 @@ Run:
 or:
 
 ```text
-/mcp show windows-exe-decompiler
+/mcp show rikune
 ```
 
 ## First-run setup guidance

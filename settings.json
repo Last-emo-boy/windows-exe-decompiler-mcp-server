@@ -1,11 +1,11 @@
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "exec",
         "-i",
-        "windows-exe-decompiler-mcp",
+        "rikune",
         "node",
         "dist/index.js"
       ],

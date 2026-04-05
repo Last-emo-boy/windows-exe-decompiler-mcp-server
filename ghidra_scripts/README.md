@@ -1,6 +1,6 @@
 # Ghidra Scripts
 
-This directory contains custom Ghidra scripts used by the Windows EXE Decompiler MCP Server for automated binary analysis.
+This directory contains custom Ghidra scripts used by the Rikune for automated binary analysis.
 
 ## Scripts
 

@@ -2,7 +2,7 @@
 
 ## Overview
 
-This document describes the SQLite database schema for the Windows EXE Decompiler MCP Server.
+This document describes the SQLite database schema for the Rikune.
 
 ## Schema Implementation
 

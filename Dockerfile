@@ -1,5 +1,5 @@
 # =============================================================================
-# Windows EXE Decompiler MCP Server - Docker Full Linux Analysis Stack
+# Rikune - Docker Full Linux Analysis Stack
 # =============================================================================
 # Multi-stage build: Builder -> Python Base -> Dynamic Python -> Core Tools
 #                  -> Heavy Tools -> Ghidra -> Runtime
@@ -253,7 +253,7 @@ ENV HTTP_PROXY="${HTTP_PROXY}" \
     https_proxy="${https_proxy}" \
     NO_PROXY="${NO_PROXY}"
 
-LABEL maintainer="windows-exe-decompiler-mcp-server"
+LABEL maintainer="rikune"
 LABEL version="1.0.0-beta.2"
 LABEL description="MCP server for Windows binary reverse engineering - full Linux analysis stack"
 LABEL node_version="20.x"
@@ -436,12 +436,12 @@ ENV NODE_ENV=production \
     RETDEC_INSTALL_DIR=/opt/retdec \
     JADX_PATH=/opt/jadx/bin/jadx
 
-RUN mkdir -p /app/workspaces /app/data /app/cache /app/logs /ghidra-projects /ghidra-logs /samples /tmp /opt/qiling-rootfs /root/.windows-exe-decompiler-mcp-server && \
+RUN mkdir -p /app/workspaces /app/data /app/cache /app/logs /ghidra-projects /ghidra-logs /samples /tmp /opt/qiling-rootfs /root/.rikune && \
     chown -R appuser:appuser /app && \
     chown -R appuser:appuser /ghidra-projects && \
     chown -R appuser:appuser /ghidra-logs && \
     chown -R appuser:appuser /opt/qiling-rootfs && \
-    chown -R appuser:appuser /root/.windows-exe-decompiler-mcp-server && \
+    chown -R appuser:appuser /root/.rikune && \
     chmod 1777 /tmp
 
 WORKDIR /app

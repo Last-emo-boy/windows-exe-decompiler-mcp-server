@@ -132,8 +132,8 @@ Use for the published-package launcher model and Docker runtime:
 - `install-docker.ps1`
 - `start-docker.ps1`
 - `settings.json`
-- `bin/windows-exe-decompiler-mcp-server.js`
-- `bin/windows-exe-decompiler-mcp-docker.js`
+- `bin/rikune.js`
+- `bin/rikune-docker.js`
 - `src/npm-docker-launcher.ts`
 - `src/api/`
 - `src/storage/`
@@ -202,7 +202,7 @@ git add src/index.ts src/server.ts src/database.ts src/config.ts src/job-queue.t
 ```
 
 ```powershell
-git add Dockerfile docker-compose.yml docker-entrypoint.sh .dockerignore .env.example install-docker.ps1 start-docker.ps1 settings.json bin/windows-exe-decompiler-mcp-server.js bin/windows-exe-decompiler-mcp-docker.js src/npm-docker-launcher.ts src/api src/storage src/runtime-worker-pool.ts workers/rizin_preview_worker.py workers/requirements-qiling.txt
+git add Dockerfile docker-compose.yml docker-entrypoint.sh .dockerignore .env.example install-docker.ps1 start-docker.ps1 settings.json bin/rikune.js bin/rikune-docker.js src/npm-docker-launcher.ts src/api src/storage src/runtime-worker-pool.ts workers/rizin_preview_worker.py workers/requirements-qiling.txt
 ```
 
 ```powershell

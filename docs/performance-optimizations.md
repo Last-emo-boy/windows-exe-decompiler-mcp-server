@@ -1,6 +1,6 @@
 # Performance Optimizations
 
-This document describes the performance optimizations implemented in the Windows EXE Decompiler MCP Server.
+This document describes the performance optimizations implemented in the Rikune.
 
 ## Overview
 

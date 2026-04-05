@@ -76,12 +76,12 @@ RUN sed -i 's|http://deb.debian.org/debian|https://mirrors.aliyun.com/debian|g' 
 docker build `
   --build-arg HTTP_PROXY=http://host.docker.internal:7890 `
   --build-arg HTTPS_PROXY=http://host.docker.internal:7890 `
-  -t windows-exe-decompiler:latest .
+  -t rikune:latest .
 
 # 或者不使用代理（推荐，如果国内镜像可用）
 docker build `
   --build-arg USE_MIRROR=true `
-  -t windows-exe-decompiler:latest .
+  -t rikune:latest .
 ```
 
 ---
@@ -199,7 +199,7 @@ RUN npm config set registry https://registry.npmmirror.com
 1. **修改 Clash 配置**: `allow-lan: true`
 2. **重启 Clash**
 3. **验证监听**: `netstat -an | findstr 7890` 应该显示 `0.0.0.0:7890`
-4. **运行安装脚本**: `.\install-docker.ps1 -DataRoot "D:\Docker\decompile-mcp-server" -UseProxy`
+4. **运行安装脚本**: `.\install-docker.ps1 -DataRoot "D:\Docker\rikune" -UseProxy`
 
 如果仍然有问题，请运行诊断命令并提供输出：
 

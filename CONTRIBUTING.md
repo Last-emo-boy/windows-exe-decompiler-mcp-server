@@ -32,7 +32,7 @@ npm run docker:run
 docker run --rm -it \
   -v $(pwd):/app \
   -w /app \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   npm test
 ```
 
@@ -64,8 +64,8 @@ Run the checks below before opening a pull request:
 # Build and test in container
 npm run docker:build
 npm run docker:test
-docker run --rm -v $(pwd):/app -w /app windows-exe-decompiler:latest npm run build
-docker run --rm -v $(pwd):/app -w /app windows-exe-decompiler:latest python -m py_compile workers/static_worker.py workers/speakeasy_compat.py
+docker run --rm -v $(pwd):/app -w /app rikune:latest npm run build
+docker run --rm -v $(pwd):/app -w /app rikune:latest python -m py_compile workers/static_worker.py workers/speakeasy_compat.py
 ```
 
 ### Native validation
@@ -94,8 +94,8 @@ full-suite execution.
 - Always use `--network=none` for malware analysis
 - Mount volumes for persistent data:
   ```bash
-  -v ~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces
-  -v ~/.windows-exe-decompiler-mcp-server/data:/app/data
+  -v ~/.rikune/workspaces:/app/workspaces
+  -v ~/.rikune/data:/app/data
   ```
 - Use security options: `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`
 
@@ -103,17 +103,17 @@ full-suite execution.
 
 ```bash
 # Test basic toolchain
-docker run --rm windows-exe-decompiler:latest node --version
-docker run --rm windows-exe-decompiler:latest python3 --version
-docker run --rm windows-exe-decompiler:latest java -version
-docker run --rm windows-exe-decompiler:latest /opt/ghidra/support/analyzeHeadless -help
+docker run --rm rikune:latest node --version
+docker run --rm rikune:latest python3 --version
+docker run --rm rikune:latest java -version
+docker run --rm rikune:latest /opt/ghidra/support/analyzeHeadless -help
 
 # Test Python packages
-docker run --rm windows-exe-decompiler:latest python3 -c "import pefile, lief, yara, capa, floss, dnfile, speakeasy"
+docker run --rm rikune:latest python3 -c "import pefile, lief, yara, capa, floss, dnfile, speakeasy"
 
 # Test MCP server stdio
 echo '{"jsonrpc":"2.0","method":"initialize","params":{}}' | \
-  docker run -i --rm windows-exe-decompiler:latest node dist/index.js
+  docker run -i --rm rikune:latest node dist/index.js
 ```
 
 ## Adding tools and plugins
@@ -165,11 +165,11 @@ Manual release:
 
 ```bash
 # Build and tag
-docker build -t windows-exe-decompiler:latest -t windows-exe-decompiler:<version> .
+docker build -t rikune:latest -t rikune:<version> .
 
 # Push to registry
-docker push windows-exe-decompiler:latest
-docker push windows-exe-decompiler:<version>
+docker push rikune:latest
+docker push rikune:<version>
 ```
 
 ### npm Package Release

@@ -22,9 +22,9 @@ export function buildDockerLauncherConfig(
   env: NodeJS.ProcessEnv = process.env
 ): DockerLauncherConfig {
   const containerName =
-    env.WINDOWS_EXE_DECOMPILER_DOCKER_CONTAINER || 'windows-exe-decompiler-mcp'
+    env.RIKUNE_DOCKER_CONTAINER || 'rikune'
   const imageName =
-    env.WINDOWS_EXE_DECOMPILER_DOCKER_IMAGE || 'windows-exe-decompiler:latest'
+    env.RIKUNE_DOCKER_IMAGE || 'rikune:latest'
 
   if (mode === 'docker-run') {
     return {
@@ -113,14 +113,14 @@ export function formatDockerLauncherHelp(mode: DockerLauncherMode): string {
     mode === 'docker-run' ? 'docker-run' : 'docker-stdio'
 
   return [
-    `windows-exe-decompiler-mcp-server ${modeText}`,
+    `rikune ${modeText}`,
     '',
     'Published-package launcher mode that keeps npm and Docker separate:',
     '- npm provides the client-side executable and versioned launcher',
     '- Docker provides the heavy reverse-engineering runtime',
     '',
     'Usage:',
-    `  npx -y windows-exe-decompiler-mcp-server ${modeText}`,
+    `  npx -y rikune ${modeText}`,
     '',
     'Options:',
     '  --print-command   Print the resolved docker command and exit',
@@ -128,15 +128,15 @@ export function formatDockerLauncherHelp(mode: DockerLauncherMode): string {
     '  -h, --help        Show this help',
     '',
     'Environment:',
-    '  WINDOWS_EXE_DECOMPILER_DOCKER_CONTAINER  Override compose container name',
-    '  WINDOWS_EXE_DECOMPILER_DOCKER_IMAGE      Override docker image name',
+    '  RIKUNE_DOCKER_CONTAINER  Override compose container name',
+    '  RIKUNE_DOCKER_IMAGE      Override docker image name',
     '',
     'Recommended runtime:',
     '  docker compose up -d mcp-server',
     '',
     'Recommended MCP client config:',
     '  command: "npx"',
-    `  args: ["-y", "windows-exe-decompiler-mcp-server", "${modeText}"]`,
+    `  args: ["-y", "rikune", "${modeText}"]`,
   ].join('\n')
 }
 
@@ -144,7 +144,7 @@ function buildPreflightError(mode: DockerLauncherMode, config: DockerLauncherCon
   if (mode === 'docker-run') {
     return [
       `Docker image '${config.imageName}' is required for npm docker-run mode.`,
-      `Build or pull it first, for example: docker pull ghcr.io/last-emo-boy/windows-exe-decompiler-mcp-server:latest`,
+      `Build or pull it first, for example: docker pull ghcr.io/last-emo-boy/rikune:latest`,
       `Or build locally: docker build -t ${config.imageName} .`,
     ].join('\n')
   }
@@ -159,7 +159,7 @@ function buildPreflightError(mode: DockerLauncherMode, config: DockerLauncherCon
     '  docker compose up -d mcp-server',
     '',
     'Then point your MCP client at:',
-    '  npx -y windows-exe-decompiler-mcp-server docker-stdio',
+    '  npx -y rikune docker-stdio',
   ].join('\n')
 }
 

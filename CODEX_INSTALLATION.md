@@ -16,7 +16,7 @@ Then run the helper script from the repository root:
 
 By default, the script writes a stable `WORKSPACE_ROOT` under your user profile:
 
-- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+- `%USERPROFILE%/.rikune/workspaces`
 
 It also pins:
 
@@ -67,14 +67,14 @@ If you prefer to edit the config by hand, add a block like this to
 `C:\Users\<you>\.codex\config.toml`:
 
 ```toml
-[mcp_servers.windows-exe-decompiler]
+[mcp_servers.rikune]
 command = "node"
 args = ["E:/path/to/repo/dist/index.js"]
 cwd = "E:/path/to/repo"
 startup_timeout_sec = 30
 tool_timeout_sec = 300
 enabled = true
-env = { WORKSPACE_ROOT = "C:/Users/<you>/.windows-exe-decompiler-mcp-server/workspaces", GHIDRA_PATH = "C:/tools/ghidra", GHIDRA_INSTALL_DIR = "C:/tools/ghidra" }
+env = { WORKSPACE_ROOT = "C:/Users/<you>/.rikune/workspaces", GHIDRA_PATH = "C:/tools/ghidra", GHIDRA_INSTALL_DIR = "C:/tools/ghidra" }
 ```
 
 ## Verify

@@ -1,12 +1,12 @@
 param(
-    [string]$ServerName = "windows-exe-decompiler",
+    [string]$ServerName = "rikune",
     [string]$ProjectRoot = (Get-Location).Path,
     [string]$NodePath,
     [string]$GhidraPath = "",
-    [string]$WorkspaceRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces",
-    [string]$DatabasePath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db",
-    [string]$CacheRoot = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache",
-    [string]$AuditLogPath = "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log",
+    [string]$WorkspaceRoot = "$env:USERPROFILE\\.rikune\\workspaces",
+    [string]$DatabasePath = "$env:USERPROFILE\\.rikune\\data\\database.db",
+    [string]$CacheRoot = "$env:USERPROFILE\\.rikune\\cache",
+    [string]$AuditLogPath = "$env:USERPROFILE\\.rikune\\audit.log",
     [string]$ConfigPath = "$env:USERPROFILE\.codex\config.toml",
     [switch]$NoBackup
 )
@@ -67,7 +67,7 @@ function Resolve-WorkspaceRoot {
         return $env:WORKSPACE_ROOT
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\workspaces"
+    return "$env:USERPROFILE\\.rikune\\workspaces"
 }
 
 function Resolve-DatabasePath {
@@ -79,7 +79,7 @@ function Resolve-DatabasePath {
         return $env:DB_PATH
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\data\\database.db"
+    return "$env:USERPROFILE\\.rikune\\data\\database.db"
 }
 
 function Resolve-CacheRoot {
@@ -91,7 +91,7 @@ function Resolve-CacheRoot {
         return $env:CACHE_ROOT
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\cache"
+    return "$env:USERPROFILE\\.rikune\\cache"
 }
 
 function Resolve-AuditLogPath {
@@ -103,7 +103,7 @@ function Resolve-AuditLogPath {
         return $env:AUDIT_LOG_PATH
     }
 
-    return "$env:USERPROFILE\\.windows-exe-decompiler-mcp-server\\audit.log"
+    return "$env:USERPROFILE\\.rikune\\audit.log"
 }
 
 function Backup-FileIfNeeded {
@@ -191,7 +191,7 @@ function Upsert-ConfigBlock {
     [System.IO.File]::WriteAllText($PathValue, $updated, [System.Text.UTF8Encoding]::new($false))
 }
 
-Write-Host "=== Windows EXE Decompiler MCP Server - Codex Install ===" -ForegroundColor Cyan
+Write-Host "=== Rikune - Codex Install ===" -ForegroundColor Cyan
 
 Write-Step "Step 1: Validate build output"
 $projectRootFull = [System.IO.Path]::GetFullPath($ProjectRoot)

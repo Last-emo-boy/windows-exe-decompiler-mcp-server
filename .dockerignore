@@ -1,5 +1,5 @@
 # =============================================================================
-# .dockerignore - Windows EXE Decompiler MCP Server
+# .dockerignore - Rikune
 # =============================================================================
 # Exclude files and directories from Docker build context
 # This reduces build time and final image size

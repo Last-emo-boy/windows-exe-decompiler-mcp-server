@@ -8,7 +8,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-export const APP_CONFIG_DIRNAME = '.windows-exe-decompiler-mcp-server'
+export const APP_CONFIG_DIRNAME = '.rikune'
 
 export function getDefaultAppRoot(): string {
   return path.join(os.homedir(), APP_CONFIG_DIRNAME)

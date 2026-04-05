@@ -69,7 +69,7 @@ try {
     Write-Host "濞戞挸顑勭粩鏉戭潰閵夛附鎯欏ù?" -ForegroundColor Cyan
     Write-Host "========================================" -ForegroundColor Cyan
     Write-Host "1. 閻?ghidra.zip 濠㈣泛绉撮崺妤呭礆娴兼番鈧秹鎯勯鐣屽闁烩晩鍠栫紞? -ForegroundColor White
-    Write-Host "2. 閺夆晜鍔橀、鎴︽晬濮濈€榗ker build --build-arg GHIDRA_ZIP_PATH=.\ghidra.zip -t windows-exe-decompiler:latest ." -ForegroundColor White
+    Write-Host "2. 閺夆晜鍔橀、鎴︽晬濮濈€榗ker build --build-arg GHIDRA_ZIP_PATH=.\ghidra.zip -t rikune:latest ." -ForegroundColor White
     Write-Host "`n闁瑰瓨鐗為埀顒€鎳愬ú鍧楀箳閵夈倕鈻忛柣顫妼閻ｃ劎鎲楅崨鏉垮闁哄牜鍓ㄧ槐娆愬濮樺啿娈伴柛鏂诲妽椤ュ懎霉鐎ｂ晝鐟撻弶鐐垫櫕濞堟垿寮崶锔筋偨闁? -ForegroundColor White
     
 } catch {

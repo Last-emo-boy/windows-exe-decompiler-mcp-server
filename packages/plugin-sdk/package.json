@@ -1,7 +1,7 @@
 {
-  "name": "@anthropic/windows-exe-decompiler-plugin-sdk",
+  "name": "@anthropic/rikune-plugin-sdk",
   "version": "1.0.0-beta.2",
-  "description": "Plugin SDK for windows-exe-decompiler-mcp-server — types and utilities for third-party plugin authors.",
+  "description": "Plugin SDK for rikune — types and utilities for third-party plugin authors.",
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",

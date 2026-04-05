@@ -1,5 +1,5 @@
 """
-Static analysis worker for Windows EXE Decompiler MCP Server
+Static analysis worker for Rikune
 """
 
 __version__ = "0.1.0"

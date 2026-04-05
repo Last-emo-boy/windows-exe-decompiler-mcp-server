@@ -141,7 +141,7 @@ export function createSbomGenerateHandler(
         version: 1,
         metadata: {
           timestamp,
-          tools: [{ vendor: 'windows-exe-decompiler-mcp-server', name: 'sbom.generate', version: '1.0.0' }],
+          tools: [{ vendor: 'rikune', name: 'sbom.generate', version: '1.0.0' }],
           component: {
             type: 'application',
             name: args.sample_id,
@@ -168,7 +168,7 @@ export function createSbomGenerateHandler(
         documentNamespace: serialNumber,
         creationInfo: {
           created: timestamp,
-          creators: ['Tool: windows-exe-decompiler-mcp-server-sbom-1.0.0'],
+          creators: ['Tool: rikune-sbom-1.0.0'],
         },
         packages: deduped.map((c, i) => ({
           SPDXID: `SPDXRef-Package-${i}`,

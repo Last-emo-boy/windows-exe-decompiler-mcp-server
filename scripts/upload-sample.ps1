@@ -1,4 +1,4 @@
-﻿# Upload Sample to Docker Container
+# Upload Sample to Docker Container
 # Usage: .\scripts\upload-sample.ps1 -Path "C:\path\to\sample.exe" [-OutputFormat "path"|"json"]
 
 param(
@@ -13,8 +13,8 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Configuration
-$SamplesDir = "D:\Docker\decompile-mcp-server\samples"
-$ContainerName = "windows-exe-decompiler-mcp"
+$SamplesDir = "D:\Docker\rikune\samples"
+$ContainerName = "rikune"
 
 # Check if file exists
 if (-not (Test-Path $Path)) {

@@ -1,4 +1,4 @@
-# Windows EXE Decompiler MCP Server - Docker Install Script
+# Rikune - Docker Install Script
 # Requires: PowerShell 7.5+, Docker Desktop, Administrator privileges
 # Encoding: UTF-8 without BOM
 
@@ -92,7 +92,7 @@ function Resolve-ComposeCommand {
 
 # Main Script
 Clear-Host
-Write-Header "Windows EXE Decompiler MCP Server - Docker Installer"
+Write-Header "Rikune - Docker Installer"
 
 Write-Host "This script will:" -ForegroundColor $ColorInfo
 Write-Host "  1. Check Docker installation" -ForegroundColor $ColorInfo
@@ -291,7 +291,7 @@ $options = @()
 $optionIndex = 1
 
 # Default option (user profile)
-$defaultPath = "$env:USERPROFILE\.windows-exe-decompiler-mcp-server"
+$defaultPath = "$env:USERPROFILE\.rikune"
 $options += @{
     Index = 0
     Path = $defaultPath
@@ -302,7 +302,7 @@ $options += @{
 # Add other drives
 foreach ($disk in $disks) {
     if ($disk.Name -ne 'C') {
-        $path = "$($disk.Name):\Docker\windows-exe-decompiler-mcp-server"
+        $path = "$($disk.Name):\Docker\rikune"
         $freeGB = [math]::Round($disk.Free / 1GB, 1)
         $options += @{
             Index = $optionIndex
@@ -361,7 +361,7 @@ foreach ($dir in $directories) {
 }
 
 $dockerRuntimeEnvFile = Join-Path $ProjectRoot ".docker-runtime.env"
-"WINDOWS_EXE_DECOMPILER_DATA_ROOT=$($DataRoot -replace '\\', '/')" | Set-Content $dockerRuntimeEnvFile -Encoding UTF8
+"RIKUNE_DATA_ROOT=$($DataRoot -replace '\\', '/')" | Set-Content $dockerRuntimeEnvFile -Encoding UTF8
 Write-Success "Compose env file: $dockerRuntimeEnvFile"
 
 Write-Step "Building Docker Image"
@@ -371,7 +371,7 @@ try {
     if ($SkipBuild) {
         Write-Warning-Message "Skipping Docker image build (--SkipBuild)"
     } else {
-        $buildArgs = @("build", "-t", "windows-exe-decompiler:latest", "--progress", "plain", ".")
+        $buildArgs = @("build", "-t", "rikune:latest", "--progress", "plain", ".")
 
         if ($EnableVerbose) {
             $buildArgs += "--no-cache"
@@ -397,7 +397,7 @@ try {
 
         if ($LASTEXITCODE -eq 0) {
             Write-Success "Docker image built successfully"
-            docker images windows-exe-decompiler:latest
+            docker images rikune:latest
         } else {
             Write-Error-Message "Docker build failed"
             exit 1
@@ -434,14 +434,14 @@ $qilingRootfsPath = Join-Path $DataRoot "qiling-rootfs"
 
 $dockerExecArgs = @(
     "exec", "-i",
-    "windows-exe-decompiler-mcp",
+    "rikune",
     "node",
     "dist/index.js"
 )
 
 $config = @{
     mcpServers = @{
-        "windows-exe-decompiler" = @{
+        "rikune" = @{
             command = "docker"
             args = $dockerExecArgs
             env = @{
@@ -501,10 +501,10 @@ Write-Step "Testing Installation"
 Write-Host "`nTesting Docker image..." -ForegroundColor $ColorPrimary
 
 $tests = @(
-    @{ Name = "Node.js"; Cmd = @("run", "--rm", "--entrypoint", "node", "windows-exe-decompiler:latest", "--version") },
-    @{ Name = "Python"; Cmd = @("run", "--rm", "--entrypoint", "python3", "windows-exe-decompiler:latest", "--version") },
-    @{ Name = "Java"; Cmd = @("run", "--rm", "--entrypoint", "java", "windows-exe-decompiler:latest", "-version") },
-    @{ Name = "Full Stack"; Cmd = @("run", "--rm", "--entrypoint", "/usr/local/bin/validate-docker-full-stack.sh", "windows-exe-decompiler:latest") }
+    @{ Name = "Node.js"; Cmd = @("run", "--rm", "--entrypoint", "node", "rikune:latest", "--version") },
+    @{ Name = "Python"; Cmd = @("run", "--rm", "--entrypoint", "python3", "rikune:latest", "--version") },
+    @{ Name = "Java"; Cmd = @("run", "--rm", "--entrypoint", "java", "rikune:latest", "-version") },
+    @{ Name = "Full Stack"; Cmd = @("run", "--rm", "--entrypoint", "/usr/local/bin/validate-docker-full-stack.sh", "rikune:latest") }
 )
 
 $passed = 0
@@ -529,7 +529,7 @@ Write-Host "`nResults: $passed/$($tests.Count) passed" -ForegroundColor $(if ($p
 Write-Header "Installation Complete"
 
 Write-Host "Data Root: $DataRoot" -ForegroundColor $ColorSuccess
-Write-Host "Image: windows-exe-decompiler:latest" -ForegroundColor $ColorSuccess
+Write-Host "Image: rikune:latest" -ForegroundColor $ColorSuccess
 
 Write-Host "`n========================================" -ForegroundColor $ColorPrimary
 Write-Host "  API File Server - AUTO-ENABLED" -ForegroundColor $ColorSuccess
@@ -539,7 +539,7 @@ Write-Host "The HTTP API server is enabled by default on port 18080." -Foregroun
 Write-Host "An API key will be auto-generated on first startup." -ForegroundColor $ColorInfo
 Write-Host ""
 Write-Host "To get your API key after starting the container:" -ForegroundColor $ColorPrimary
-Write-Host "  docker logs windows-exe-decompiler-mcp | grep 'API Key'" -ForegroundColor $ColorInfo
+Write-Host "  docker logs rikune | grep 'API Key'" -ForegroundColor $ColorInfo
 Write-Host ""
 Write-Host "To upload a sample:" -ForegroundColor $ColorPrimary
 Write-Host "  curl -X POST http://localhost:18080/api/v1/samples \" -ForegroundColor $ColorInfo
@@ -551,7 +551,7 @@ Write-Host "  Set API_KEY environment variable in docker-compose.yml" -Foregroun
 Write-Host ""
 
 Write-Host "`nBasic Usage:" -ForegroundColor $ColorPrimary
-Write-Host "  docker run --rm -i -v ${samplesPath}:/samples:ro windows-exe-decompiler:latest"
+Write-Host "  docker run --rm -i -v ${samplesPath}:/samples:ro rikune:latest"
 Write-Host ""
 Write-Host "Or use Docker Compose (recommended):" -ForegroundColor $ColorPrimary
 Write-Host "  $(if ($composeCommand) { $composeCommand } else { 'docker compose' }) --env-file .docker-runtime.env up -d mcp-server"
@@ -560,7 +560,7 @@ Write-Host ""
 $installInfo = @{
     InstallDate = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
     DataRoot = $DataRoot
-    DockerImage = "windows-exe-decompiler:latest"
+    DockerImage = "rikune:latest"
     TestsPassed = $passed
     APIEnabled = $true
     APIPort = 18080

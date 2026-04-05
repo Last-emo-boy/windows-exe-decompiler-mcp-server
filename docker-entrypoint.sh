@@ -1,6 +1,6 @@
 #!/bin/bash
 # =============================================================================
-# Docker Entrypoint Script for Windows EXE Decompiler MCP Server
+# Docker Entrypoint Script for Rikune
 # =============================================================================
 # This script handles container initialization:
 # 1. Validate required environment variables
@@ -175,8 +175,8 @@ fi
 log_info "=== Creating Runtime Directories ==="
 
 # Create appuser home directory to avoid mkdir errors
-if [ ! -d "/root/.windows-exe-decompiler-mcp-server" ]; then
-    mkdir -p /root/.windows-exe-decompiler-mcp-server 2>/dev/null || true
+if [ ! -d "/root/.rikune" ]; then
+    mkdir -p /root/.rikune 2>/dev/null || true
 fi
 
 # Create directories (will be mounted as volumes or created if not mounted)

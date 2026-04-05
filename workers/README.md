@@ -281,6 +281,6 @@ MIT License
 
 ## 相关文档
 
-- [设计文档](../.kiro/specs/windows-exe-decompiler-mcp-server/design.md)
-- [需求文档](../.kiro/specs/windows-exe-decompiler-mcp-server/requirements.md)
-- [任务列表](../.kiro/specs/windows-exe-decompiler-mcp-server/tasks.md)
+- [设计文档](../.kiro/specs/rikune/design.md)
+- [需求文档](../.kiro/specs/rikune/requirements.md)
+- [任务列表](../.kiro/specs/rikune/tasks.md)

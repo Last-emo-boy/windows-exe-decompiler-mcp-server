@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Setup script for Windows EXE Decompiler MCP Server - Static Worker
+Setup script for Rikune - Static Worker
 """
 
 from setuptools import setup, find_packages
@@ -8,7 +8,7 @@ from setuptools import setup, find_packages
 setup(
     name="mcp-decompiler-worker",
     version="0.1.0",
-    description="Static analysis worker for Windows EXE Decompiler MCP Server",
+    description="Static analysis worker for Rikune",
     python_requires=">=3.9",
     packages=find_packages(),
     install_requires=[

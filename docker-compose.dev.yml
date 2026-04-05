@@ -25,10 +25,10 @@ services:
       - ./samples:/samples:ro
 
       # Persistent data
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/workspaces:/app/workspaces:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/data:/app/data:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/cache:/app/cache:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/storage:/app/storage:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/workspaces:/app/workspaces:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/data:/app/data:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/cache:/app/cache:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/storage:/app/storage:rw"
 
     environment:
       - NODE_ENV=development

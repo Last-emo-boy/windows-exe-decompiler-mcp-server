@@ -1,4 +1,4 @@
-﻿# Docker Upload Server Connection Test
+# Docker Upload Server Connection Test
 # 测试宿主机到容器的网络连接
 
 Write-Host "========================================" -ForegroundColor Cyan
@@ -8,7 +8,7 @@ Write-Host ""
 
 # 1. Check if container is running
 Write-Host "[1] Checking container status..." -ForegroundColor Yellow
-$container = docker ps --filter "name=windows-exe-decompiler-mcp" --format "{{.Names}}"
+$container = docker ps --filter "name=rikune" --format "{{.Names}}"
 if ($container) {
     Write-Host "✓ Container is running: $container" -ForegroundColor Green
 } else {
@@ -20,7 +20,7 @@ Write-Host ""
 
 # 2. Check port mapping
 Write-Host "[2] Checking port mapping..." -ForegroundColor Yellow
-$ports = docker port windows-exe-decompiler-mcp
+$ports = docker port rikune
 if ($ports) {
     Write-Host "✓ Port mapping:" -ForegroundColor Green
     $ports | ForEach-Object { Write-Host "  $_" -ForegroundColor Gray }

@@ -274,7 +274,7 @@ describe('report.generate tool', () => {
     database.updateAnalysis('analysis-ghidra', {
       output_json: JSON.stringify({
         function_count: 2,
-        project_path: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects/sample/project_demo',
+        project_path: 'C:/ProgramData/.rikune/ghidra-projects/sample/project_demo',
         project_key: 'project_demo',
         readiness: {
           function_index: { available: true, status: 'ready' },
@@ -287,10 +287,10 @@ describe('report.generate tool', () => {
           warnings: [],
         },
         ghidra_execution: {
-          project_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects',
-          log_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs',
-          command_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/ghidra_cmd.log'],
-          runtime_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/ghidra_runtime.log'],
+          project_root: 'C:/ProgramData/.rikune/ghidra-projects',
+          log_root: 'C:/ProgramData/.rikune/ghidra-logs',
+          command_log_paths: ['C:/ProgramData/.rikune/ghidra-logs/ghidra_cmd.log'],
+          runtime_log_paths: ['C:/ProgramData/.rikune/ghidra-logs/ghidra_runtime.log'],
           progress_stages: [
             { progress: 5, stage: 'starting', detail: 'Preparing Ghidra analysis', recorded_at: createdAt },
             { progress: 100, stage: 'completed', detail: 'done', recorded_at: createdAt },

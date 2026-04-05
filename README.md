@@ -1,4 +1,4 @@
-# Windows EXE Decompiler MCP Server
+# Rikune
 
 Chinese version: [`README_zh.md`](./README_zh.md)
 
@@ -677,10 +677,10 @@ The easiest way to run the MCP server with all dependencies pre-installed:
 
 ```bash
 # Build the Docker image (10-15 minutes, ~2.5GB)
-docker build -t windows-exe-decompiler:latest .
+docker build -t rikune:latest .
 
 # Or pull from registry (when published)
-# docker pull ghcr.io/last-emo-boy/windows-exe-decompiler-mcp-server:latest
+# docker pull ghcr.io/last-emo-boy/rikune:latest
 
 # Run with Docker Compose
 docker-compose up -d mcp-server
@@ -689,8 +689,8 @@ docker-compose up -d mcp-server
 docker run --rm -i \
   --network=none \
   -v ./samples:/samples:ro \
-  -v ~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces \
-  windows-exe-decompiler:latest
+  -v ~/.rikune/workspaces:/app/workspaces \
+  rikune:latest
 ```
 
 See [`docs/DOCKER.md`](./docs/DOCKER.md) for complete Docker documentation.
@@ -783,7 +783,7 @@ npm start
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "node",
       "args": ["/absolute/path/to/repo/dist/index.js"],
       "cwd": "/absolute/path/to/repo",
@@ -803,12 +803,12 @@ For the single-container deployment model, start the daemon once with `docker co
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "exec",
         "-i",
-        "windows-exe-decompiler-mcp",
+        "rikune",
         "node",
         "dist/index.js"
       ],
@@ -846,17 +846,17 @@ Related docs:
 
 By default, runtime state is stored under the user profile instead of the current working directory:
 
-- Windows workspace root: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
-- SQLite database: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/data/database.db`
-- File cache: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/cache`
-- Audit log: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/audit.log`
-- Ghidra project root: `%ProgramData%/.windows-exe-decompiler-mcp-server/ghidra-projects`
-- Ghidra log root: `%ProgramData%/.windows-exe-decompiler-mcp-server/ghidra-logs`
+- Windows workspace root: `%USERPROFILE%/.rikune/workspaces`
+- SQLite database: `%USERPROFILE%/.rikune/data/database.db`
+- File cache: `%USERPROFILE%/.rikune/cache`
+- Audit log: `%USERPROFILE%/.rikune/audit.log`
+- Ghidra project root: `%ProgramData%/.rikune/ghidra-projects`
+- Ghidra log root: `%ProgramData%/.rikune/ghidra-logs`
 - Bundled Ghidra scripts: resolved from the installed package root
 
 You can override these with environment variables or the user config file:
 
-- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/config.json`
+- `%USERPROFILE%/.rikune/config.json`
 - `WORKSPACE_ROOT`
 - `DB_PATH`
 - `CACHE_ROOT`
@@ -995,9 +995,9 @@ docker compose up -d mcp-server
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "npx",
-      "args": ["-y", "windows-exe-decompiler-mcp-server", "docker-stdio"]
+      "args": ["-y", "rikune", "docker-stdio"]
     }
   }
 }
@@ -1005,8 +1005,8 @@ docker compose up -d mcp-server
 
 Optional overrides for the launcher:
 
-- `WINDOWS_EXE_DECOMPILER_DOCKER_CONTAINER`
-- `WINDOWS_EXE_DECOMPILER_DOCKER_IMAGE`
+- `RIKUNE_DOCKER_CONTAINER`
+- `RIKUNE_DOCKER_IMAGE`
 
 For local clone/native mode instead, keep using the earlier examples in this README that call `node /absolute/path/to/dist/index.js` directly.
 

@@ -1,6 +1,6 @@
 # 常见问题解答 (FAQ)
 
-本文档回答 Windows EXE Decompiler MCP Server 使用过程中的常见问题。
+本文档回答 Rikune 使用过程中的常见问题。
 
 ## 目录
 
@@ -756,7 +756,7 @@ output.elasticsearch:
    - [README](../README.md)
 
 2. **搜索 Issues**:
-   - [GitHub Issues](https://github.com/your-org/windows-exe-decompiler-mcp-server/issues)
+   - [GitHub Issues](https://github.com/your-org/rikune/issues)
 
 3. **提交 Issue**:
    - 提供详细的错误信息

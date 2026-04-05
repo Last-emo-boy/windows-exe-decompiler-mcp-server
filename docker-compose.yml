@@ -1,5 +1,5 @@
 # =============================================================================
-# Docker Compose - Windows EXE Decompiler MCP Server
+# Docker Compose - Rikune
 # =============================================================================
 # Usage:
 #   docker-compose up -d              # Start in background
@@ -13,7 +13,7 @@ services:
   # MCP Server (Main Service)
   # ---------------------------------------------------------------------------
   mcp-server:
-    image: windows-exe-decompiler:latest
+    image: rikune:latest
     build:
       context: .
       dockerfile: Dockerfile
@@ -26,7 +26,7 @@ services:
         RIZIN_VERSION: "0.8.2"
         RETDEC_VERSION: "5.0"
         ANGR_VERSION: "9.2.205"
-    container_name: windows-exe-decompiler-mcp
+    container_name: rikune
 
     # Keep container running for stdio mode
     stdin_open: true
@@ -58,21 +58,21 @@ services:
       - ./samples:/samples:ro
 
       # Persistent data (read-write) - update to your actual data directory
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/workspaces:/app/workspaces:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/data:/app/data:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/cache:/app/cache:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/ghidra-projects:/ghidra-projects:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/ghidra-logs:/ghidra-logs:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/logs:/app/logs:rw"
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/qiling-rootfs:/opt/qiling-rootfs:ro"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/workspaces:/app/workspaces:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/data:/app/data:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/cache:/app/cache:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/ghidra-projects:/ghidra-projects:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/ghidra-logs:/ghidra-logs:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/logs:/app/logs:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/qiling-rootfs:/opt/qiling-rootfs:ro"
       
       # API storage volume (for direct uploads and MCP upload sessions)
-      - "${WINDOWS_EXE_DECOMPILER_DATA_ROOT:-D:/Docker/decompile-mcp-server}/storage:/app/storage:rw"
+      - "${RIKUNE_DATA_ROOT:-D:/Docker/rikune}/storage:/app/storage:rw"
 
-      # Create /root/.windows-exe-decompiler-mcp-server directory
+      # Create /root/.rikune directory
       - type: volume
         source: root-config
-        target: /root/.windows-exe-decompiler-mcp-server
+        target: /root/.rikune
 
       # Optional: Custom config (read-only)
       # - ./config.json:/app/config.json:ro
@@ -135,7 +135,7 @@ services:
 
     # Labels for organization
     labels:
-      - "app=windows-exe-decompiler"
+      - "app=rikune"
       - "component=mcp-server"
       - "security.isolation=high"
 
@@ -144,11 +144,11 @@ services:
   # ---------------------------------------------------------------------------
   # Uncomment to use separate Ghidra service instead of bundled Ghidra
   # ghidra-service:
-  #   image: windows-exe-decompiler:ghidra
+  #   image: rikune:ghidra
   #   build:
   #     context: .
   #     dockerfile: Dockerfile.ghidra
-  #   container_name: windows-exe-decompiler-ghidra
+  #   container_name: rikune-ghidra
   #   volumes:
   #     - ghidra-projects:/ghidra-projects
   #     - ghidra-logs:/ghidra-logs
@@ -167,7 +167,7 @@ services:
   # Optional: Web UI (future extension)
   # ---------------------------------------------------------------------------
   # web-ui:
-  #   image: windows-exe-decompiler:webui
+  #   image: rikune:webui
   #   ports:
   #     - "3000:3000"
   #   environment:
@@ -195,7 +195,7 @@ volumes:
     driver: local
   ghidra-logs:
     driver: local
-  # Volume for /root/.windows-exe-decompiler-mcp-server
+  # Volume for /root/.rikune
   root-config:
     driver: local
   # Volume for API storage

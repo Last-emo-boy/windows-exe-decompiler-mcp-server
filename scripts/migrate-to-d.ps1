@@ -189,8 +189,8 @@ try {
 # =============================================================================
 Write-Step "杩佺Щ搴旂敤鏁版嵁鍒?D 鐩?
 
-$appDataDir = "D:\Docker\decompile-mcp-server"
-$oldAppDataDir = "$env:USERPROFILE\.windows-exe-decompiler-mcp-server"
+$appDataDir = "D:\Docker\rikune"
+$oldAppDataDir = "$env:USERPROFILE\.rikune"
 
 if (Test-Path $oldAppDataDir) {
     Write-Host "`n鍙戠幇鏃х殑搴旂敤鏁版嵁锛?oldAppDataDir" -ForegroundColor $ColorInfo
@@ -255,15 +255,15 @@ Write-Step "杩佺Щ瀹屾垚"
 
 Write-Host "`n杩佺Щ鎽樿锛? -ForegroundColor $ColorSuccess
 Write-Success "Docker WSL2 鏁版嵁宸茶縼绉诲埌锛欴:\Docker\wsl\data"
-Write-Success "搴旂敤鏁版嵁宸茶縼绉诲埌锛欴:\Docker\decompile-mcp-server"
+Write-Success "搴旂敤鏁版嵁宸茶縼绉诲埌锛欴:\Docker\rikune"
 
 Write-Host "`n涓嬩竴姝ユ搷浣滐細" -ForegroundColor $ColorInfo
 Write-Host "  1. 鍚姩 Docker Desktop" -ForegroundColor $ColorWhite
-Write-Host "  2. 杩愯瀹夎鑴氭湰锛?\install-docker.ps1 -DataRoot 'D:\Docker\decompile-mcp-server'" -ForegroundColor $ColorWhite
+Write-Host "  2. 杩愯瀹夎鑴氭湰锛?\install-docker.ps1 -DataRoot 'D:\Docker\rikune'" -ForegroundColor $ColorWhite
 Write-Host "  3. 纭鎵€鏈夋暟鎹兘鍦?D 鐩? -ForegroundColor $ColorWhite
 
 Write-Host "`n鈿狅笍  閲嶈鎻愮ず锛? -ForegroundColor $ColorWarning
 Write-Host "  - 璇风‘璁よ縼绉绘垚鍔熷悗鍐嶅垹闄?C 鐩樼殑鏃ф暟鎹? -ForegroundColor $ColorWhite
-Write-Host "  - 鏃ф暟鎹綅缃細$env:USERPROFILE\.windows-exe-decompiler-mcp-server" -ForegroundColor $ColorWhite
+Write-Host "  - 鏃ф暟鎹綅缃細$env:USERPROFILE\.rikune" -ForegroundColor $ColorWhite
 
 Read-Host "`n鎸変换鎰忛敭閫€鍑?.."

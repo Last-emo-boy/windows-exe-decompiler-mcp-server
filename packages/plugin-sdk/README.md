@@ -1,17 +1,17 @@
-# Plugin SDK for Windows EXE Decompiler MCP Server
+# Plugin SDK for Rikune
 
-Type-safe SDK for building third-party plugins for `windows-exe-decompiler-mcp-server`.
+Type-safe SDK for building third-party plugins for `rikune`.
 
 ## Installation
 
 ```bash
-npm install @anthropic/windows-exe-decompiler-plugin-sdk
+npm install @anthropic/rikune-plugin-sdk
 ```
 
 ## Quick Start
 
 ```typescript
-import { definePlugin } from '@anthropic/windows-exe-decompiler-plugin-sdk'
+import { definePlugin } from '@anthropic/rikune-plugin-sdk'
 
 export default definePlugin({
   id: 'my-custom-tool',

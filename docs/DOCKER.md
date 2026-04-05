@@ -1,6 +1,6 @@
 # Docker 使用指南
 
-Windows EXE Decompiler MCP Server 的完整 Docker 容器化部署指南。
+Rikune 的完整 Docker 容器化部署指南。
 
 ## 目录
 
@@ -27,11 +27,11 @@ Windows EXE Decompiler MCP Server 的完整 Docker 容器化部署指南。
 
 ```bash
 # 1. 克隆项目
-git clone https://github.com/Last-emo-boy/windows-exe-decompiler-mcp-server.git
-cd windows-exe-decompiler-mcp-server
+git clone https://github.com/Last-emo-boy/rikune.git
+cd rikune
 
 # 2. 构建 Docker 镜像（约 10-15 分钟）
-docker build -t windows-exe-decompiler:latest .
+docker build -t rikune:latest .
 
 # 3. 创建样本目录
 mkdir -p samples
@@ -39,7 +39,7 @@ mkdir -p samples
 # 4. 运行容器测试
 docker run --rm \
   -v ./samples:/samples:ro \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   node --version
 
 # 5. 配置 MCP 客户端（见下方配置章节）
@@ -50,23 +50,23 @@ docker run --rm \
 ### 标准构建
 
 ```bash
-docker build -t windows-exe-decompiler:latest .
+docker build -t rikune:latest .
 ```
 
 ### 使用构建缓存加速
 
 ```bash
 # 第一次构建（完整）
-docker build -t windows-exe-decompiler:latest .
+docker build -t rikune:latest .
 
 # 后续构建（使用缓存）
-docker build --cache-from windows-exe-decompiler:latest -t windows-exe-decompiler:latest .
+docker build --cache-from rikune:latest -t rikune:latest .
 ```
 
 ### 验证完整工具链
 
 ```bash
-docker run --rm --entrypoint /usr/local/bin/validate-docker-full-stack.sh windows-exe-decompiler:latest
+docker run --rm --entrypoint /usr/local/bin/validate-docker-full-stack.sh rikune:latest
 ```
 
 ### 多平台构建（可选）
@@ -74,7 +74,7 @@ docker run --rm --entrypoint /usr/local/bin/validate-docker-full-stack.sh window
 ```bash
 docker buildx build \
   --platform linux/amd64,linux/arm64 \
-  -t windows-exe-decompiler:latest \
+  -t rikune:latest \
   --push .
 ```
 
@@ -82,7 +82,7 @@ docker buildx build \
 
 ```bash
 # 查看镜像大小
-docker images windows-exe-decompiler
+docker images rikune
 
 # 预期大小：明显大于基础镜像（该镜像现在默认内置完整 Linux 侧分析栈）
 # - Node.js + npm
@@ -219,7 +219,7 @@ docker images windows-exe-decompiler
 docker run --rm -it \
   --network=none \
   -v ./samples:/samples:ro \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   bash
 ```
 
@@ -234,16 +234,16 @@ docker run --rm -i \
   --cap-drop=ALL \
   --memory=8g \
   --cpus=2 \
-  -v ~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces \
-  -v ~/.windows-exe-decompiler-mcp-server/data:/app/data \
-  -v ~/.windows-exe-decompiler-mcp-server/cache:/app/cache \
-  -v ~/.windows-exe-decompiler-mcp-server/ghidra-projects:/ghidra-projects \
-  -v ~/.windows-exe-decompiler-mcp-server/ghidra-logs:/ghidra-logs \
+  -v ~/.rikune/workspaces:/app/workspaces \
+  -v ~/.rikune/data:/app/data \
+  -v ~/.rikune/cache:/app/cache \
+  -v ~/.rikune/ghidra-projects:/ghidra-projects \
+  -v ~/.rikune/ghidra-logs:/ghidra-logs \
   -v /path/to/qiling-rootfs:/opt/qiling-rootfs:ro \
   -e WORKSPACE_ROOT=/app/workspaces \
   -e DB_PATH=/app/data/database.db \
   -e GHIDRA_PROJECT_ROOT=/ghidra-projects \
-  windows-exe-decompiler:latest
+  rikune:latest
 ```
 
 ### 使用 Docker Compose
@@ -263,7 +263,7 @@ docker-compose down
 ```
 
 `docker compose` 适合提供持久卷和 HTTP 上传 API。
-如果 MCP 客户端通过 stdio 连接，请继续使用单独的 `docker run -i --rm ... windows-exe-decompiler:latest` 配置，不要在 compose 容器里再执行 `docker exec ... node dist/index.js`，否则会在同一个容器里双开 MCP server。
+如果 MCP 客户端通过 stdio 连接，请继续使用单独的 `docker run -i --rm ... rikune:latest` 配置，不要在 compose 容器里再执行 `docker exec ... node dist/index.js`，否则会在同一个容器里双开 MCP server。
 
 ### 环境变量配置
 
@@ -374,7 +374,7 @@ curl http://localhost:18080/api/v1/dashboard/config
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "run",
@@ -387,10 +387,10 @@ curl http://localhost:18080/api/v1/dashboard/config
         "-v",
         "${workspace}:/samples:ro",
         "-v",
-        "~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces",
+        "~/.rikune/workspaces:/app/workspaces",
         "-v",
-        "~/.windows-exe-decompiler-mcp-server/data:/app/data",
-        "windows-exe-decompiler:latest"
+        "~/.rikune/data:/app/data",
+        "rikune:latest"
       ]
     }
   }
@@ -404,7 +404,7 @@ curl http://localhost:18080/api/v1/dashboard/config
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "run",
@@ -414,8 +414,8 @@ curl http://localhost:18080/api/v1/dashboard/config
         "-v",
         "${workspaceFolder}:/samples:ro",
         "-v",
-        "~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces",
-        "windows-exe-decompiler:latest"
+        "~/.rikune/workspaces:/app/workspaces",
+        "rikune:latest"
       ]
     }
   }
@@ -427,7 +427,7 @@ curl http://localhost:18080/api/v1/dashboard/config
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "run",
@@ -437,8 +437,8 @@ curl http://localhost:18080/api/v1/dashboard/config
         "-v",
         "/path/to/samples:/samples:ro",
         "-v",
-        "~/.windows-exe-decompiler-mcp-server/workspaces:/app/workspaces",
-        "windows-exe-decompiler:latest"
+        "~/.rikune/workspaces:/app/workspaces",
+        "rikune:latest"
       ]
     }
   }
@@ -452,7 +452,7 @@ curl http://localhost:18080/api/v1/dashboard/config
 ### 目录结构
 
 ```
-~/.windows-exe-decompiler-mcp-server/
+~/.rikune/
 ├── workspaces/          # 样本工作空间
 │   └── <sha256>/
 │       ├── original/    # 原始样本
@@ -472,7 +472,7 @@ curl http://localhost:18080/api/v1/dashboard/config
 ```bash
 # 备份所有数据
 tar -czf mcp-data-backup.tar.gz \
-  ~/.windows-exe-decompiler-mcp-server/
+  ~/.rikune/
 
 # 恢复数据
 tar -xzf mcp-data-backup.tar.gz \
@@ -484,12 +484,12 @@ tar -xzf mcp-data-backup.tar.gz \
 ```bash
 # 清理缓存（安全）
 docker run --rm \
-  -v ~/.windows-exe-decompiler-mcp-server/cache:/app/cache \
-  windows-exe-decompiler:latest \
+  -v ~/.rikune/cache:/app/cache \
+  rikune:latest \
   rm -rf /app/cache/*
 
 # 清理 Ghidra 项目（谨慎）
-rm -rf ~/.windows-exe-decompiler-mcp-server/ghidra-projects/*
+rm -rf ~/.rikune/ghidra-projects/*
 ```
 
 ## 安全配置
@@ -532,13 +532,13 @@ rm -rf ~/.windows-exe-decompiler-mcp-server/ghidra-projects/*
 # 安全模拟模式（推荐）
 docker run --rm \
   --network=none \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   node dist/index.js  # 使用 sandbox.execute mode=safe_simulation
 
 # 实时分析模式（危险，需显式启用）
 docker run --rm \
   --network=host \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   node dist/index.js  # 使用 sandbox.execute mode=live_local
 ```
 
@@ -551,10 +551,10 @@ docker run --rm \
 docker info
 
 # 查看容器日志
-docker run --rm windows-exe-decompiler:latest node --version
+docker run --rm rikune:latest node --version
 
 # 检查镜像完整性
-docker images windows-exe-decompiler
+docker images rikune
 ```
 
 ### Ghidra 分析失败
@@ -562,16 +562,16 @@ docker images windows-exe-decompiler
 ```bash
 # 验证 Ghidra 安装
 docker run --rm \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   /opt/ghidra/support/analyzeHeadless -help
 
 # 检查 Java 版本和 JDK 工具链
 docker run --rm \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   bash -lc "java -version && javac -version"
 
 # 查看 Ghidra 日志
-cat ~/.windows-exe-decompiler-mcp-server/ghidra-logs/*.log
+cat ~/.rikune/ghidra-logs/*.log
 ```
 
 ### 权限问题
@@ -579,11 +579,11 @@ cat ~/.windows-exe-decompiler-mcp-server/ghidra-logs/*.log
 ```bash
 # 修复权限
 sudo chown -R $(whoami):$(whoami) \
-  ~/.windows-exe-decompiler-mcp-server/
+  ~/.rikune/
 
 # 或重新创建目录
-rm -rf ~/.windows-exe-decompiler-mcp-server/
-mkdir -p ~/.windows-exe-decompiler-mcp-server/{workspaces,data,cache,ghidra-projects,ghidra-logs}
+rm -rf ~/.rikune/
+mkdir -p ~/.rikune/{workspaces,data,cache,ghidra-projects,ghidra-logs}
 ```
 
 ### 内存不足
@@ -606,13 +606,13 @@ docker run --rm \
 # 测试 stdio 通信
 echo '{"jsonrpc":"2.0","method":"initialize","params":{}}' | \
   docker run -i --rm \
-  windows-exe-decompiler:latest \
+  rikune:latest \
   node dist/index.js
 
 # 检查 MCP Server 日志
 docker run --rm \
-  -v ~/.windows-exe-decompiler-mcp-server/logs:/app/logs \
-  windows-exe-decompiler:latest \
+  -v ~/.rikune/logs:/app/logs \
+  rikune:latest \
   tail -f /app/logs/*.log
 ```
 
@@ -635,7 +635,7 @@ FROM python:3.11-slim AS runtime
 
 ```bash
 # 构建轻量版
-docker build -f Dockerfile.slim -t windows-exe-decompiler:slim .
+docker build -f Dockerfile.slim -t rikune:slim .
 ```
 
 ### CI/CD 集成
@@ -645,7 +645,7 @@ docker build -f Dockerfile.slim -t windows-exe-decompiler:slim .
 jobs:
   analyze:
     runs-on: ubuntu-latest
-    container: windows-exe-decompiler:latest
+    container: rikune:latest
     steps:
       - uses: actions/checkout@v4
       - name: Analyze sample
@@ -663,7 +663,7 @@ for sample in samples/*.exe; do
   docker run --rm -i \
     -v $(pwd)/samples:/samples:ro \
     -v $(pwd)/results:/app/reports \
-    windows-exe-decompiler:latest \
+    rikune:latest \
     node dist/index.js < request.json > results/$(basename $sample).json
 done
 ```
@@ -673,7 +673,7 @@ done
 ```bash
 # 使用 Docker BuildKit 加速构建
 export DOCKER_BUILDKIT=1
-docker build -t windows-exe-decompiler:latest .
+docker build -t rikune:latest .
 
 # 使用 registry 镜像加速拉取
 # /etc/docker/daemon.json

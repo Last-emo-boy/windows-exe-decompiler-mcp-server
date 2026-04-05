@@ -1,6 +1,6 @@
 # Ghidra Headless Setup Guide
 
-This guide explains how to install and configure Ghidra Headless for use with the Windows EXE Decompiler MCP Server.
+This guide explains how to install and configure Ghidra Headless for use with the Rikune.
 
 ## Prerequisites
 

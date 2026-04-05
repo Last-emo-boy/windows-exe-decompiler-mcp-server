@@ -1,7 +1,7 @@
 #!/bin/bash
 # Setup script for development environment
 
-echo "Setting up Windows EXE Decompiler MCP Server..."
+echo "Setting up Rikune..."
 
 # Install Node.js dependencies
 echo "Installing Node.js dependencies..."

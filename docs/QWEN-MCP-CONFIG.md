@@ -3,7 +3,7 @@
 This guide documents the recommended single-container deployment:
 
 1. Start the daemon once with `docker compose up -d mcp-server`
-2. Connect the MCP client with `docker exec -i windows-exe-decompiler-mcp node dist/index.js`
+2. Connect the MCP client with `docker exec -i rikune node dist/index.js`
 
 This model keeps a single named container and shared persistent volumes. Because the client-scoped MCP worker runs inside the same container, keep the compose memory limit at `8G` or above for heavy analysis.
 
@@ -14,12 +14,12 @@ This model keeps a single named container and shared persistent volumes. Because
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "docker",
       "args": [
         "exec",
         "-i",
-        "windows-exe-decompiler-mcp",
+        "rikune",
         "node",
         "dist/index.js"
       ],
@@ -38,7 +38,7 @@ This model keeps a single named container and shared persistent volumes. Because
 }
 ```
 
-This matches the checked-in example in [settings.json](/D:/Playground/windows-exe-decompiler-mcp-server/settings.json).
+This matches the checked-in example in [settings.json](/D:/Playground/rikune/settings.json).
 
 ## Why `docker exec` is preferred here
 
@@ -50,7 +50,7 @@ docker compose daemon
   └─ long-lived container state
 
 Qwen MCP connection
-  └─ docker exec -i windows-exe-decompiler-mcp node dist/index.js
+  └─ docker exec -i rikune node dist/index.js
 ```
 
 Benefits:
@@ -89,7 +89,7 @@ Check:
 
 ```bash
 docker compose ps
-docker exec -i windows-exe-decompiler-mcp node dist/index.js
+docker exec -i rikune node dist/index.js
 ```
 
 The `docker exec` command should stay attached to stdio instead of exiting immediately.

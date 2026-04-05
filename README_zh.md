@@ -1,4 +1,4 @@
-# Windows EXE Decompiler MCP Server
+# Rikune
 
 英文版：[`README.md`](./README.md)
 
@@ -564,7 +564,7 @@ npm start
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "node",
       "args": ["/absolute/path/to/repo/dist/index.js"],
       "cwd": "/absolute/path/to/repo",
@@ -593,17 +593,17 @@ npm start
 
 默认情况下，运行时状态会写到用户目录和稳定系统目录，而不是跟随当前工作目录漂移：
 
-- Windows workspace root: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
-- SQLite database: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/data/database.db`
-- File cache: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/cache`
-- Audit log: `%USERPROFILE%/.windows-exe-decompiler-mcp-server/audit.log`
-- Ghidra project root: `%ProgramData%/.windows-exe-decompiler-mcp-server/ghidra-projects`
-- Ghidra log root: `%ProgramData%/.windows-exe-decompiler-mcp-server/ghidra-logs`
+- Windows workspace root: `%USERPROFILE%/.rikune/workspaces`
+- SQLite database: `%USERPROFILE%/.rikune/data/database.db`
+- File cache: `%USERPROFILE%/.rikune/cache`
+- Audit log: `%USERPROFILE%/.rikune/audit.log`
+- Ghidra project root: `%ProgramData%/.rikune/ghidra-projects`
+- Ghidra log root: `%ProgramData%/.rikune/ghidra-logs`
 - Ghidra 内置脚本目录：自动从安装包根目录解析
 
 可以通过环境变量或用户配置文件覆盖：
 
-- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/config.json`
+- `%USERPROFILE%/.rikune/config.json`
 - `WORKSPACE_ROOT`
 - `DB_PATH`
 - `CACHE_ROOT`
@@ -702,9 +702,9 @@ docker compose up -d mcp-server
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "npx",
-      "args": ["-y", "windows-exe-decompiler-mcp-server", "docker-stdio"],
+      "args": ["-y", "rikune", "docker-stdio"],
       "env": {
         "GHIDRA_PATH": "C:/path/to/ghidra",
         "GHIDRA_INSTALL_DIR": "C:/path/to/ghidra"

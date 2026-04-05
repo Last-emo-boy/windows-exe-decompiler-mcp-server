@@ -292,7 +292,7 @@ describe('report.summarize runtime evidence integration', () => {
       finished_at: new Date().toISOString(),
       output_json: JSON.stringify({
         function_count: 12,
-        project_path: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects/runtime/project_demo',
+        project_path: 'C:/ProgramData/.rikune/ghidra-projects/runtime/project_demo',
         project_key: 'project_demo',
         readiness: {
           function_index: { available: true, status: 'ready' },
@@ -305,10 +305,10 @@ describe('report.summarize runtime evidence integration', () => {
           warnings: [],
         },
         ghidra_execution: {
-          project_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects',
-          log_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs',
-          command_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/runtime_cmd.log'],
-          runtime_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/runtime_run.log'],
+          project_root: 'C:/ProgramData/.rikune/ghidra-projects',
+          log_root: 'C:/ProgramData/.rikune/ghidra-logs',
+          command_log_paths: ['C:/ProgramData/.rikune/ghidra-logs/runtime_cmd.log'],
+          runtime_log_paths: ['C:/ProgramData/.rikune/ghidra-logs/runtime_run.log'],
           progress_stages: [
             { progress: 10, stage: 'sample_loaded', detail: 'Sample metadata loaded', recorded_at: new Date().toISOString() },
             { progress: 100, stage: 'completed', detail: 'done', recorded_at: new Date().toISOString() },

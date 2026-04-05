@@ -1,4 +1,4 @@
-# Windows EXE Decompiler MCP Server - Docker Start Script
+# Rikune - Docker Start Script
 
 param(
     [Parameter(HelpMessage="Data root directory")]
@@ -39,7 +39,7 @@ function Invoke-ComposeCommand {
 }
 
 if (-not $DataRoot) {
-    $defaultDataRoot = "$env:USERPROFILE\.windows-exe-decompiler-mcp-server"
+    $defaultDataRoot = "$env:USERPROFILE\.rikune"
     $installInfoFile = Join-Path $defaultDataRoot "install-info.json"
 
     if (Test-Path $installInfoFile) {
@@ -114,7 +114,7 @@ switch ($Mode) {
             -e "XDG_CONFIG_HOME=/app/logs/.config" `
             -e "XDG_CACHE_HOME=/app/cache/xdg" `
             -e "API_STORAGE_ROOT=/app/storage" `
-            windows-exe-decompiler:latest
+            rikune:latest
     }
 
     "compose" {
@@ -129,7 +129,7 @@ switch ($Mode) {
             }
 
             $composeEnvFile = Join-Path $scriptPath ".docker-runtime.env"
-            "WINDOWS_EXE_DECOMPILER_DATA_ROOT=$($DataRoot -replace '\\', '/')" | Set-Content $composeEnvFile -Encoding UTF8
+            "RIKUNE_DATA_ROOT=$($DataRoot -replace '\\', '/')" | Set-Content $composeEnvFile -Encoding UTF8
             Invoke-ComposeCommand @("--env-file", $composeEnvFile, "up", "-d", "mcp-server")
 
             $composeCommand = Resolve-ComposeCommand
@@ -138,7 +138,7 @@ switch ($Mode) {
             Write-Host "  Logs:      $composeCommand --env-file $composeEnvFile logs -f mcp-server"
             Write-Host "  Stop:      $composeCommand --env-file $composeEnvFile down"
             Write-Host "  Shell:     $composeCommand --env-file $composeEnvFile exec mcp-server bash"
-            Write-Host "  MCP exec:  docker exec -i windows-exe-decompiler-mcp node dist/index.js"
+            Write-Host "  MCP exec:  docker exec -i rikune node dist/index.js"
             Write-Host "  Note:      single-container mode keeps one compose container but will launch a client-scoped MCP Node process via docker exec." -ForegroundColor Yellow
             Write-Host "             Keep the compose container memory at 8GB and avoid overlapping heavy client sessions." -ForegroundColor Yellow
         } finally {
@@ -161,7 +161,7 @@ switch ($Mode) {
             -v "${logsPath}:/app/logs" `
             -v "${storagePath}:/app/storage" `
             -v "${qilingRootfsPath}:/opt/qiling-rootfs:ro" `
-            windows-exe-decompiler:latest `
+            rikune:latest `
             bash
     }
 }

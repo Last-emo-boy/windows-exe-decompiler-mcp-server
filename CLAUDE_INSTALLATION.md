@@ -31,7 +31,7 @@ and makes it available in all Claude Code projects on this machine.
 
 The script also writes a stable `WORKSPACE_ROOT` by default:
 
-- `%USERPROFILE%/.windows-exe-decompiler-mcp-server/workspaces`
+- `%USERPROFILE%/.rikune/workspaces`
 
 It also pins:
 
@@ -98,12 +98,12 @@ Claude Code recognizes the standard MCP config shape:
 ```json
 {
   "mcpServers": {
-    "windows-exe-decompiler": {
+    "rikune": {
       "command": "node",
       "args": ["E:/Playground/Reverse/dist/index.js"],
       "cwd": "E:/Playground/Reverse",
       "env": {
-        "WORKSPACE_ROOT": "C:/Users/<you>/.windows-exe-decompiler-mcp-server/workspaces",
+        "WORKSPACE_ROOT": "C:/Users/<you>/.rikune/workspaces",
         "GHIDRA_PATH": "C:/path/to/ghidra",
         "GHIDRA_INSTALL_DIR": "C:/path/to/ghidra"
       }
@@ -123,7 +123,7 @@ That same server object works in:
 
 ```powershell
 claude mcp list
-claude mcp get windows-exe-decompiler
+claude mcp get rikune
 ```
 
 If you used `project` scope, `claude mcp get` should report `Scope: Project

@@ -872,7 +872,7 @@ describe('workflow.reconstruct tool', () => {
       finished_at: '2026-03-11T00:01:00.000Z',
       output_json: JSON.stringify({
         function_count: 8,
-        project_path: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects/provenance/project_demo',
+        project_path: 'C:/ProgramData/.rikune/ghidra-projects/provenance/project_demo',
         project_key: 'project_demo',
         readiness: {
           function_index: { available: true, status: 'ready' },
@@ -885,10 +885,10 @@ describe('workflow.reconstruct tool', () => {
           warnings: [],
         },
         ghidra_execution: {
-          project_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-projects',
-          log_root: 'C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs',
-          command_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/provenance_cmd.log'],
-          runtime_log_paths: ['C:/ProgramData/.windows-exe-decompiler-mcp-server/ghidra-logs/provenance_run.log'],
+          project_root: 'C:/ProgramData/.rikune/ghidra-projects',
+          log_root: 'C:/ProgramData/.rikune/ghidra-logs',
+          command_log_paths: ['C:/ProgramData/.rikune/ghidra-logs/provenance_cmd.log'],
+          runtime_log_paths: ['C:/ProgramData/.rikune/ghidra-logs/provenance_run.log'],
           progress_stages: [
             { progress: 30, stage: 'project_created', detail: 'project_demo', recorded_at: '2026-03-11T00:00:10.000Z' },
             { progress: 100, stage: 'completed', detail: 'done', recorded_at: '2026-03-11T00:01:00.000Z' },

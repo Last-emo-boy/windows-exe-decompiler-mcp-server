@@ -1,4 +1,4 @@
-﻿# Configure Qwen MCP Client
+# Configure Qwen MCP Client
 # Usage: .\scripts\configure-qwen-mcp.ps1
 # Config location: ~/.qwen/settings.json (user-level) or ./.qwen/settings.json (project-level)
 
@@ -9,7 +9,7 @@ $QwenUserConfigDir = "$env:USERPROFILE\.qwen"
 $QwenUserConfigFile = Join-Path $QwenUserConfigDir "settings.json"
 $QwenProjectConfigDir = ".qwen"
 $QwenProjectConfigFile = Join-Path $QwenProjectConfigDir "settings.json"
-$ContainerName = "windows-exe-decompiler-mcp"
+$ContainerName = "rikune"
 
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  Qwen MCP Configuration" -ForegroundColor Cyan
@@ -27,7 +27,7 @@ if (-not $container) {
 # Create MCP config
 $config = @{
     mcpServers = @{
-        "windows-exe-decompiler" = @{
+        "rikune" = @{
             command = "docker"
             args = @(
                 "exec",
@@ -87,4 +87,4 @@ Write-Host "`nNext steps:" -ForegroundColor Cyan
 Write-Host "  1. Restart Qwen Code CLI" -ForegroundColor White
 Write-Host "  2. Run: qwen --mcp" -ForegroundColor White
 Write-Host "  3. Keep 'docker compose up -d mcp-server' running for the single-container MCP setup" -ForegroundColor White
-Write-Host "  4. You should see 'windows-exe-decompiler' tools available" -ForegroundColor White
+Write-Host "  4. You should see 'rikune' tools available" -ForegroundColor White

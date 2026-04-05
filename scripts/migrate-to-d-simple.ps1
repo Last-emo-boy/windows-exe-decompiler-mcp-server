@@ -62,11 +62,11 @@ Write-Host "==================================================" -ForegroundColor
 
 Write-Host "`n閺夆晙鑳朵簺濞达絽绉堕悿?" -ForegroundColor Cyan
 Write-Host "  Docker WSL2 闁轰胶澧楀畵渚€鏁嶅▎?\Docker\wsl\data" -ForegroundColor White
-Write-Host "  閹煎瓨姊婚弫銈夊极閻楀牆绁﹂柣鈺婂枛缂嶅秹鏁嶅▎?\Docker\decompile-mcp-server" -ForegroundColor White
+Write-Host "  閹煎瓨姊婚弫銈夊极閻楀牆绁﹂柣鈺婂枛缂嶅秹鏁嶅▎?\Docker\rikune" -ForegroundColor White
 
 Write-Host "`n濞戞挸顑勭粩鏉戭潰閵夛附鎯欏ù?" -ForegroundColor Cyan
 Write-Host "  1. 闁告凹鍨版慨?Docker Desktop" -ForegroundColor White
-Write-Host "  2. 閺夆晜鍔橀、鎴︽晬?\install-docker.ps1 -DataRoot 'D:\Docker\decompile-mcp-server'" -ForegroundColor White
+Write-Host "  2. 閺夆晜鍔橀、鎴︽晬?\install-docker.ps1 -DataRoot 'D:\Docker\rikune'" -ForegroundColor White
 
 Write-Host "`n闁圭顦幑銏ゅ箛韫囨稒鏆涢柛姘煎灠婵?Docker Desktop..." -ForegroundColor Yellow
 $null = $Host.UI.RawUI.ReadKey("NoEcho,IncludeKeyDown")

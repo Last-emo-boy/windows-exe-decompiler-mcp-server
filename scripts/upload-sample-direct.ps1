@@ -1,4 +1,4 @@
-﻿# Upload Sample Directly to Docker Container
+# Upload Sample Directly to Docker Container
 # Usage: .\scripts\upload-sample-direct.ps1 -Path "C:\path\to\sample.exe"
 # This script uploads files directly to the running container without manual copying
 
@@ -14,7 +14,7 @@ param(
 $ErrorActionPreference = "Stop"
 
 # Configuration
-$ContainerName = "windows-exe-decompiler-mcp"
+$ContainerName = "rikune"
 $SamplesDir = "/samples"
 
 # Check if file exists
