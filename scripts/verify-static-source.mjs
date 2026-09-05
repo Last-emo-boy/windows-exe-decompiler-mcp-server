@@ -30,16 +30,18 @@ export function verifyStaticSource(env = process.env, run = execute) {
   }
   const githubMain = run('gh', ['api', 'repos/Last-emo-boy/rikune/git/ref/heads/main',
                                '--jq', '.object.sha'], env)
-  const loomEnv = { ...gitEnv }
+  // An authenticated clone probe must not follow a redirect to another origin.
+  const loomEnv = { ...gitEnv, GIT_CONFIG_COUNT: '1',
+    GIT_CONFIG_KEY_0: 'http.followRedirects', GIT_CONFIG_VALUE_0: 'false' }
   if (env.LOOM_READ_TOKEN) {
     const username = env.LOOM_READ_USERNAME ?? 'w33d'
     if (!/^[A-Za-z0-9_-]{1,128}$/.test(username) || /[\r\n\0]/.test(env.LOOM_READ_TOKEN)) {
       throw new Error('invalid Loom read credential configuration')
     }
     // Keep the secret out of URLs, argv, and the public source evidence.
-    loomEnv.GIT_CONFIG_COUNT = '1'
-    loomEnv.GIT_CONFIG_KEY_0 = 'http.https://git.w33d.xyz/.extraheader'
-    loomEnv.GIT_CONFIG_VALUE_0 = 'Authorization: Basic ' +
+    loomEnv.GIT_CONFIG_COUNT = '2'
+    loomEnv.GIT_CONFIG_KEY_1 = 'http.https://git.w33d.xyz/.extraheader'
+    loomEnv.GIT_CONFIG_VALUE_1 = 'Authorization: Basic ' +
       Buffer.from(username + ':' + env.LOOM_READ_TOKEN).toString('base64')
   }
   const advertised = run('git', ['ls-remote', loom.toString(), 'refs/heads/main'], loomEnv)
