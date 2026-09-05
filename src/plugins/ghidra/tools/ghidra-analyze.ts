@@ -8,6 +8,7 @@
 
 import { z } from 'zod'
 import type { ToolDefinition, ToolResult, PluginToolDeps } from '../../sdk.js'
+import type { DatabaseManager } from '../../../database.js'
 
 /**
  * Input schema for ghidra.analyze tool
@@ -46,6 +47,14 @@ export const ghidraAnalyzeInputSchema = z.object({
 
 export type GhidraAnalyzeInput = z.infer<typeof ghidraAnalyzeInputSchema>
 
+const GhidraArtifactRefSchema = z.object({
+  id: z.string(),
+  type: z.enum(['ghidra_functions', 'function_recovery']),
+  path: z.string(),
+  sha256: z.string().regex(/^[a-f0-9]{64}$/),
+  mime: z.string().optional(),
+})
+
 const GhidraAnalyzeDataSchema = z.object({
   analysis_id: z.string(),
   job_id: z.string().optional(),
@@ -53,6 +62,7 @@ const GhidraAnalyzeDataSchema = z.object({
   function_count: z.number().int().nonnegative(),
   project_path: z.string(),
   status: z.string(),
+  artifact_refs: z.array(GhidraArtifactRefSchema).optional(),
   polling_guidance: z.any().nullable().optional(),
   capabilities: z
     .object({
@@ -88,6 +98,7 @@ export interface GhidraAnalyzeOutput {
     function_count: number
     project_path: string
     status: string
+    artifact_refs?: z.infer<typeof GhidraArtifactRefSchema>[]
     polling_guidance?: unknown | null
     capabilities?: {
       function_index: unknown
@@ -171,6 +182,24 @@ export function createGhidraAnalyzeHandler(deps: PluginToolDeps) {
     buildPollingGuidance,
   } = deps
 
+  const analysisArtifacts = (sampleId: string, projectKey: unknown) => {
+    if (typeof projectKey !== 'string' || !projectKey) return []
+    const paths = new Set([
+      `ghidra/functions_${projectKey}.json`,
+      `ghidra/recovered_functions_${projectKey}.json`,
+    ])
+    const seen = new Set<string>()
+    return (database as DatabaseManager).findArtifacts(sampleId).flatMap((artifact) => {
+      if (!paths.has(artifact.path) || seen.has(artifact.path) ||
+          !['ghidra_functions', 'function_recovery'].includes(artifact.type)) return []
+      seen.add(artifact.path)
+      return [GhidraArtifactRefSchema.parse({
+        id: artifact.id, type: artifact.type, path: artifact.path,
+        sha256: artifact.sha256, mime: artifact.mime || undefined,
+      })]
+    })
+  }
+
   const buildJsonResult = (payload: GhidraAnalyzeOutput, isError = false): ToolResult => ({
     content: [
       {
@@ -238,6 +267,7 @@ export function createGhidraAnalyzeHandler(deps: PluginToolDeps) {
               typeof metadata.function_count === 'number' ? metadata.function_count : 0,
             project_path: typeof metadata.project_path === 'string' ? metadata.project_path : '',
             status: 'reused',
+            artifact_refs: analysisArtifacts(input.sample_id, metadata.project_key),
             capabilities: getGhidraReadiness(reusableAnalysis),
             result_mode: 'reused',
             recommended_next_tools: [
@@ -328,6 +358,9 @@ export function createGhidraAnalyzeHandler(deps: PluginToolDeps) {
 
       // Otherwise, execute synchronously
       const result = await decompilerWorker.analyze(input.sample_id, ghidraOptions)
+      const completedMetadata = parseGhidraAnalysisMetadata(
+        database.findAnalysis(result.analysisId)?.output_json
+      )
 
       logger.info(
         {
@@ -345,6 +378,7 @@ export function createGhidraAnalyzeHandler(deps: PluginToolDeps) {
           function_count: result.functionCount,
           project_path: result.projectPath,
           status: result.status === 'partial_success' ? 'partial_success' : 'completed',
+          artifact_refs: analysisArtifacts(input.sample_id, completedMetadata?.project_key),
           capabilities: result.readiness,
           result_mode: result.status === 'partial_success' ? 'partial_success' : 'completed',
           recommended_next_tools: [

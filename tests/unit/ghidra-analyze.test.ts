@@ -4,7 +4,7 @@ import fs from 'fs'
 import path from 'path'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
-import { createGhidraAnalyzeHandler } from '../../src/plugins/ghidra/tools/ghidra-analyze.js'
+import { createGhidraAnalyzeHandler, ghidraAnalyzeOutputSchema } from '../../src/plugins/ghidra/tools/ghidra-analyze.js'
 import { DecompilerWorker, getGhidraDiagnostics, normalizeGhidraError } from '../../src/worker/decompiler-worker.js'
 
 // Helper deps factory for ghidra analyze handler
@@ -73,6 +73,13 @@ describe('ghidra.analyze tool', () => {
   test('should reuse completed analysis instead of queueing a new job', async () => {
     const sampleId = 'sha256:' + '1'.repeat(64)
     insertSample(sampleId, '1')
+    for (const projectKey of ['reuse_key', 'unrelated_project']) {
+      database.insertArtifact({
+        id: `artifact-${projectKey}`, sample_id: sampleId, type: 'ghidra_functions',
+        path: `ghidra/functions_${projectKey}.json`, sha256: 'a'.repeat(64),
+        mime: 'application/json', created_at: new Date().toISOString(),
+      })
+    }
 
     database.insertAnalysis({
       id: 'analysis-reuse-1',
@@ -117,8 +124,47 @@ describe('ghidra.analyze tool', () => {
     expect(payload.data.result_mode).toBe('reused')
     expect(payload.data.recommended_next_tools).toContain('workflow.reconstruct')
     expect(payload.data.function_count).toBe(42)
+    expect(payload.data.artifact_refs).toEqual([{
+      id: 'artifact-reuse_key', type: 'ghidra_functions',
+      path: 'ghidra/functions_reuse_key.json', sha256: 'a'.repeat(64), mime: 'application/json',
+    }])
+    expect(ghidraAnalyzeOutputSchema.parse(payload).data?.artifact_refs).toEqual(payload.data.artifact_refs)
     expect(enqueue).not.toHaveBeenCalled()
     expect((result as any).structuredContent.data.result_mode).toBe('reused')
+  })
+
+  test.each(['done', 'partial_success'] as const)('exposes persisted artifact selectors after %s analysis', async (status) => {
+    const sampleId = 'sha256:' + '4'.repeat(64)
+    insertSample(sampleId, '4')
+    const type = status === 'done' ? 'ghidra_functions' : 'function_recovery'
+    database.insertAnalysis({
+      id: 'analysis-artifacts', sample_id: sampleId, stage: 'ghidra', backend: 'ghidra',
+      status, started_at: new Date().toISOString(), finished_at: new Date().toISOString(),
+      output_json: JSON.stringify({ project_key: 'selected' }), metrics_json: null,
+    })
+    database.insertArtifact({
+      id: 'artifact-selected', sample_id: sampleId, type,
+      path: 'ghidra/functions_selected.json', sha256: 'b'.repeat(64),
+      mime: 'application/json', created_at: new Date().toISOString(),
+    })
+    const analyzeSpy = jest.spyOn(DecompilerWorker.prototype, 'analyze').mockResolvedValue({
+      analysisId: 'analysis-artifacts', backend: 'ghidra', functionCount: 2,
+      projectPath: 'ghidra/selected', status,
+    })
+    try {
+      const handler = createGhidraAnalyzeHandler({ workspaceManager, database, ...makeGhidraDeps({
+        parseGhidraAnalysisMetadata: (value: string) => JSON.parse(value || '{}'),
+      }) } as any)
+      const result = await handler({ sample_id: sampleId })
+      const payload = ghidraAnalyzeOutputSchema.parse(result.structuredContent)
+      expect(payload.ok).toBe(true)
+      expect(payload.data?.artifact_refs).toEqual([{
+        id: 'artifact-selected', type, path: 'ghidra/functions_selected.json',
+        sha256: 'b'.repeat(64), mime: 'application/json',
+      }])
+    } finally {
+      analyzeSpy.mockRestore()
+    }
   })
 
   test('should return matching job_id when queueing a fresh analysis', async () => {

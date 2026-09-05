@@ -2181,11 +2181,12 @@ export class DecompilerWorker {
           functions: recoveredFunctions?.functions || [],
           recovery: recoveredFunctions?.recoveryMetadata || {},
         }
-        fs.writeFileSync(artifactFullPath, JSON.stringify(artifactPayload, null, 2))
+        const serializedArtifact = JSON.stringify(artifactPayload, null, 2)
+        fs.writeFileSync(artifactFullPath, serializedArtifact, 'utf8')
 
         // Compute artifact SHA256
         const artifactSha256 = createHash('sha256')
-          .update(JSON.stringify(artifactPayload))
+          .update(serializedArtifact, 'utf8')
           .digest('hex')
 
         // Insert artifact record

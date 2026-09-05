@@ -8,6 +8,7 @@ import { DATABASE_FIXTURE_CAPABILITY } from "../../src/database.js"
 import { describe, test, expect, beforeEach, afterEach, jest } from '@jest/globals';
 import fs from 'fs';
 import path from 'path';
+import { createHash } from 'crypto';
 import { EventEmitter } from 'events';
 import type { ChildProcess } from 'child_process';
 import { fileURLToPath } from 'url';
@@ -302,11 +303,6 @@ describe('DecompilerWorker', () => {
     });
 
     test('should create analysis record with running status', async () => {
-      // Skip if Ghidra is not configured
-      if (!ghidraConfig.isValid) {
-        return;
-      }
-
       // Create a test sample
       const sha256 = 'c'.repeat(64);
       const sampleId = `sha256:${sha256}`;
@@ -330,8 +326,16 @@ describe('DecompilerWorker', () => {
       const originalExecuteMainAnalysis = workerInternals.executeMainAnalysis;
       const originalTryExtractFunctionsWithFallback = workerInternals.tryExtractFunctionsWithFallback;
       const originalProbeCapability = workerInternals.probeCapability;
+      const originalConfig = { ...ghidraConfig };
 
       try {
+        // All Ghidra process boundaries below are mocked. Artifact persistence
+        // must be tested even on hosts without a Ghidra installation.
+        ghidraConfig.isValid = true;
+        ghidraConfig.projectRoot = path.join(testWorkspaceRoot, 'ghidra-projects');
+        ghidraConfig.logRoot = path.join(testWorkspaceRoot, 'ghidra-logs');
+        fs.mkdirSync(ghidraConfig.projectRoot, { recursive: true });
+        fs.mkdirSync(ghidraConfig.logRoot, { recursive: true });
         workerInternals.executeMainAnalysis = jest.fn(async () => ({
           stdout: '',
           stderr: '',
@@ -414,6 +418,11 @@ describe('DecompilerWorker', () => {
         expect(analysis?.status).toBe('done');
         expect(analysis?.sample_id).toBe(sampleId);
 
+        const functionArtifact = database.findArtifacts(sampleId).find((artifact) => artifact.type === 'ghidra_functions');
+        expect(functionArtifact).toBeDefined();
+        expect(functionArtifact!.sha256).toBe(createHash('sha256')
+          .update(fs.readFileSync(path.join(workspace.root, functionArtifact!.path))).digest('hex'));
+
         // Verify functions were stored
         const functions = database.findFunctions(sampleId);
         expect(functions).toHaveLength(2);
@@ -422,14 +431,8 @@ describe('DecompilerWorker', () => {
         expect(functions[1].address).toBe('0x00401100');
         expect(functions[1].name).toBe('helper');
 
-      } catch (error) {
-        // If test fails, check if it's due to Ghidra not being configured
-        if (error instanceof Error && error.message.includes('Ghidra')) {
-          console.log('Skipping test: Ghidra not configured');
-          return;
-        }
-        throw error;
       } finally {
+        Object.assign(ghidraConfig, originalConfig);
         workerInternals.executeMainAnalysis = originalExecuteMainAnalysis;
         workerInternals.tryExtractFunctionsWithFallback = originalTryExtractFunctionsWithFallback;
         workerInternals.probeCapability = originalProbeCapability;
@@ -852,6 +855,9 @@ describe('DecompilerWorker', () => {
 
           const artifacts = database.findArtifacts(sampleId)
           expect(artifacts.some((artifact) => artifact.type === 'function_recovery')).toBe(true)
+          const recoveryArtifact = artifacts.find((artifact) => artifact.type === 'function_recovery')!
+          expect(recoveryArtifact.sha256).toBe(createHash('sha256')
+            .update(fs.readFileSync(path.join(workspace.root, recoveryArtifact.path))).digest('hex'))
         } finally {
           workerInternals.executeMainAnalysis = originalExecuteMainAnalysis
           workerInternals.tryExtractFunctionsWithFallback = originalTryExtractFunctionsWithFallback
