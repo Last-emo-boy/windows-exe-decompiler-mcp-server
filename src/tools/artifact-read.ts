@@ -120,6 +120,7 @@ export const ArtifactReadOutputSchema = z.object({
       tool_version: z.string(),
       artifact: z.object({
         id: z.string(),
+        sample_id: z.string(),
         type: z.string(),
         path: z.string(),
         sha256: z.string(),

@@ -6,7 +6,7 @@ import os from 'os'
 import crypto from 'crypto'
 import { WorkspaceManager } from '../../src/workspace-manager.js'
 import { DatabaseManager } from '../../src/database.js'
-import { createArtifactReadHandler } from '../../src/tools/artifact-read.js'
+import { createArtifactReadHandler, ArtifactReadOutputSchema } from '../../src/tools/artifact-read.js'
 
 describe('artifact.read tool', () => {
   let tempDir: string
@@ -61,6 +61,7 @@ describe('artifact.read tool', () => {
     expect(data.artifact.type).toBe('reconstruct_manifest')
     expect(data.content_encoding).toBe('utf8')
     expect(data.content).toContain('"module_count":2')
+    expect(ArtifactReadOutputSchema.parse(result).data?.artifact.sample_id).toBe(setup.sampleId)
   })
 
   test('should support metadata-only mode via artifact_id selector', async () => {
