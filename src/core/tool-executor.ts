@@ -381,6 +381,17 @@ export class ToolExecutor {
     const mappings = registry.getToolNameMappings()
     return content.map((item) => {
       if ('text' in item && typeof item.text === 'string') {
+        try {
+          const parsed: unknown = JSON.parse(item.text)
+          if (parsed && typeof parsed === 'object') {
+            return {
+              ...item,
+              text: JSON.stringify(rewriteToolReferencesInValue(parsed, mappings)),
+            }
+          }
+        } catch {
+          // Plain-text guidance still uses the transport tool names below.
+        }
         return {
           ...item,
           text: rewriteToolReferencesInText(item.text, mappings),

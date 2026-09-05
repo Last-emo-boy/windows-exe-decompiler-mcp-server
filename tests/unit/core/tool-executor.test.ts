@@ -5,6 +5,7 @@
 import { describe, test, expect, beforeEach, jest } from '@jest/globals'
 import { z } from 'zod'
 import pino from 'pino'
+import { createHash } from 'crypto'
 import { MCPRegistry } from '../../../src/core/mcp-registry.js'
 import { ToolExecutor } from '../../../src/core/tool-executor.js'
 import { getToolSurfaceManager } from '../../../src/core/tool-surface-manager.js'
@@ -61,6 +62,24 @@ describe('ToolExecutor', () => {
         { registry, logger }
       )
     ).rejects.toThrow(/Invalid arguments/)
+  })
+
+  test.each(['worker', 'tool'] as const)('preserves hash-bound artifact content in %s responses', async (kind) => {
+    const original = JSON.stringify({ program_name: 'sample.bin', program_path: '/tmp/sample.bin',
+      literal_tool_name: 'artifact.read', unicode: '函数' }, null, 2)
+    const sha256 = createHash('sha256').update(original).digest('hex')
+    const payload = { ok: true, data: { content: original, artifact: { id: 'artifact-one', sha256 },
+      message: 'Next use artifact.read', path: '/tmp/sample.bin' } }
+    registry.registerTool(makeToolDef('artifact.read'), async () => kind === 'worker' ? payload : {
+      content: [{ type: 'text', text: JSON.stringify(payload, null, 2) }], structuredContent: payload,
+    })
+    const result = await executor.executeTool('artifact_read', {}, { registry, logger })
+    for (const actual of [result.structuredContent, JSON.parse((result.content[0] as any).text)] as any[]) {
+      expect(actual.data.content).toBe(original)
+      expect(createHash('sha256').update(actual.data.content).digest('hex')).toBe(sha256)
+      expect(actual.data.path).toBe('/tmp/sample.bin')
+      expect(actual.data.message).toBe('Next use artifact_read')
+    }
   })
 
   test('should return error when tool not found', async () => {

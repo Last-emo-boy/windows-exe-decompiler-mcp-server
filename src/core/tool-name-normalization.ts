@@ -68,7 +68,7 @@ const REWRITABLE_FIELDS = new Set([
   'summary',
   'instructions',
   'guidance',
-  'content',
+  // `content` may contain hash-bound artifact bytes, not tool guidance.
   'output',
   'recommendation',
   'next_steps',
