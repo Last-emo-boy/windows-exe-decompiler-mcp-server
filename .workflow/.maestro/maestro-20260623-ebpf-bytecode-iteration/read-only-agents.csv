@@ -1,4 +1,0 @@
-id,topic
-"plugin-patterns","Read existing passive plugin implementations and report the minimal file set/patterns needed for a new eBPF bytecode static analysis plugin. Do not edit files."
-"ebpf-analysis","Identify a compact passive eBPF bytecode inventory schema suitable for Rikune: instruction decoding, helper/map hints, control-flow risk flags, verifier-relevant checks, and workflow handoff. Do not edit files."
-"verification","Inspect existing unit tests and workflow.search tests and report the focused tests needed to prove a new eBPF plugin is discoverable, passive, and useful. Do not edit files."

@@ -1,4 +1,0 @@
-id,agent_id,nickname,role,status,scope
-AGENT-001,019f03db-cd9c-7433-9211-81f2ed61a097,Hooke,repo-gap-scan,completed,"Audit plugin coverage, local patterns, tests, and integration points for the next frontier plugin."
-AGENT-002,019f03db-fc31-7d53-82ad-a0c9bd23bdb1,Godel,frontier-research,completed,"Evaluate GitHub/literature/industry trends and rank feasible next plugin directions."
-AGENT-003,019f03dc-243b-7681-a1ae-64a2e19fdd47,Linnaeus,hardening-integration,completed,"Audit cross-platform hardening inventory implementation, test, docs, and MCP surface risks."

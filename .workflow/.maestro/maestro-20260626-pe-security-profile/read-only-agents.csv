@@ -1,3 +1,0 @@
-id,nickname,mode,scope,status
-019effcf-b9be-7241-93d6-d8ef5365587d,Gauss,read-only,PE parser and worker coverage,completed
-019effcf-bada-7b12-a1ca-04aade85ec38,Volta,read-only,Discovery metadata docs Docker tests,completed

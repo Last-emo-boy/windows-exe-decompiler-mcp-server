@@ -1,9 +1,0 @@
-task,status,notes
-Create feature branch,completed,"Created feat/ml-model-artifact-inventory from beta."
-Research current ML model artifact risks,completed,"Used official/primary documentation and two read-only subagents."
-Implement plugin and tool,completed,"Added src/plugins/ml-model with ml.model.inventory."
-Add format routing,completed,"Updated sample finalization and SURFACE_FILE_TYPE_TAGS for ML model artifact formats."
-Add tests,completed,"Added focused unit tests plus workflow.search, plugin SDK, and plugin matrix coverage."
-Update docs and compose allowlists,completed,"Updated README, README_zh, docs/PLUGINS.md, docs/plugins.html, CHANGELOG, and compose PLUGINS."
-Verification,completed,"Focused and full relevant Jest tests passed; TypeScript and git diff --check passed."
-Commit and PR,pending,"Commit, push, PR creation, merge to beta, and deployment still pending."

@@ -1,3 +1,0 @@
-id,summary,recommendation,used_in_iteration
-0,"Ranked Docker/OCI image security profile, Apple ObjC/Swift metadata, and driver attack-surface profile as high-value gaps.","Container image profile was the top breadth recommendation.","Partially. Captured as next candidate, but BTF chosen for depth after network research."
-1,"Static profile is the minimal remote validation path: pull beta, run ./rikune.sh install --profile static --data-root /opt/rikune-data, check /health and /ready.","Use static analyzer compose, avoid deleting persistent data by default.","Yes. Will use after PR/beta merge."

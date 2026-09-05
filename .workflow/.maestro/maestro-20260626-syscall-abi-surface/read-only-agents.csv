@@ -1,4 +1,0 @@
-agent_id,nickname,scope,status
-019f0305-5aeb-7f52-ae8d-c97800d70af8,Franklin,"Capability gap scan and next-tool ranking",completed
-019f0305-7c7d-7b81-9a6c-5a5912ef4340,Schrodinger,"Implementation template and syscall ABI landing pattern",completed
-019f0305-9688-7f70-873c-ee18ae1611ed,James,"Verification docs deploy risk scan",completed

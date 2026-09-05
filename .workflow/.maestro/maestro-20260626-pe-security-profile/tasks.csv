@@ -1,9 +1,0 @@
-id,task,status,owner,artifacts,notes
-1,Create feature branch from beta,completed,codex,,feat/pe-security-profile
-2,Run read-only PE implementation subagent,completed,Gauss,.workflow/.maestro/maestro-20260626-pe-security-profile/read-only-agents-results.csv,Confirmed parser gap and static boundary
-3,Run read-only discovery metadata subagent,completed,Volta,.workflow/.maestro/maestro-20260626-pe-security-profile/read-only-agents-results.csv,Confirmed registration docs and tests
-4,Implement pe.security.profile,completed,codex,src/plugins/pe-analysis/tools/pe-security-profile.ts,Bounded built-in PE parser
-5,Register plugin and route metadata,completed,codex,src/plugins/pe-analysis/index.ts,Added capabilities evidence signals and tool registration
-6,Add tests and docs,completed,codex,tests/unit/pe-security-profile.test.ts,Added fixture parser tests and workflow recipe docs
-7,Verify targeted tests typecheck lint build,completed,codex,,All checks passed
-8,Commit push and open PR,completed,codex,https://github.com/Last-emo-boy/rikune/pull/45,PR opened against beta-minimize-tool-surface

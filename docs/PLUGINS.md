@@ -274,7 +274,7 @@ Shared artifact/evidence vocabulary for this iteration:
 Workflow-capable tools usually declare `execution: ["correlation"]`, `capabilities` containing
 `workflow-*` or graph terms, or `evidence` containing `workflow`, `correlation-graph`, or
 `provenance-graph`. When such a tool lacks `workflowRecipes`, `auditPluginQuality()` reports
-`missing-workflow-recipe` with a `suggested_task_owner` pointing at the relevant Maestro task.
+`missing-workflow-recipe` with a `suggested_task_owner` identifying the relevant capability task.
 
 ### Completed Capability Workflow Recipes
 

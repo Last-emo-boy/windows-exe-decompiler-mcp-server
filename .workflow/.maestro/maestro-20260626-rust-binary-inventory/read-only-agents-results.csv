@@ -1,4 +1,0 @@
-id,status,summary
-019f0427-4904-7f71-85b9-4244dc664d60,completed,"Use definePlugin/defineTool, keep old static-triage rust_binary.analyze untouched, add rust.binary.inventory as new static passive inventory."
-019f0427-5cf1-75f2-b6ce-39355d4d7347,completed,"Add PLUGIN_ASPECT_FORMATS/SURFACE_FILE_TYPE_TAGS, workflow.search hidden activation tests, plugin-format matrix metadata, docs and generated catalog."
-019f0427-80ea-74d3-a65a-4ac6b8c36e72,completed,"Use bounded fromBuffer parser, candidate-only Rust v0 and legacy symbol detection, Cargo/rustc/target/panic markers, strict no demangler/no execution policy."

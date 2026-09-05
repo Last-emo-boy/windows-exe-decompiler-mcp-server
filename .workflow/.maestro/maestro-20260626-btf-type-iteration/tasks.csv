@@ -1,6 +1,0 @@
-id,task,status,artifacts,notes
-0,Recover state and choose next capability,completed,.workflow/.maestro/maestro-20260626-btf-type-iteration/context.md,"Selected BTF/CO-RE for eBPF depth after subagent and web research."
-1,Implement passive BTF plugin,completed,src/plugins/btf,"Hand-written bounded parser for raw BTF and ELF .BTF/.BTF.ext."
-2,Verify local scope,completed,tests/unit/btf-type-inventory.test.ts,"Targeted Jest passed; tsc passed; git diff --check passed; build and lint passed."
-3,Commit and open PR,in_progress,gh,"Push feature branch and create PR to beta-minimize-tool-surface."
-4,Merge to beta if possible and deploy remote,pending,ssh root@159.195.136.226,"Pull beta on server and validate static Docker container health."

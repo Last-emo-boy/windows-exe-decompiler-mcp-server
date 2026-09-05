@@ -1,5 +1,0 @@
-id,task,status,artifacts,notes
-0,Run read-only subagents,completed,.workflow/.maestro/maestro-20260623-ebpf-bytecode-iteration/read-only-agents-results.csv,"Three subagents completed: plugin patterns, eBPF schema, verification."
-1,Implement passive eBPF bytecode plugin,completed,src/plugins/ebpf-bytecode,"Includes raw instruction decode, ELF EM_BPF sections, helper/map/control-flow/verifier-precheck evidence."
-2,Verify targeted scope,completed,tests/unit/ebpf-bytecode-inventory.test.ts,"Targeted Jest passed; plugin-format eBPF subset passed; git diff --check passed; tsc has no eBPF diagnostics but repository baseline still has 40 existing TypeScript diagnostic lines."
-3,Commit and open PR,completed,https://github.com/Last-emo-boy/rikune/pull/40,"Committed scoped files with Chinese commit message and opened PR #40 via gh."

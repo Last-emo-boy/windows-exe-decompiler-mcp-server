@@ -1,3 +1,0 @@
-id,role,status,artifact,notes
-0,capability-gap-explorer,completed,subagent-notification,"Recommended Docker/OCI container image security profile; BTF selected instead for current eBPF/LLVM depth."
-1,deployment-path-explorer,completed,subagent-notification,"Produced static Docker remote validation path for root@159.195.136.226."

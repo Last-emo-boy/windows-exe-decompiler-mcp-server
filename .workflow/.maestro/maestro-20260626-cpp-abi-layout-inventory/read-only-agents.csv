@@ -1,4 +1,0 @@
-agent_id,nickname,scope,status
-019f022f-533c-7b81-af1a-b4005483df2b,Zeno,cpp-abi-layout coverage and MVP design,completed
-019f022f-7541-7c90-97ea-eed3dd6c8b3c,Ptolemy,kernel-driver-surface coverage and MVP design,completed
-019f022f-9248-7260-b203-e0ce51d5d736,Beauvoir,compiler-provenance coverage and MVP design,completed

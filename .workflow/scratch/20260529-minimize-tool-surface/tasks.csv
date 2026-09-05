@@ -1,6 +1,0 @@
-"id","title","wave","depends_on","scope","status"
-"TASK-096","Audit current tools/list exposure and define minimal gateway policy","1","","tool-registry surface-manager core/plugin visible surface startup inventory policy","pending"
-"TASK-097","Contract default core gateway allowlist","2","TASK-096","CORE_GATEWAY_TOOLS POST_PLUGIN_CORE_TOOLS gateway-only startup visible core tools","pending"
-"TASK-098","Harden hidden direct-call and activation guards","2","TASK-096","ToolExecutor hidden blocking activation audit runtime expert no auto activation","pending"
-"TASK-099","Strengthen discovery/help/readiness closure for hidden tools","3","TASK-097;TASK-098","tools.discover recommend list activation_command tool.help tool.readiness schema examples","pending"
-"TASK-100","Finalize minimized surface release guard","4","TASK-097;TASK-098;TASK-099","docs catalog tests lint typecheck regression visible gateway count","pending"

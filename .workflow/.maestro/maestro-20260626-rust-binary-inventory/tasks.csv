@@ -1,6 +1,0 @@
-id,title,status,files,verification
-TASK-001,Research Rust binary analysis and local plugin patterns,completed,".workflow/.maestro/maestro-20260626-rust-binary-inventory/*","read-only agents completed"
-TASK-002,Implement passive Rust binary inventory plugin,completed,"src/plugins/rust-binary/index.ts;src/plugins/rust-binary/tools/rust-binary-inventory.ts","rust-binary unit tests passed"
-TASK-003,Wire Rust routing into SDK sample finalization and workflow.search,completed,"packages/plugin-sdk/src/index.ts;src/sample/sample-finalization.ts;tests/unit/packages/plugin-sdk.test.ts;tests/unit/workflow-search.test.ts","SDK/search tests passed"
-TASK-004,Update matrix docs and generated surfaces,completed,"tests/unit/plugin-format-matrix.test.ts;README.md;README_zh.md;docs/PLUGINS.md;docs/plugins.html;docs/tool-catalog.html;docker-compose*.yml","docs generation, docker generation, tsc, lint, focused tests, diff check, and build passed"
-TASK-005,Publish PR merge deploy smoke,pending,"git branch PR server","pending"

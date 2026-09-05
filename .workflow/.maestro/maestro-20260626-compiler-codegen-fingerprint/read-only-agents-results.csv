@@ -1,4 +1,0 @@
-id,status,summary
-AGENT-001,completed,"Recommended standalone compiler-codegen plugin; templates: cpp-abi-layout, native-debug-types, llvm-bitcode. Touch index/tool/tests/plugin-format/workflow-search/SDK tags/docs/tool catalog."
-AGENT-002,completed,"Recommended evidence domains: PE Rich/CodeView, ELF .comment/build-id/attributes, Mach-O LC_BUILD_VERSION, Go/Rust/Swift/Delphi/MSVC/MinGW/GCC/Clang, LTO/PGO. Avoid packer/protector duplication."
-AGENT-003,completed,"Recommended unit, workflow-search, plugin-format-matrix, surface safety, typecheck/lint/docs/docker checks. Warned against runtimePolicy/runtime and broad recommended_next_tools expanding the default surface."

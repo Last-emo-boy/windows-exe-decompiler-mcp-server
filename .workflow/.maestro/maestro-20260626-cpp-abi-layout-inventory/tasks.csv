@@ -1,7 +1,0 @@
-id,task,status,artifacts,notes
-0,Run read-only subagents,completed,.workflow/.maestro/maestro-20260626-cpp-abi-layout-inventory/read-only-agents-results.csv,"Three agents compared cpp-abi-layout, kernel-driver-surface, and compiler-provenance."
-1,Implement passive C++ ABI layout plugin,completed,src/plugins/cpp-abi-layout,"Adds bounded Itanium/MSVC vtable, RTTI/typeinfo, EH personality, virtual dispatch, and class-layout seed inventory."
-2,Update routing taxonomy and workflow search,completed,"packages/plugin-sdk/src/index.ts; tests/unit/workflow-search.test.ts","Adds cpp-abi/rtti/vtable/class-layout tags and hidden activation search coverage."
-3,Update tests and docs,completed,"tests/unit/cpp-abi-layout-inventory.test.ts; tests/unit/plugin-format-matrix.test.ts; docs/PLUGINS.md; docs/tool-catalog.html","Targeted Jest, plugin-format-matrix, TypeScript, build, docs generation, Docker generation, lint, and git diff --check passed."
-4,Commit and open PR,completed,https://github.com/Last-emo-boy/rikune/pull/54,"Committed scoped files and opened PR #54 to beta. Added a follow-up CI fix for remill-worker timeout on Windows full-suite validation."
-5,Merge beta and deploy,pending,,"Will merge PR if checks pass, pull beta on server, rebuild analyzer, and run MCP smoke."

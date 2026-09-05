@@ -1,3 +1,0 @@
-agent_id,summary
-019f013d-8167-76e1-956a-824e61a58c31,"Recommended a passive ML artifact tool covering SafeTensors, GGUF, ONNX, TFLite, pickle/PyTorch, and NPY/NPZ; emphasized no deserialization, no inference, no framework load, no network, no archive extraction, and risk signals for pickle, custom ops, external data, object dtype, large tensors, prompt templates, and secrets."
-019f013d-68ff-7531-a13d-4a381a70b916,"Identified bytecode, container-analysis, and native-object as closest patterns; recommended SDK metadata, workflowRecipes, artifact/evidence output, workflow.search test, plugin-format-matrix coverage, sample-finalization detection, SURFACE_FILE_TYPE_TAGS, docs, and compose allowlist updates."

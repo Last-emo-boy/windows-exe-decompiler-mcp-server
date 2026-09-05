@@ -1,5 +1,0 @@
-id,task,status,artifacts,notes
-0,Run read-only subagents,completed,.workflow/.maestro/maestro-20260623-llvm-bitcode-iteration/read-only-agents-results.csv,"Two subagents reported plugin/schema findings; verification worker omitted report_agent_job_result, so main agent completed verification scope."
-1,Implement passive LLVM bitcode plugin,completed,src/plugins/llvm-bitcode,"Decode wrapper/raw bitstream structure without invoking LLVM tools."
-2,Verify targeted scope,completed,tests/unit/llvm-bitcode-inventory.test.ts,"Targeted Jest passed; plugin-format LLVM subset passed; git diff --check passed; tsc has no LLVM-bitcode iteration diagnostics but repository baseline still has 40 existing TypeScript diagnostic lines."
-3,Commit and open PR,completed,https://github.com/Last-emo-boy/rikune/pull/41,"Committed scoped files with Chinese commit message and opened PR #41 via gh."

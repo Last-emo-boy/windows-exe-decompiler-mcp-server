@@ -1,8 +1,0 @@
-id,title,status,findings,error
-"TASK-001","Stabilize the agent golden path workflow","completed","Golden path guidance and evidence state implemented; focused tests pass.",""
-"TASK-002","Improve progressive tool discovery and readiness guidance","completed","Role-aware discovery/readiness/help metadata implemented; focused tests pass.",""
-"TASK-003","Unify evidence provenance and confidence envelopes","completed","Evidence provenance summaries implemented; focused tests pass.",""
-"TASK-004","Model dynamic runtime work as explicit sessions","completed","Runtime session state machine and dynamic execution semantics implemented; focused tests pass.",""
-"TASK-005","Add plugin quality gates and readiness contracts","completed","Non-blocking plugin quality warnings implemented; focused tests pass.",""
-"TASK-006","Improve report and dashboard consumption of staged results","completed","Compact report/dashboard stage and provenance digest implemented; focused tests pass.",""
-"TASK-007","Build a golden sample regression corpus and degraded-environment tests","completed","Safe fixture manifest/docs/tests implemented; worker pytest passes.",""

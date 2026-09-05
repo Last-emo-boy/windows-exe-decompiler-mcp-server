@@ -1,9 +1,0 @@
-id,title,status,notes
-TASK-001,Create iteration branch,completed,feat/cuda-fatbin-inventory from beta-minimize-tool-surface
-TASK-002,Collect parallel subagent findings,completed,Newton covered plugin patterns; Boyle supplied PE depth backlog
-TASK-003,Implement cuda-binary static inventory,completed,Added passive PTX CUBIN fatbin host marker parser and plugin metadata
-TASK-004,Update routing and sample profile metadata,completed,Updated detectFileType SURFACE_FILE_TYPE_TAGS workflow search tests and format matrix
-TASK-005,Update docs and Docker plugin lists,completed,Updated plugin counts PLUGINS whitelist and docs coverage
-TASK-006,Run verification,completed,Targeted Jest TypeScript diff check lint and build passed
-TASK-007,Commit push and open PR,completed,PR #44 https://github.com/Last-emo-boy/rikune/pull/44
-TASK-008,Merge PR if checks pass,pending,Merge into beta-minimize-tool-surface only if PR is mergeable

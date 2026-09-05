@@ -1,3 +1,0 @@
-agent_id,recommendation,decision_impact
-019f0112-7144-71f1-8421-48b6805630e5,"Prioritize AI/ML model artifact static analysis as a frontier follow-up after current supply-chain/container work.","Captured as next likely iteration candidate."
-019f0112-917f-74e2-975e-13d761d588cc,"Add a passive Docker/OCI image security profile inside container-analysis; scan config and bounded layer tar headers only; avoid CVE scanner claims, Docker daemon, registry, image load, mount, extraction, package scripts, package install, and entrypoint execution.","Selected for this iteration and shaped the tool boundary, recipe, artifact, tests, and docs."

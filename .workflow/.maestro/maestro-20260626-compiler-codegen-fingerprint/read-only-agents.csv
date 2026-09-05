@@ -1,4 +1,0 @@
-id,agent,task,status
-AGENT-001,Halley,Codebase implementation template and integration surface review,completed
-AGENT-002,Socrates,Binary-analysis evidence/schema/scoring design review,completed
-AGENT-003,Arendt,Testing release and MCP surface risk review,completed

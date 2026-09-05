@@ -1,7 +1,0 @@
-id,task,status,artifacts,notes
-1,Select next frontier tool direction,completed,"read-only-agents-results.csv","Selected passive kernel driver surface inventory from subagent and public research consensus."
-2,Implement kernel driver surface plugin,completed,"src/plugins/kernel-driver-surface","Adds Windows IOCTL/device/dispatch and Linux module/ioctl/risk primitive static inventory."
-3,Update routing taxonomy and workflow search,completed,"packages/plugin-sdk/src/index.ts; tests/unit/workflow-search.test.ts","Add kernel-driver/windows-driver/linux-driver/ioctl tags and hidden activation coverage."
-4,Update tests and docs,completed,"tests/unit/kernel-driver-surface-inventory.test.ts; tests/unit/plugin-format-matrix.test.ts; docs/PLUGINS.md; docs/tool-catalog.html","Targeted Jest, TypeScript, build, docs generation, Docker generation, lint, and diff check passed."
-5,Commit and open PR,completed,"commit c235158; PR #55","Opened PR to beta; added follow-up CI cleanup stabilization after initial Windows EBUSY validate failure."
-6,Merge beta and deploy,pending,,"Merge PR if checks pass, pull beta on server, rebuild analyzer, and run MCP smoke."

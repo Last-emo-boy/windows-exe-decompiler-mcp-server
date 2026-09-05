@@ -1,7 +1,0 @@
-id,task,status,artifacts,notes
-0,Run read-only subagents,completed,.workflow/.maestro/maestro-20260626-native-debug-types-inventory/read-only-agents-results.csv,"Three agents completed: gap ranking, DWARF/CTF coverage, Rust coverage."
-1,Implement passive native debug types plugin,completed,src/plugins/native-debug-types,"Adds bounded ELF/DWARF/split-DWARF/CTF inventory and workflow metadata."
-2,Update routing taxonomy and ingest detection,completed,"packages/plugin-sdk/src/index.ts; src/sample/sample-finalization.ts","Adds DWARF/CTF/split-DWARF tags and .dwo/.dwp/.debug/.ctf detection."
-3,Update tests and docs,completed,"tests/unit/native-debug-types-inventory.test.ts; docs/PLUGINS.md; docs/tool-catalog.html","Targeted and full relevant Jest passed; TypeScript, build, lint, docs generation, Docker generation, and git diff --check passed."
-4,Commit and open PR,completed,https://github.com/Last-emo-boy/rikune/pull/53,"Committed scoped files and opened PR #53 to beta."
-5,Merge beta and deploy,pending,,"Will merge PR if checks pass, pull beta on server, rebuild analyzer, and run MCP smoke."

@@ -1,2 +1,0 @@
-id,skill_call,topic
-"0","$maestro-plan ""下一轮 Rikune 迭代：扩展插件能力并迭代 @rikune/plugin-sdk，基于当前仓库上下文，产出可执行的 task/wave 规划。重点包括：插件扩展方向、SDK API/manifest/runtime contract、plugin quality gates、developer experience、tests/fixtures、backward compatibility。只规划，不改源码。""","Chain plan step 1/1：为插件扩展与 SDK 迭代生成下一轮 Rikune iteration plan。"

@@ -1,3 +1,0 @@
-agent_id,role,status,notes
-019f0112-7144-71f1-8421-48b6805630e5,frontier-capability-scout,completed,Read-only recommendation for next analysis frontier.
-019f0112-917f-74e2-975e-13d761d588cc,container-oci-design-review,completed,Read-only design recommendation for passive Docker/OCI image security profile.

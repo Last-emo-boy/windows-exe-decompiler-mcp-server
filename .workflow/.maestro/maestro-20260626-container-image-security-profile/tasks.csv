@@ -1,6 +1,0 @@
-id,task,status,artifacts,notes
-0,Run read-only subagents and research,completed,.workflow/.maestro/maestro-20260626-container-image-security-profile/read-only-agents-results.csv,"Selected container/OCI static profile for this iteration; captured AI/ML model artifact inventory as a follow-up candidate."
-1,Implement passive Docker/OCI image security profile,completed,src/plugins/container-analysis/tools/container-image-security-profile.ts,"Adds config/history/layer-header risk profile under existing container-analysis plugin."
-2,Verify targeted scope,completed,tests/unit/container-image-security-profile.test.ts,"Targeted Jest passed for container image security profile, plugin-format matrix, and workflow-search; TypeScript and git diff --check passed."
-3,Commit and open PR,pending,,"Pending scoped commit and PR creation."
-4,Merge PR to beta and validate remote,pending,,"Pending CI/merge and server validation."

@@ -1,4 +1,0 @@
-agent_id,summary,decision_signal
-019f0212-2ed3-7841-bf1e-55f2c531e668,"Recommended Native Debug Type Graph over C++ ABI layout and kernel driver surface as the next broad/deep native metadata capability.","Choose Native Debug Types first."
-019f0212-476a-77b3-853c-ee18e63c16c8,"Confirmed existing windows-debug-symbols, native-object, linux-binary, and elf-macho route or list debug metadata but do not parse DWARF/CTF structurally; BTF is the best passive parser pattern.","Implement passive DWARF/split-DWARF/CTF inventory with no external dumpers."
-019f0212-66e6-7a31-9da9-c2316f555cdc,"Confirmed Rust has existing static-triage aggregation and demangle helpers; a dedicated Rust inventory remains useful but is a lower-priority follow-up.","Defer Rust-specific inventory."

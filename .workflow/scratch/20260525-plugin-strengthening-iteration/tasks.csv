@@ -1,7 +1,0 @@
-"id","title","wave","depends_on","scope","status"
-"TASK-075","Strengthen malware.intel.loop local intelligence fusion","1","","malware plugin IOC normalization provenance fusion_summary quality_gates workflow_handoff","completed"
-"TASK-076","Strengthen unpacking workflow plan and re-triage handoff","2","TASK-075","unpacking plugin packer confidence runtime opt-in reanalysis workflow","completed"
-"TASK-077","Strengthen static-triage correlation outputs","2","TASK-075","static-triage plugin behavior config crypto packer correlation bundles","completed"
-"TASK-078","Strengthen code-analysis evidence handoff","3","TASK-075","code-analysis plugin cross-decompiler consensus function evidence routing","completed"
-"TASK-079","Strengthen reporting and visualization from plugin evidence","3","TASK-078","reporting visualization evidence graph malware intel loop summaries","completed"
-"TASK-080","Plugin strengthening release guard","4","TASK-076;TASK-077;TASK-078;TASK-079","docs catalog tests lint typecheck plugin matrix","completed"

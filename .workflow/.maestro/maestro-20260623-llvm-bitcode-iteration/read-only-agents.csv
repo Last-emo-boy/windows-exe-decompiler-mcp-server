@@ -1,4 +1,0 @@
-id,topic
-patterns,"Inspect existing passive inventory plugins and identify the minimal files/tests needed for a new llvm-bitcode plugin. Read-only; do not edit files."
-schema,"Design a passive LLVM bitcode inventory schema: raw bitstream/wrapper detection, block/record summaries, embedded strings, risk flags, and workflow handoff. Read-only; do not edit files."
-verification,"Identify targeted tests and routing checks for adding llvm.bitcode.inventory without expanding the default gateway. Read-only; do not edit files."

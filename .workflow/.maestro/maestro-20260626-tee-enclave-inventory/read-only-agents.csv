@@ -1,4 +1,0 @@
-id,agent_id,nickname,role,status,scope
-AGENT-001,019f03a5-8061-7ed2-b1f0-4a275403e237,Feynman,plugin-patterns,completed,"Study existing static inventory plugin patterns and handler/artifact conventions."
-AGENT-002,019f03a5-bb5c-7e51-962c-bb710bd917e2,McClintock,workflow-docs-release,completed,"Study workflow.search, release guard, docs, SDK tags, Docker/catalog integration."
-AGENT-003,019f03a5-ecde-76e1-ae59-699086193294,Herschel,evidence-schema,completed,"Design passive TEE/enclave evidence schema, marker families, and synthetic fixtures."

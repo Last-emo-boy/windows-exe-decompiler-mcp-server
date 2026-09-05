@@ -1,4 +1,0 @@
-agent_id,nickname,role,status,scope
-019f02b9-28a8-7890-afe4-ab11638e9a90,Peirce,codebase-gap-scan,completed,"Rank next passive/static binary-analysis plugin gaps and expected files."
-019f02b9-427e-7bd0-9e0a-a17a9c55f29e,Archimedes,implementation-pattern-scan,completed,"Identify local plugin metadata, handler, workflow-search, matrix, docs, and Docker patterns."
-019f02b9-6a7f-7272-97b6-129ab8cf7076,Rawls,external-research-scan,completed,"Evaluate frontier analysis directions from public UEFI/SMM, provenance, and WASI/component research."

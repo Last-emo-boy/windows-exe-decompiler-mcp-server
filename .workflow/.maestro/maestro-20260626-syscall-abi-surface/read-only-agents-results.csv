@@ -1,4 +1,0 @@
-agent_id,nickname,status,summary,artifacts
-019f0305-5aeb-7f52-ae8d-c97800d70af8,Franklin,completed,"Ranked syscall ABI/user-kernel boundary inventory as the top next capability after current kernel/eBPF/UEFI coverage; noted need to preserve small default gateway surface.",".workflow/.maestro/maestro-20260626-syscall-abi-surface/context.md"
-019f0305-7c7d-7b81-9a6c-5a5912ef4340,Schrodinger,completed,"Mapped implementation landing pattern from kernel-driver-surface and linux-binary: plugin index, static tool metadata, SDK tags, sample finalization, workflow-search and plugin-format-matrix tests.",".workflow/.maestro/maestro-20260626-syscall-abi-surface/tasks.csv"
-019f0305-9688-7f70-873c-ee18ae1611ed,James,completed,"Identified verification and release surfaces: docs/PLUGINS, tool catalog, Docker generated profiles, contract tests, and server deployment smoke with RIKUNE_DATA_ROOT override.",".workflow/.maestro/maestro-20260626-syscall-abi-surface/status.json"

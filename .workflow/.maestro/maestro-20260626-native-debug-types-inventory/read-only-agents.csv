@@ -1,4 +1,0 @@
-agent_id,role,scope,status
-019f0212-2ed3-7841-bf1e-55f2c531e668,Huygens,frontier capability gap ranking,completed
-019f0212-476a-77b3-853c-ee18e63c16c8,Avicenna,DWARF split-DWARF CTF coverage analysis,completed
-019f0212-66e6-7a31-9da9-c2316f555cdc,Darwin,Rust binary inventory coverage analysis,completed

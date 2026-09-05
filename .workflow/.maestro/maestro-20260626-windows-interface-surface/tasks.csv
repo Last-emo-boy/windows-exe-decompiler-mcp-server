@@ -1,9 +1,0 @@
-task_id,description,status,evidence
-T1,Confirm beta branch state PR queue and server baseline,completed,"beta at b22bc37 locally and server-side; no open PRs targeting beta; analyzer healthy"
-T2,Run read-only subagent split,completed,"Jason Kierkegaard Goodall completed read-only research and risk scans"
-T3,Implement passive Windows interface surface plugin,completed,"src/plugins/windows-interface-surface with windows.interface.surface.inventory"
-T4,Add SDK tags sample detection workflow-search and matrix tests,completed,"packages/plugin-sdk/src/index.ts; src/sample/sample-finalization.ts; tests/unit/*"
-T5,Update docs generated catalogs and Docker profiles,completed,"README.md; README_zh.md; docs/PLUGINS.md; docs/tool-catalog.html; docker-compose.analyzer.yml; docker-compose.hybrid.yml"
-T6,Run local verification,completed,"targeted tests; tsc; lint; build; docs:tool-catalog; docker:generate:all; diff check passed"
-T7,Commit push and create PR to beta,in_progress,"gh pr create"
-T8,Merge PR to beta when checks allow and deploy server,pending,"gh pr merge; ssh root@159.195.136.226"

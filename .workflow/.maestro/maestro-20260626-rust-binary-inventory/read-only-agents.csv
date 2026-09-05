@@ -1,4 +1,0 @@
-id,role,scope,status
-019f0427-4904-7f71-85b9-4244dc664d60,language-plugin-patterns,"go-analysis apple-objc-swift dotnet-managed jvm compiler-codegen native-object",completed
-019f0427-5cf1-75f2-b6ce-39355d4d7347,search-sdk-integration,"plugin-sdk workflow.search plugin-format-matrix docs",completed
-019f0427-80ea-74d3-a65a-4ac6b8c36e72,parser-test-design,"Rust v0 legacy symbols Cargo rustc panic target triples parser fixtures",completed
